@@ -30,7 +30,8 @@ Imports:
     sf,
     caret,
     reshape2,
-    parallel
+    parallel,
+    numDeriv
 LinkingTo:
     Rcpp
 Suggests:
@@ -41,6 +42,5 @@ Suggests:
     raster,
     lubridate,
     cubature,
-    doParallel,
-    numDeriv
+    doParallel
 Config/testthat/edition: 3
