@@ -1,0 +1,46 @@
+Package: PPDisentangle
+Title: Causal Inference for Spatiotemporal Point Processes via Stochastic EM
+Version: 0.1.0
+Authors@R: c(
+    person("Duncan", "Clark", email = "duncan-clark@outlook.com", role = c("aut", "cre")),
+    person("Conor", "Kresin", role = "aut"),
+    person("Louis", "Davis", role = "aut"),
+    person("Martin", "Hazelton", role = "aut")
+    )
+Description: Implements a Stochastic EM algorithm for causal inference on
+    spatiotemporal point process data with outcome spillover. Models observed
+    data as a superposition of treatment and control Hawkes processes, recovers
+    latent process labels via importance-weighted proposals, and estimates
+    average treatment effects accounting for spatial interference.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends:
+    R (>= 4.0.0),
+    spatstat
+Imports:
+    Rcpp,
+    rlang,
+    spatstat.geom,
+    spatstat.random,
+    data.table,
+    dplyr,
+    ggplot2,
+    sf,
+    caret,
+    reshape2,
+    parallel
+LinkingTo:
+    Rcpp
+Suggests:
+    testthat (>= 3.0.0),
+    R.utils,
+    pbapply,
+    terra,
+    raster,
+    lubridate,
+    cubature,
+    doParallel,
+    numDeriv
+Config/testthat/edition: 3
