@@ -17,18 +17,17 @@
 #   --small      Pass --small to the R script (reduced iterations for a quick test).
 #   --cluster    Force cluster config when not under SLURM (optional; auto-set when run on cluster).
 #
-# When run on the cluster (module environment detected), cluster config is used automatically
-# so you get Mode: CLUSTER and the same settings as sbatch. Locally, no --cluster is added.
+# On the cluster (module environment detected), the script submits the job via SLURM
+# (run_PPDisentangle_sim.slurm) instead of running R directly. Locally, it runs R in the shell.
 #
 # Examples:
 #   ./inst/sim_study/run_sim_study.sh
 #   ./inst/sim_study/run_sim_study.sh --sims 20
 #   ./inst/sim_study/run_sim_study.sh --no-pull --no-install   # skip pull and install
 #
-# Outputs (sim study stdout/stderr go to .out only; console stays free):
-#   cluster_output/run_<timestamp>.out                  (full run log; tail -f to follow)
-#   cluster_output/sim_study_results_<timestamp>.rds    (rehydrate in R: x <- readRDS(...))
-#   cluster_output/sim_study_timing_local.txt
+# Outputs:
+#   Cluster: job submitted via sbatch; logs in cluster_output/PPDisentangle_sim_<jobid>.out
+#   Local:   cluster_output/run_<timestamp>.out and sim_study_results_<timestamp>.rds
 #
 
 set -e
@@ -145,19 +144,13 @@ else
   true
 fi
 
-# When running on cluster (module environment), use cluster config so R reports Mode: CLUSTER
-if $ON_CLUSTER_ENV && [[ " ${EXTRA_ARGS[*]} " != *" --cluster "* ]]; then
-  EXTRA_ARGS+=("--cluster")
-  echo "=== Cluster environment detected: using cluster config (Mode: CLUSTER) ==="
-fi
-
 # Optional: install package
 if $DO_INSTALL; then
   echo "=== Installing package with devtools ==="
   Rscript -e 'if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools", repos = "https://cloud.r-project.org"); devtools::install()' || { echo "Error: devtools::install() failed" >&2; exit 1; }
 fi
 
-# Cores: when --sims N is set, use min(N, available_cores)
+# Cores/sims overrides (for SLURM job or local R)
 export SAVE_TO_CLUSTER_OUTPUT=1
 if [[ -n "$N_SIMS_OVERRIDE" ]]; then
   export N_SIMS_OVERRIDE="$N_SIMS_OVERRIDE"
@@ -167,7 +160,18 @@ if [[ -n "$N_SIMS_OVERRIDE" ]]; then
   echo "=== Sims: $N_SIMS_OVERRIDE, Cores: $CORES (max $NPROC) ==="
 fi
 
-# Run R script with timing; all sim study output goes to .out file (console stays free)
+if $ON_CLUSTER_ENV; then
+  # Submit via SLURM; job inherits env (overrides, SAVE_TO_CLUSTER_OUTPUT, etc.)
+  echo "=== Submitting simulation study via SLURM ==="
+  JOB_ID=$(sbatch --parsable --export=ALL inst/sim_study/run_PPDisentangle_sim.slurm)
+  echo "Submitted job $JOB_ID"
+  echo "  Logs: cluster_output/PPDisentangle_sim_${JOB_ID}.out and .err"
+  echo "  Check status: squeue -j $JOB_ID"
+  echo "  Follow output: tail -f cluster_output/PPDisentangle_sim_${JOB_ID}.out"
+  exit 0
+fi
+
+# Local: run R script directly; all sim study output goes to .out file (console stays free)
 OUT_FILE="cluster_output/run_$(date +%Y%m%d_%H%M%S).out"
 {
   echo "=== Starting simulation study at $(date) ==="
