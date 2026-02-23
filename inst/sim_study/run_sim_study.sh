@@ -85,6 +85,9 @@ fi
 cd "$PKG_ROOT"
 mkdir -p cluster_output
 
+# Load R module when on HPC (no-op if module not available, e.g. local macOS)
+module load R 2>/dev/null || true
+
 # Optional: git pull
 if $DO_PULL; then
   echo "=== Git pull ==="
