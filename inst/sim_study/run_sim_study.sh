@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the PPDisentangle simulation study (local or after pull/install).
-# Creates cluster_output/, saves RData and timing report there.
+# Creates cluster_output/, saves results list as .rds and timing report there.
 #
 # Usage:
 #   From package root (directory containing R/, inst/, DESCRIPTION):
@@ -15,6 +15,10 @@
 #   --pull       Run 'git pull' (default: on).
 #   --install    Run devtools::install() (default: on).
 #   --small      Pass --small to the R script (reduced iterations for a quick test).
+#   --cluster    Force cluster config when not under SLURM (optional; auto-set when run on cluster).
+#
+# When run on the cluster (module environment detected), cluster config is used automatically
+# so you get Mode: CLUSTER and the same settings as sbatch. Locally, no --cluster is added.
 #
 # Examples:
 #   ./inst/sim_study/run_sim_study.sh
@@ -23,7 +27,7 @@
 #
 # Outputs (sim study stdout/stderr go to .out only; console stays free):
 #   cluster_output/run_<timestamp>.out                  (full run log; tail -f to follow)
-#   cluster_output/sim_study_results_<timestamp>.RData  (rehydrate in R: load(...))
+#   cluster_output/sim_study_results_<timestamp>.rds    (rehydrate in R: x <- readRDS(...))
 #   cluster_output/sim_study_timing_local.txt
 #
 
@@ -61,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       EXTRA_ARGS+=("--small")
       shift
       ;;
+    --cluster)
+      EXTRA_ARGS+=("--cluster")
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
       exit 1
@@ -94,7 +102,9 @@ fi
 # Load R and geo modules when on HPC. If 'module' exists (e.g. NeSI), load without
 # suppressing errors so libudunits2 etc. are found when R loads the 'units' package.
 # Also set UDUNITS2_* so the R package 'units' can find udunits2 at *compile* time (devtools::install).
+ON_CLUSTER_ENV=false
 if command -v module &>/dev/null; then
+  ON_CLUSTER_ENV=true
   module load R
   module load GDAL
   module load PROJ
@@ -133,6 +143,12 @@ if command -v module &>/dev/null; then
   fi
 else
   true
+fi
+
+# When running on cluster (module environment), use cluster config so R reports Mode: CLUSTER
+if $ON_CLUSTER_ENV && [[ " ${EXTRA_ARGS[*]} " != *" --cluster "* ]]; then
+  EXTRA_ARGS+=("--cluster")
+  echo "=== Cluster environment detected: using cluster config (Mode: CLUSTER) ==="
 fi
 
 # Optional: install package
@@ -174,9 +190,12 @@ ELAPSED=$(( END_EPOCH - START_EPOCH ))
   echo "R exit code: $R_EXIT"
 } >> "$OUT_FILE"
 
-if [[ -f cluster_output/sim_study_timing_local.txt ]]; then
-  { echo ""; echo "=== R timing report ==="; cat cluster_output/sim_study_timing_local.txt; } >> "$OUT_FILE"
-fi
+for timing in cluster_output/sim_study_timing_local.txt cluster_output/sim_study_timing_cluster.txt; do
+  if [[ -f "$timing" ]]; then
+    { echo ""; echo "=== R timing report ($(basename "$timing")) ==="; cat "$timing"; } >> "$OUT_FILE"
+    break
+  fi
+done
 
 if [[ $R_EXIT -ne 0 ]]; then
   echo "Error: R script exited with code $R_EXIT. Full log: $OUT_FILE" >&2
@@ -184,4 +203,4 @@ if [[ $R_EXIT -ne 0 ]]; then
 fi
 
 echo "Done. Wall time: ${ELAPSED}s. Exit: $R_EXIT. Full log: $OUT_FILE"
-echo "Results in cluster_output/. Load latest .RData in R to inspect."
+echo "Results in cluster_output/. Load latest .rds in R: x <- readRDS('cluster_output/sim_study_results_<timestamp>.rds')"

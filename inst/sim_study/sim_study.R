@@ -3,7 +3,8 @@
 # Detects SLURM environment automatically; falls back to local defaults.
 # Usage:
 #   Local:   Rscript sim_study.R [--small]
-#   Cluster: sbatch sim_study.slurm
+#   Cluster (batch): sbatch run_PPDisentangle_sim.slurm
+#   Cluster (interactive): Rscript sim_study.R --cluster   (or run_sim_study.sh --cluster)
 
 library(PPDisentangle)
 library(spatstat)
@@ -22,19 +23,21 @@ time_start_global <- proc.time()[3]
 
 args <- commandArgs(trailingOnly = TRUE)
 SMALL <- "--small" %in% args
+FORCE_CLUSTER <- "--cluster" %in% args
 
-ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID"))
+# Cluster config: when running under SLURM or when --cluster is passed (e.g. interactive on login node)
+ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
 if (ON_CLUSTER) {
   N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "16"))
-  SIM_SIZE     <- 100
-  N_SIMS       <- 10
+  SIM_SIZE     <- N_CORES
+  N_SIMS       <- 100
   N_TAU_SIMS   <- 10
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
-  N_PROPOSALS  <- 1000
-  EM_ITER      <- 1000
-  SEM_EM_ADAPTIVE_ITER <- 1000
+  N_PROPOSALS  <- 100
+  EM_ITER      <- 100
+  SEM_EM_ADAPTIVE_ITER <- 100
   SEM_N_ITER   <- 10
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -621,7 +624,7 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
 }
 
 # Combined param plots: grid.arrange() returns a grid object that does not print after save/load.
-# Store draw functions so you can display combined plots after loading the RData:
+# Store draw functions so you can display combined plots after loading the RDS:
 sim_study_plots$draw_control_params_combined <- function() {
   if (length(sim_study_plots$plot_control_params) > 0)
     gridExtra::grid.arrange(grobs = sim_study_plots$plot_control_params, ncol = 2)
@@ -633,7 +636,7 @@ sim_study_plots$draw_treated_params_combined <- function() {
 
 cat("done.\n")
 cat("Plots stored in sim_study_plots:", paste(names(sim_study_plots), collapse = ", "), "\n")
-cat("  To print combined param plots after load: sim_study_plots$draw_control_params_combined(); sim_study_plots$draw_treated_params_combined()\n")
+cat("  To print combined param plots after load: x <- readRDS(...); x$plots$draw_control_params_combined(); x$plots$draw_treated_params_combined()\n")
 
 # ------------------------------------------------------------------
 # 13. Timing report and save results (including plots)
@@ -654,6 +657,8 @@ timing_report <- list(
 sim_study_results <- list(
   results_df = results_df,
   summary_df = if (exists("summary_df")) summary_df else NULL,
+  results_flat = results_flat,
+  tasks = tasks,
   class_metrics = class_metrics,
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
@@ -667,9 +672,8 @@ sim_study_results <- list(
 )
 
 dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
-outfile <- file.path(SAVE_DIR, paste0("sim_study_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".RData"))
-save(sim_study_results, sim_study_plots, results_df, results_flat, tasks,
-     class_metrics, all_nothing_ATE, true_tau_1, timing_report, file = outfile)
+outfile <- file.path(SAVE_DIR, paste0("sim_study_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".rds"))
+saveRDS(sim_study_results, outfile)
 cat("Results saved to:", outfile, "\n")
 
 # Write timing report to a text file (for cluster logs and quick inspection)
