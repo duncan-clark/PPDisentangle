@@ -93,11 +93,11 @@ if command -v module &>/dev/null; then
   module load GDAL
   module load PROJ
   module load GEOS
-  # Try common names for the udunits library module (NeSI uses UDUNITS with version, e.g. UDUNITS/2.2.28-GCCcore-12.3.0)
-  if ! module load udunits 2>/dev/null; then
+  # Load udunits library (NeSI uses UDUNITS uppercase; try it first to avoid "unknown module" errors)
+  if ! module load UDUNITS 2>/dev/null; then
     if ! module load udunits2 2>/dev/null; then
-      if ! module load UDUNITS 2>/dev/null; then
-        echo "=== Warning: could not load udunits/udunits2/UDUNITS. Run: module spider udunits ===" >&2
+      if ! module load udunits 2>/dev/null; then
+        echo "=== Warning: could not load UDUNITS/udunits2/udunits. Run: module spider udunits ===" >&2
         echo "   Then: module load UDUNITS/2.2.28-GCCcore-12.3.0 (or similar) and re-run." >&2
       fi
     fi
