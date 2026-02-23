@@ -87,14 +87,36 @@ mkdir -p cluster_output
 
 # Load R and geo modules when on HPC. If 'module' exists (e.g. NeSI), load without
 # suppressing errors so libudunits2 etc. are found when R loads the 'units' package.
-# (If you see "libudunits2.so.0: cannot open shared object file", ensure these
-# module load lines run successfully; on some systems the module may be "udunits2".)
+# Also set UDUNITS2_* so the R package 'units' can find udunits2 at *compile* time (devtools::install).
 if command -v module &>/dev/null; then
   module load R
   module load GDAL
   module load PROJ
   module load GEOS
   module load udunits
+  # Help R's 'units' package configure find udunits2 when building from source
+  if [[ -z "$UDUNITS2_INCLUDE" || -z "$UDUNITS2_LIBS" ]]; then
+    if [[ -n "$UDUNITS2_DIR" ]]; then
+      export UDUNITS2_INCLUDE="${UDUNITS2_INCLUDE:-$UDUNITS2_DIR/include}"
+      export UDUNITS2_LIBS="${UDUNITS2_LIBS:--L$UDUNITS2_DIR/lib -ludunits2}"
+    else
+      for lib_dir in $(echo "${LD_LIBRARY_PATH:-}" | tr ':' ' '); do
+        if [[ -n "$lib_dir" ]] && { [[ -f "$lib_dir/libudunits2.so" ]] || [[ -f "$lib_dir/libudunits2.so.0" ]]; }; then
+          base="${lib_dir%/lib}"
+          [[ -z "$UDUNITS2_LIBS" ]] && export UDUNITS2_LIBS="-L$lib_dir -ludunits2"
+          [[ -z "$UDUNITS2_INCLUDE" ]] && export UDUNITS2_INCLUDE="$base/include"
+          break
+        fi
+      done
+    fi
+  fi
+  if [[ -n "$UDUNITS2_INCLUDE" && -n "$UDUNITS2_LIBS" ]]; then
+    export UDUNITS2_INCLUDE UDUNITS2_LIBS
+    echo "=== UDUNITS2 for R 'units' build: INCLUDE=$UDUNITS2_INCLUDE LIBS=$UDUNITS2_LIBS ==="
+  else
+    echo "=== Warning: UDUNITS2_INCLUDE/LIBS not set; R package 'units' may fail to build. ===" >&2
+    echo "   Run 'module show udunits' to see paths, then set UDUNITS2_DIR or UDUNITS2_INCLUDE and UDUNITS2_LIBS and re-run." >&2
+  fi
 else
   true
 fi
