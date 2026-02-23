@@ -21,10 +21,10 @@
 #   ./inst/sim_study/run_sim_study.sh --sims 20
 #   ./inst/sim_study/run_sim_study.sh --no-pull --no-install   # skip pull and install
 #
-# Outputs:
+# Outputs (sim study stdout/stderr go to .out only; console stays free):
+#   cluster_output/run_<timestamp>.out                  (full run log; tail -f to follow)
 #   cluster_output/sim_study_results_<timestamp>.RData  (rehydrate in R: load(...))
 #   cluster_output/sim_study_timing_local.txt
-#   cluster_output/run_<timestamp>.log                  (stdout/stderr + timing)
 #
 
 set -e
@@ -85,6 +85,12 @@ fi
 cd "$PKG_ROOT"
 mkdir -p cluster_output
 
+# Git pull first so we run the latest code (and get script fixes before loading modules)
+if $DO_PULL; then
+  echo "=== Git pull ==="
+  git pull || { echo "Warning: git pull failed" >&2; }
+fi
+
 # Load R and geo modules when on HPC. If 'module' exists (e.g. NeSI), load without
 # suppressing errors so libudunits2 etc. are found when R loads the 'units' package.
 # Also set UDUNITS2_* so the R package 'units' can find udunits2 at *compile* time (devtools::install).
@@ -129,12 +135,6 @@ else
   true
 fi
 
-# Optional: git pull
-if $DO_PULL; then
-  echo "=== Git pull ==="
-  git pull || { echo "Warning: git pull failed" >&2; }
-fi
-
 # Optional: install package
 if $DO_INSTALL; then
   echo "=== Installing package with devtools ==="
@@ -151,35 +151,37 @@ if [[ -n "$N_SIMS_OVERRIDE" ]]; then
   echo "=== Sims: $N_SIMS_OVERRIDE, Cores: $CORES (max $NPROC) ==="
 fi
 
-# Run R script with timing; capture stdout/stderr and exit code
-LOG_FILE="cluster_output/run_$(date +%Y%m%d_%H%M%S).log"
-echo "=== Starting simulation study at $(date) ===" | tee "$LOG_FILE"
-echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
+# Run R script with timing; all sim study output goes to .out file (console stays free)
+OUT_FILE="cluster_output/run_$(date +%Y%m%d_%H%M%S).out"
+{
+  echo "=== Starting simulation study at $(date) ==="
+  echo "Log file: $OUT_FILE"
+} >> "$OUT_FILE"
+echo "Sim study output -> $OUT_FILE (tail -f $OUT_FILE to follow)"
 
 START_EPOCH=$(date +%s)
 set +e
-Rscript inst/sim_study/sim_study.R "${EXTRA_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
-R_EXIT=${PIPESTATUS[0]}
+Rscript inst/sim_study/sim_study.R "${EXTRA_ARGS[@]}" >> "$OUT_FILE" 2>&1
+R_EXIT=$?
 set -e
 END_EPOCH=$(date +%s)
 ELAPSED=$(( END_EPOCH - START_EPOCH ))
 
-echo "" | tee -a "$LOG_FILE"
-echo "=== Run finished at $(date) ===" | tee -a "$LOG_FILE"
-echo "Wall time: ${ELAPSED}s ($(( ELAPSED / 60 ))m $(( ELAPSED % 60 ))s)" | tee -a "$LOG_FILE"
-echo "R exit code: $R_EXIT" | tee -a "$LOG_FILE"
+{
+  echo ""
+  echo "=== Run finished at $(date) ==="
+  echo "Wall time: ${ELAPSED}s ($(( ELAPSED / 60 ))m $(( ELAPSED % 60 ))s)"
+  echo "R exit code: $R_EXIT"
+} >> "$OUT_FILE"
 
-# Show timing report if R wrote one
 if [[ -f cluster_output/sim_study_timing_local.txt ]]; then
-  echo "" | tee -a "$LOG_FILE"
-  echo "=== R timing report ===" | tee -a "$LOG_FILE"
-  cat cluster_output/sim_study_timing_local.txt | tee -a "$LOG_FILE"
+  { echo ""; echo "=== R timing report ==="; cat cluster_output/sim_study_timing_local.txt; } >> "$OUT_FILE"
 fi
 
 if [[ $R_EXIT -ne 0 ]]; then
-  echo "Error: R script exited with code $R_EXIT. Check $LOG_FILE and cluster_output/*.err for details." >&2
+  echo "Error: R script exited with code $R_EXIT. Full log: $OUT_FILE" >&2
   exit $R_EXIT
 fi
 
-echo ""
-echo "Results and timing are in cluster_output/. Load the latest .RData in R to inspect (e.g. load('cluster_output/sim_study_results_<timestamp>.RData'))."
+echo "Done. Wall time: ${ELAPSED}s. Exit: $R_EXIT. Full log: $OUT_FILE"
+echo "Results in cluster_output/. Load latest .RData in R to inspect."
