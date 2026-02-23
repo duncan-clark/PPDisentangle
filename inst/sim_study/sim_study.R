@@ -35,6 +35,8 @@ if (ON_CLUSTER) {
   N_PROPOSALS  <- 1000
   EM_ITER      <- 1000
   SEM_EM_ADAPTIVE_ITER <- 1000
+  SEM_N_ITER   <- 10
+  SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
   TREATMENT_TIME <- 10
@@ -50,6 +52,8 @@ if (ON_CLUSTER) {
   N_PROPOSALS  <- 5
   EM_ITER      <- 10
   SEM_EM_ADAPTIVE_ITER <- 10
+  SEM_N_ITER   <- 10
+  SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
   TREATMENT_TIME <- 10
@@ -65,6 +69,8 @@ if (ON_CLUSTER) {
   N_PROPOSALS  <- 100
   EM_ITER      <- 100
   SEM_EM_ADAPTIVE_ITER <- 100
+  SEM_N_ITER   <- 10
+  SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
   TREATMENT_TIME <- 10
@@ -100,6 +106,7 @@ cat("  Cores:", N_CORES, " Sims:", SIM_SIZE, "\n")
 cat("  Omega:", OMEGA, " T:", END_TIME, " t*:", TREATMENT_TIME, "\n")
 cat("  Grid:", NX, "x", NY, "\n")
 cat("  Save:", SAVE_DIR, "\n")
+cat("  EM-style: iter=", EM_ITER, " n_props=10 | SEM adaptive: iter=", SEM_EM_ADAPTIVE_ITER, " n_props=10 | SEM full: N_iter=", SEM_N_ITER, " N_labellings=", SEM_N_LABELLINGS, "\n", sep = "")
 cat("===============================\n")
 
 # ------------------------------------------------------------------
@@ -127,7 +134,7 @@ export_globals <- function(cl) {
     "TIME_INT", "state_spaces", "partition_processes",
     "treated_partitions", "treated_state_space",
     "control_state_space", "hawkes_par_1", "hawkes_par_2",
-    "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER"
+    "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS"
   ), envir = .GlobalEnv)
 }
 
@@ -321,8 +328,8 @@ run_sem <- function(dat) {
     treatment_time = TREATMENT_TIME,
     hawkes_params_control = hawkes_par_1,
     hawkes_params_treated = params_init,
-    N_labellings = max(10, N_PROPOSALS / 10),
-    N_iter = 10, verbose = FALSE,
+    N_labellings = SEM_N_LABELLINGS,
+    N_iter = SEM_N_ITER, verbose = FALSE,
     adaptive_control = list(
       param_update_cadence = 10,
       proposal_update_cadence = 1,
