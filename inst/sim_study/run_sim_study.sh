@@ -85,8 +85,12 @@ fi
 cd "$PKG_ROOT"
 mkdir -p cluster_output
 
-# Load R module when on HPC (no-op if module not available, e.g. local macOS)
+# Load R and geo modules when on HPC (no-op if module not available, e.g. local macOS)
 module load R 2>/dev/null || true
+module load GDAL 2>/dev/null || true
+module load PROJ 2>/dev/null || true
+module load GEOS 2>/dev/null || true
+module load udunits 2>/dev/null || true
 
 # Optional: git pull
 if $DO_PULL; then

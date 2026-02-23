@@ -23,6 +23,10 @@
 #   mkdir -p cluster_output && sbatch inst/sim_study/run_PPDisentangle_sim.slurm
 
 module load R
+module load GDAL
+module load PROJ
+module load GEOS
+module load udunits
 
 mkdir -p cluster_output
 echo "Starting job at $(date)"
