@@ -85,12 +85,19 @@ fi
 cd "$PKG_ROOT"
 mkdir -p cluster_output
 
-# Load R and geo modules when on HPC (no-op if module not available, e.g. local macOS)
-module load R 2>/dev/null || true
-module load GDAL 2>/dev/null || true
-module load PROJ 2>/dev/null || true
-module load GEOS 2>/dev/null || true
-module load udunits 2>/dev/null || true
+# Load R and geo modules when on HPC. If 'module' exists (e.g. NeSI), load without
+# suppressing errors so libudunits2 etc. are found when R loads the 'units' package.
+# (If you see "libudunits2.so.0: cannot open shared object file", ensure these
+# module load lines run successfully; on some systems the module may be "udunits2".)
+if command -v module &>/dev/null; then
+  module load R
+  module load GDAL
+  module load PROJ
+  module load GEOS
+  module load udunits
+else
+  true
+fi
 
 # Optional: git pull
 if $DO_PULL; then
@@ -122,7 +129,7 @@ echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
 START_EPOCH=$(date +%s)
 set +e
 Rscript inst/sim_study/sim_study.R "${EXTRA_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
-R_EXIT=$?
+R_EXIT=${PIPESTATUS[0]}
 set -e
 END_EPOCH=$(date +%s)
 ELAPSED=$(( END_EPOCH - START_EPOCH ))
