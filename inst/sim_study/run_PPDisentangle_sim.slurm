@@ -26,7 +26,8 @@ module load R
 module load GDAL
 module load PROJ
 module load GEOS
-module load udunits
+# NeSI: module is UDUNITS (uppercase); use default version or e.g. UDUNITS/2.2.28-GCCcore-12.3.0
+module load UDUNITS
 
 mkdir -p cluster_output
 echo "Starting job at $(date)"
