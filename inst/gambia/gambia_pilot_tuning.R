@@ -179,12 +179,15 @@ p2 <- ggplot(pilot_df, aes(x = iteration, y = metric, color = change_factor)) +
 efficiency_df <- pilot_df %>%
   group_by(change_factor, n_props) %>%
   summarize(
-    final_metric = last(metric),
+    start_metric = first(metric),
+    end_metric = last(metric),
+    avg_flips_final = last(average_flips),
+    max_flips_final = last(max_metric_flips),
     time_per_iter = first(time_per_iter),
     .groups = "drop"
   )
 
-p3 <- ggplot(efficiency_df, aes(x = time_per_iter, y = final_metric, color = change_factor, shape = n_props)) +
+p3 <- ggplot(efficiency_df, aes(x = time_per_iter, y = end_metric, color = change_factor, shape = n_props)) +
   geom_point(size = 4) +
   labs(title = "Efficiency Trade-off",
        subtitle = "Final Metric vs Time per Iteration",
@@ -197,5 +200,5 @@ ggsave("inst/gambia/pilot_metric_grid.png", p2, width = 10, height = 8)
 ggsave("inst/gambia/pilot_efficiency.png", p3, width = 8, height = 6)
 
 cat("\n--- Pilot Grid Search Summary ---\n")
-print(efficiency_df)
+print(as.data.frame(efficiency_df))
 cat("\nCheck inst/gambia/pilot_average_flips_grid.png, pilot_metric_grid.png, and pilot_efficiency.png.\n")
