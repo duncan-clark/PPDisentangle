@@ -8,7 +8,7 @@ library(raster)
 library(lubridate)
 
 # =========================================================
-# 1. Data Setup (Copied from gambia_fit_inhom.R)
+# 1. Data Setup (Simplified from gambia_fit_inhom.R)
 # =========================================================
 TREATMENT_DATE <- as_datetime("2011-05-01")
 HEALTH_CENTER_DIST <- 10000 # 10 km
@@ -42,7 +42,6 @@ pp_data$t <- pp_data$t - min(pp_data$t)
 pp_data <- pp_data %>% filter(t <= STUDY_END)
 
 dmap <- distmap(hc)
-bands <- cut(as.im(dmap), breaks = c(0,HEALTH_CENTER_DIST,Inf), labels = c("close","far"))
 discs_list <- lapply(seq_len(npoints(hc)), function(i) {
   disc(radius = HEALTH_CENTER_DIST, centre = c(hc$x[i], hc$y[i]), npoly = 200)
 })
@@ -99,18 +98,27 @@ fit_init_ctrl <- fit_hawkes(params_init = list(mu = 0.0001, alpha = 0.01, beta =
                             windowS = control_state_space, background_rate_var = 'W')
 
 # =========================================================
-# 2. Pilot Run Procedure
+# 2. Pilot Run Procedure (Grid Search)
 # =========================================================
-cat("Starting pilot runs to tune change_factor...\n")
+cat("Starting pilot runs to tune change_factor and n_props...\n")
 
-change_factors <- c(0.01, 0.05, 0.1, 0.2)
+# Define grid
+grid <- expand.grid(
+  change_factor = c(0.01, 0.05, 0.1, 0.2),
+  n_props = c(10, 50, 100)
+)
+
 n_pilot_iter <- 50
 pilot_results <- list()
 
-for (cf in change_factors) {
-  cat(paste0("Testing change_factor = ", cf, "...\n"))
+for (i in 1:nrow(grid)) {
+  cf <- grid$change_factor[i]
+  np <- grid$n_props[i]
   
-  # Run em_style_labelling
+  config_label <- paste0("cf=", cf, ", np=", np)
+  cat(paste0("Testing ", config_label, "...\n"))
+  
+  t0 <- proc.time()[3]
   res <- em_style_labelling(
     pp_data = pp_final,
     partition = partition,
@@ -127,59 +135,66 @@ for (cf in change_factors) {
     include_starting_data = FALSE,
     metric_name = "post_likelihood",
     iter = n_pilot_iter,
-    n_props = 20, # Smaller for speed in pilot
+    n_props = np,
     change_factor = cf,
     verbose = FALSE,
     background_rate_var = 'W'
   )
+  t_elapsed <- proc.time()[3] - t0
   
-  pilot_results[[as.character(cf)]] <- data.frame(
+  pilot_results[[config_label]] <- data.frame(
     iteration = 1:n_pilot_iter,
     average_flips = res$average_flips,
     max_metric_flips = res$max_metric_flips,
     metric = res$metrics,
-    change_factor = as.factor(cf)
+    change_factor = as.factor(cf),
+    n_props = as.factor(np),
+    time_per_iter = t_elapsed / n_pilot_iter
   )
 }
 
 pilot_df <- do.call(rbind, pilot_results)
 
-# Plot Average Flips
+# Plot Average Flips (faceted by n_props)
 p1 <- ggplot(pilot_df, aes(x = iteration, y = average_flips, color = change_factor)) +
   geom_line() +
+  facet_wrap(~ n_props, labeller = label_both) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
-  labs(title = "Average Flips per Iteration (Pilot Run)",
-       subtitle = "Goal: ~1 flip per iteration for long-term stability",
+  labs(title = "Average Flips per Iteration",
+       subtitle = "Goal: ~1 flip per iteration for stability",
        x = "Iteration", y = "Average Flips") +
   theme_minimal()
 
-# Plot Max Metric Flips (the flips in the chosen labelling)
-p2 <- ggplot(pilot_df, aes(x = iteration, y = max_metric_flips, color = change_factor)) +
-  geom_line() +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
-  labs(title = "Max Metric Flips per Iteration (Pilot Run)",
-       subtitle = "Flips in the best proposal chosen for next iteration",
-       x = "Iteration", y = "Max Metric Flips") +
-  theme_minimal()
-
 # Plot Metric (Log-Likelihood)
-p3 <- ggplot(pilot_df, aes(x = iteration, y = metric, color = change_factor)) +
+p2 <- ggplot(pilot_df, aes(x = iteration, y = metric, color = change_factor)) +
   geom_line() +
-  labs(title = "Log-Likelihood (Metric) over Iterations",
-       subtitle = "Higher is better; check for convergence",
+  facet_wrap(~ n_props, labeller = label_both) +
+  labs(title = "Log-Likelihood Improvement",
+       subtitle = "Trade-off: larger n_props vs change_factor",
        x = "Iteration", y = "Metric") +
   theme_minimal()
 
+# Efficiency Plot: Metric vs Time
+efficiency_df <- pilot_df %>%
+  group_by(change_factor, n_props) %>%
+  summarize(
+    final_metric = last(metric),
+    time_per_iter = first(time_per_iter),
+    .groups = "drop"
+  )
+
+p3 <- ggplot(efficiency_df, aes(x = time_per_iter, y = final_metric, color = change_factor, shape = n_props)) +
+  geom_point(size = 4) +
+  labs(title = "Efficiency Trade-off",
+       subtitle = "Final Metric vs Time per Iteration",
+       x = "Seconds per Iteration", y = "Final Log-Likelihood") +
+  theme_minimal()
+
 # Save plots
-ggsave("inst/gambia/pilot_average_flips.png", p1, width = 8, height = 6)
-ggsave("inst/gambia/pilot_max_flips.png", p2, width = 8, height = 6)
-ggsave("inst/gambia/pilot_metric.png", p3, width = 8, height = 6)
+ggsave("inst/gambia/pilot_average_flips_grid.png", p1, width = 10, height = 8)
+ggsave("inst/gambia/pilot_metric_grid.png", p2, width = 10, height = 8)
+ggsave("inst/gambia/pilot_efficiency.png", p3, width = 8, height = 6)
 
-# Suggest a change_factor
-final_flips <- pilot_df %>% filter(iteration == n_pilot_iter)
-suggested_cf <- final_flips$change_factor[which.min(abs(final_flips$average_flips - 1))]
-
-cat("\n--- Pilot Run Summary ---\n")
-print(final_flips)
-cat(paste0("\nSuggested change_factor (closest to 1 flip at end): ", suggested_cf, "\n"))
-cat("Check inst/gambia/pilot_average_flips.png and pilot_max_flips.png for details.\n")
+cat("\n--- Pilot Grid Search Summary ---\n")
+print(efficiency_df)
+cat("\nCheck inst/gambia/pilot_average_flips_grid.png, pilot_metric_grid.png, and pilot_efficiency.png.\n")

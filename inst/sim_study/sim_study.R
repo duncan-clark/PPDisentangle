@@ -36,8 +36,8 @@ if (ON_CLUSTER) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 100
-  EM_ITER      <- 10000
-  SEM_EM_ADAPTIVE_ITER <- 10000
+  EM_ITER      <- 100
+  SEM_EM_ADAPTIVE_ITER <- 5000
   SEM_N_ITER   <- 10
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
