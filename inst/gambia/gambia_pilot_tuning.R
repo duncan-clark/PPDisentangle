@@ -95,7 +95,8 @@ pp_final <- rbind(res_pre_trtd$new_df, res_pre_ctrl$new_df, res_post_trtd$new_df
 # Initial fits
 fit_init_ctrl <- fit_hawkes(params_init = list(mu = 0.0001, alpha = 0.01, beta = 0.1, K = 0.2),
                             realiz = res_pre_ctrl$new_df, windowT = range(res_pre_ctrl$new_df$t),
-                            windowS = control_state_space, background_rate_var = 'W')
+                            windowS = control_state_space, background_rate_var = 'W',
+                            maxit = 100)
 
 # =========================================================
 # 2. Pilot Run Procedure (Grid Search)
