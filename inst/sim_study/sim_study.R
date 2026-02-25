@@ -634,6 +634,37 @@ sim_study_plots$draw_treated_params_combined <- function() {
     gridExtra::grid.arrange(grobs = sim_study_plots$plot_treated_params, ncol = 2)
 }
 
+# EM Accuracy over iterations plot
+if (exists("EM_results") && length(EM_results) > 0) {
+  # Extract accuracies from each simulation run
+  # EM_results is a list of results from run_sem (adaptive_SEM)
+  acc_list <- lapply(seq_along(EM_results), function(i) {
+    data.frame(
+      iteration = 1:length(EM_results[[i]]$accuracies),
+      accuracy = EM_results[[i]]$accuracies,
+      sim_id = i
+    )
+  })
+  acc_df <- do.call(rbind, acc_list)
+  
+  # Calculate mean accuracy per iteration
+  mean_acc_df <- acc_df %>%
+    group_by(iteration) %>%
+    summarize(mean_accuracy = mean(accuracy, na.rm = TRUE), .groups = "drop")
+  
+  sim_study_plots$plot_em_accuracy_iters <- ggplot() +
+    # Individual runs in gray
+    geom_line(data = acc_df, aes(x = iteration, y = accuracy, group = sim_id), 
+              color = "gray80", alpha = 0.5) +
+    # Mean in red
+    geom_line(data = mean_acc_df, aes(x = iteration, y = mean_accuracy), 
+              color = "red", linewidth = 1) +
+    labs(title = "EM Accuracy over Iterations",
+         subtitle = "Gray lines: individual runs; Red line: mean accuracy",
+         x = "Iteration", y = "Accuracy") +
+    theme_minimal()
+}
+
 cat("done.\n")
 cat("Plots stored in sim_study_plots:", paste(names(sim_study_plots), collapse = ", "), "\n")
 cat("  To print combined param plots after load: x <- readRDS(...); x$plots$draw_control_params_combined(); x$plots$draw_treated_params_combined()\n")
@@ -663,6 +694,7 @@ sim_study_results <- list(
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
+  EM_results = EM_results,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
