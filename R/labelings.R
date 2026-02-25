@@ -934,3 +934,24 @@ em_style_labelling <- function(pp_data,
     class_results = class_results, fits = fits
   ))
 }
+
+#' Plot flips over iterations for tuning
+#' @param res Result from em_style_labelling or adaptive_SEM (adaptive list)
+#' @return ggplot object
+#' @export
+plot_flips <- function(res) {
+  if ("adaptive" %in% names(res)) res <- res$adaptive
+  df <- data.frame(
+    iteration = 1:length(res$average_flips),
+    average_flips = res$average_flips,
+    max_metric_flips = res$max_metric_flips
+  )
+  ggplot(df, aes(x = iteration)) +
+    geom_line(aes(y = average_flips, color = "Average flips")) +
+    geom_line(aes(y = max_metric_flips, color = "Max metric flips")) +
+    geom_hline(yintercept = 1, linetype = "dashed") +
+    labs(title = "Flips per iteration", x = "Iteration", y = "Number of flips") +
+    theme_minimal() +
+    scale_color_manual(name = "Metric", values = c("Average flips" = "blue", "Max metric flips" = "red"))
+}
+

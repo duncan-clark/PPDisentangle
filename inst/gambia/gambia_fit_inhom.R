@@ -261,6 +261,10 @@ results_df
 # 4. Adaptive SEM (Spillover Correction)
 # =========================================================
 
+# NOTE: Before running the full SEM, it is recommended to run 
+# inst/gambia/gambia_pilot_tuning.R to find the optimal change_factor.
+# A target of ~1 flip per iteration on average is ideal for stability.
+
 # Define piecewise covariate lookup for the SEM
 # It must apply the correct regional normalization factor based on location
 covariate_lookup_func <- function(x, y) {

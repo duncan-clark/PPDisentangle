@@ -18,6 +18,7 @@ simulation_labeling_hawkes_hawkes_fast(
   verbose = FALSE,
   partition_mask = NULL,
   proximity_weight = 0.9,
+  points_tile_index = NULL,
   ...
 )
 }
@@ -47,6 +48,8 @@ simulation_labeling_hawkes_hawkes_fast(
 \item{partition_mask}{Optional mask for fast tile lookup}
 
 \item{proximity_weight}{Weight for distance-based vs uniform sampling (0-1)}
+
+\item{points_tile_index}{Optional precomputed tile index for \code{pp_data} (same length as rows); skips \code{tileindex()} when provided}
 
 \item{...}{Additional arguments passed to generate_inhomogeneous_hawkes}
 }
