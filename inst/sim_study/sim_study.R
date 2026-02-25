@@ -36,7 +36,7 @@ if (ON_CLUSTER) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 100
-  EM_ITER      <- 100
+  EM_ITER      <- 1000
   SEM_EM_ADAPTIVE_ITER <- 5000
   SEM_N_ITER   <- 10
   SEM_N_LABELLINGS <- 10
