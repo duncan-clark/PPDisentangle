@@ -438,6 +438,7 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
 #' @param verbose Print progress
 #' @param partition_mask Optional mask for fast tile lookup
 #' @param proximity_weight Weight for distance-based vs uniform sampling (0-1)
+#' @param points_tile_index Optional precomputed tile index for \code{pp_data} (same length as rows); skips \code{tileindex()} when provided
 #' @param ... Additional arguments passed to generate_inhomogeneous_hawkes
 #' @return pp_data with updated inferred_process
 #' @export
@@ -454,13 +455,17 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    verbose = FALSE,
                                                    partition_mask = NULL,
                                                    proximity_weight = 0.9,
+                                                   points_tile_index = NULL,
                                                    ...) {
   dat <- pp_data
   if (is.null(dat$inferred_process)) {
     dat$inferred_process <- dat$location_process
   }
 
-  if (!is.null(partition_mask)) {
+  n_pts <- nrow(dat)
+  if (!is.null(points_tile_index) && length(points_tile_index) == n_pts) {
+    inds <- as.numeric(points_tile_index)
+  } else if (!is.null(partition_mask)) {
     inds <- as.integer(tileindex(dat$x, dat$y, partition))
   } else {
     inds <- as.numeric(tileindex(dat$x, dat$y, partition))
@@ -483,7 +488,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       space_triggering = FALSE, ...
     )
     sim_data <- sim_data[sim_data$t > windowT[1], ]
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_inds)
   }
@@ -526,10 +531,15 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 
       in_tile_idx <- which(inds == i)
       candidates <- in_tile_idx[dat$inferred_process[in_tile_idx] == relabel_label]
+      if (length(in_tile_idx) == 1L && n_thin > 0) {
+        changes <- in_tile_idx
+        dat$inferred_process[changes] <- if (dat$inferred_process[changes] == "control") "treated" else "control"
+        next
+      }
       if (length(candidates) == 0) next
 
       sampling_weights <- NULL
-      if (has_attractors && length(candidates) > 0) {
+      if (has_attractors && length(candidates) > 0 && proximity_weight > 0) {
         X_cand <- ppp(dat$x[candidates], dat$y[candidates], window = win_box, check = FALSE)
         dists <- nncross(X_cand, X_attract)$dist
         geom_weights <- 1 / (dists + 1e-4)
@@ -549,6 +559,58 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       )
       changes <- candidates[changes_local]
       dat$inferred_process[changes] <- target_label
+    }
+  }
+
+  if (is.null(hawkes_params_treated)) return(dat)
+
+  treated_inds <- inds[dat$inferred_process == "treated"]
+  control_tiles <- which(partition_process == "control")
+  sim_data_t <- generate_inhomogeneous_hawkes(
+    Omega = statespace, partition = partition, time_window = windowT,
+    partition_processes = partition_process,
+    hawkes_params = list(control = no_points_hawkes, treated = hawkes_params_treated),
+    filtration = filtration, state_spaces = state_spaces,
+    space_triggering = FALSE, ...
+  )
+  sim_data_t <- sim_data_t[sim_data_t$t > windowT[1], ]
+  sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition))
+  where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
+  thin_treated <- (length(treated_inds) - length(sim_inds_t)) * change_factor
+  if (thin_treated < 0) {
+    n_total_t <- rpois(1, max(-thin_treated, 1))
+    where_to_thin_t <- -where_to_thin_t
+    relabel_label_t <- "control"
+    target_label_t <- "treated"
+  } else {
+    n_total_t <- rpois(1, max(thin_treated, 1))
+    relabel_label_t <- "treated"
+    target_label_t <- "control"
+  }
+  if (n_total_t > 0) {
+    probs_t <- where_to_thin_t
+    probs_t <- probs_t - min(0, min(probs_t))
+    if (sum(probs_t) == 0) probs_t <- rep(1 / length(probs_t), length(probs_t))
+    probs_t <- probs_t / sum(probs_t)
+    probs_t[control_tiles] <- 0
+    if (sum(probs_t) > 0) {
+      probs_t <- probs_t / sum(probs_t)
+      partition_thins_t <- rmultinom(1, n_total_t, prob = probs_t)
+      for (i in 1:length(partition_thins_t)) {
+        n_thin <- partition_thins_t[i]
+        if (length(n_thin) == 0 || is.na(n_thin) || n_thin <= 0) next
+        in_tile_idx <- which(inds == i)
+        candidates_t <- in_tile_idx[dat$inferred_process[in_tile_idx] == relabel_label_t]
+        if (length(in_tile_idx) == 1L && n_thin > 0) {
+          changes <- in_tile_idx
+          dat$inferred_process[changes] <- if (dat$location_process[changes] == "control") "treated" else "control"
+          next
+        }
+        if (length(candidates_t) == 0) next
+        changes_local <- sample(length(candidates_t), size = min(n_thin, length(candidates_t)), replace = FALSE)
+        changes <- candidates_t[changes_local]
+        dat$inferred_process[changes] <- ifelse(dat$location_process[changes] == "control", "treated", "control")
+      }
     }
   }
   return(dat)
@@ -618,6 +680,7 @@ em_style_labelling <- function(pp_data,
   }
   class_results <- list()
 
+  if (!inherits(statespace, "owin")) statespace <- as.owin(statespace)
   treated_idx <- (partition_processes == "treated")
   treated_state_space <- as.owin(partition[treated_idx])
   control_state_space <- as.owin(partition[!treated_idx])
@@ -626,26 +689,26 @@ em_style_labelling <- function(pp_data,
     pp_data$inferred_process <- pp_data$location_process
   }
 
-  starting_data <- pp_data
+  starting_data <- as.data.frame(pp_data)
   orig_starting_data <- starting_data
   treated_par <- list(hawkes_params_treated)
   control_par <- list(hawkes_params_control)
-  accuracies <- c()
-  average_flips <- c()
-  max_metric_flips <- c()
-  metric_vec <- c()
-  all_accuracies <- list()
-  all_metrics <- list()
+  accuracies <- numeric(iter)
+  average_flips <- numeric(iter)
+  max_metric_flips <- numeric(iter)
+  metric_vec <- numeric(iter)
+  all_accuracies <- vector("list", iter)
+  all_metrics <- vector("list", iter)
 
-  post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
-  post <- post[order(post$t), ]
+  is_pre <- starting_data$t < treatment_time
+  is_post <- !is_pre
 
   fits <- list()
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
-    pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
-    post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
+    pre <- starting_data[is_pre, ]
+    post <- starting_data[is_post, ]
     post <- post[order(post$t), ]
     pre$location_process <- "control"
     pre$inferred_process <- NULL
@@ -653,18 +716,21 @@ em_style_labelling <- function(pp_data,
     if (!is.null(proposal_update_cadence)) {
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
-        labelling_proposals <- lapply(1:n_props, function(j) {
-          tmp <- simulation_labeling_hawkes_hawkes_fast(
+        post_inds <- as.numeric(tileindex(post$x, post$y, partition))
+        filt_by_proc <- if (!is.null(pre$location_process)) split(pre, pre$location_process) else NULL
+        post_proposals <- lapply(1:n_props, function(j) {
+          simulation_labeling_hawkes_hawkes_fast(
             post, partition = partition, partition_process = partition_processes,
             statespace = statespace, state_spaces = state_spaces,
             windowT = time_window,
             hawkes_params_control = control_par[[length(control_par)]],
             hawkes_params_treated = treated_par[[length(treated_par)]],
-            change_factor = change_factor, filtration = pre, verbose = FALSE, ...
+            change_factor = change_factor, filtration = pre, verbose = FALSE,
+            points_tile_index = post_inds, filt_by_proc = filt_by_proc, ...
           )
-          pre$inferred_process <- "control"
-          rbind(pre, tmp)
         })
+        pre$inferred_process <- "control"
+        labelling_proposals <- lapply(post_proposals, function(tmp) rbind(pre, tmp))
       }
     }
     if (i != 1 & include_starting_data) {
@@ -672,50 +738,57 @@ em_style_labelling <- function(pp_data,
       labelling_proposals[[length(labelling_proposals) + 1]] <- rbind(pre, post)
     }
     class_results <- c(class_results, lapply(labelling_proposals, function(d) {
-      d %>% dplyr::filter(.data$t > treatment_time) %>% class_func
+      d_post <- d[d$t > treatment_time, ]
+      class_func(d_post)
     }))
     t_samp <- proc.time()[3] - t_samp
 
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
-      metric <- sapply(labelling_proposals, function(y) {
-        realiz <- y %>% dplyr::filter(.data$t >= treatment_time)
-        include <- which(realiz$inferred_process == "control")
-        if (length(include) == 0) return(-Inf)
+      ref_post <- post
+      pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
+      pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
+      ctrl_params_vec <- unlist(hawkes_params_control)
+      treat_params_vec <- unlist(treated_par[[length(treated_par)]])
+
+      metric <- vapply(labelling_proposals, function(y) {
+        realiz <- y[is_post, ]
+
+        ctrl_rows <- realiz$inferred_process == "control"
+        if (!any(ctrl_rows)) return(-Inf)
         control_lik <- loglik_hawk_fast(
-          params = unlist(hawkes_params_control), realiz = realiz[include, ],
+          params = ctrl_params_vec, realiz = realiz[ctrl_rows, ],
           windowT = time_window, windowS = statespace,
-          zero_background_region = treated_state_space,
-          density_approx = FALSE, numeric_integral = FALSE, ...
+          precomp = list(active_area = pc_ctrl_all$active_area,
+                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_rows]), ...
         )
-        include <- which(realiz$inferred_process == "treated")
-        if (length(include) == 0) return(-Inf)
+
+        treat_rows <- !ctrl_rows
+        if (!any(treat_rows)) return(-Inf)
         treat_lik <- loglik_hawk_fast(
-          params = unlist(treated_par[[length(treated_par)]]), realiz = realiz[include, ],
+          params = treat_params_vec, realiz = realiz[treat_rows, ],
           windowT = time_window, windowS = statespace,
-          zero_background_region = control_state_space,
-          density_approx = FALSE, numeric_integral = FALSE, ...
+          precomp = list(active_area = pc_treat_all$active_area,
+                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_rows]), ...
         )
-        return(control_lik + treat_lik)
-      })
+        control_lik + treat_lik
+      }, numeric(1))
     }
     if (metric_name == "post_likelihood_control") {
-      metric <- sapply(labelling_proposals, function(y) {
-        all_data <- as.data.frame(y)
-        post_data <- all_data %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "control")
+      metric <- vapply(labelling_proposals, function(y) {
+        post_ctrl <- y[is_post & y$inferred_process == "control", ]
         loglik_hawk_fast(
-          params = unlist(hawkes_params_control), realiz = post_data,
+          params = unlist(hawkes_params_control), realiz = post_ctrl,
           windowT = time_window, windowS = statespace,
-          zero_background_region = treated_state_space,
-          density_approx = FALSE, numeric_integral = FALSE, ...
+          zero_background_region = treated_state_space, ...
         )
-      })
+      }, numeric(1))
     }
     if (metric_name == "cheating") {
-      metric <- sapply(labelling_proposals, function(y) {
-        tmp <- as.data.frame(y) %>% dplyr::filter(.data$t >= treatment_time)
-        caret::confusionMatrix(as.factor(tmp$inferred_process), as.factor(tmp$process))$overall[["Accuracy"]]
-      })
+      metric <- vapply(labelling_proposals, function(y) {
+        y_post <- y[is_post, ]
+        mean(y_post$inferred_process == y_post$process)
+      }, numeric(1))
     }
 
     if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
@@ -738,23 +811,23 @@ em_style_labelling <- function(pp_data,
           t_hawkes <- proc.time()[3]
         }
 
+        mml_post <- max_metric_labelling[is_post, ]
+        mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
+        mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
+
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
             loglik_hawk_fast(
-              params = params,
-              realiz = max_metric_labelling %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated"),
+              params = params, realiz = mml_post_treated,
               windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space,
-              density_approx = FALSE, numeric_integral = FALSE, ...
+              zero_background_region = control_state_space, ...
             )
           }
           optim_func_control <- function(params, ...) {
             loglik_hawk_fast(
-              params = params,
-              realiz = max_metric_labelling %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "control"),
+              params = params, realiz = mml_post_control,
               windowT = time_window, windowS = statespace,
-              zero_background_region = treated_state_space,
-              density_approx = FALSE, numeric_integral = FALSE, ...
+              zero_background_region = treated_state_space, ...
             )
           }
           fit <- tryCatch(
@@ -789,11 +862,9 @@ em_style_labelling <- function(pp_data,
         } else {
           optim_func <- function(params, ...) {
             loglik_hawk_fast(
-              params = params,
-              realiz = max_metric_labelling %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated"),
+              params = params, realiz = mml_post_treated,
               windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space,
-              density_approx = FALSE, numeric_integral = FALSE, ...
+              zero_background_region = control_state_space, ...
             )
           }
           fit <- tryCatch(
@@ -815,39 +886,43 @@ em_style_labelling <- function(pp_data,
           print("Estimated Hawkes Params")
           print("treated:"); print(unlist(treated_par[[length(treated_par)]]))
           print("control:"); print(unlist(control_par[[length(control_par)]]))
-          print(paste0("Updating hawkes params on iteration ", i, " took ", proc.time()[3] - t_hawkes))
+          print(paste0("Updating hawkes params on iteration ", i, " took ", signif(proc.time()[3] - t_hawkes, 2)))
         }
       }
     }
 
-    max_diff <- sum(starting_data %>% dplyr::arrange(.data$t) %>% dplyr::pull(.data$inferred_process) !=
-                      max_metric_labelling %>% dplyr::arrange(.data$t) %>% dplyr::pull(.data$inferred_process))
-    average <- mean(sapply(labelling_proposals, function(y) {
-      sum(starting_data %>% dplyr::arrange(.data$t) %>% dplyr::pull(.data$inferred_process) !=
-            y %>% dplyr::arrange(.data$t) %>% dplyr::pull(.data$inferred_process))
-    }))
+    sd_ip <- starting_data$inferred_process[order(starting_data$t)]
+    mml_ip <- max_metric_labelling$inferred_process[order(max_metric_labelling$t)]
+    max_diff <- sum(sd_ip != mml_ip)
+    average <- mean(vapply(labelling_proposals, function(y) {
+      sum(sd_ip != y$inferred_process[order(y$t)])
+    }, numeric(1)))
 
-    if (update_starting_data) starting_data <- max_metric_labelling
+    if (update_starting_data) {
+      starting_data <- as.data.frame(max_metric_labelling)
+      is_pre <- starting_data$t < treatment_time
+      is_post <- !is_pre
+    }
 
-    tmp <- as.data.frame(max_metric_labelling) %>% dplyr::filter(.data$t >= treatment_time)
-    accuracy <- caret::confusionMatrix(as.factor(tmp$inferred_process), as.factor(tmp$process))$overall[["Accuracy"]]
+    mml_post_acc <- max_metric_labelling[is_post, ]
+    accuracy <- mean(mml_post_acc$inferred_process == mml_post_acc$process)
     accuracies[i] <- accuracy
     metric_vec[i] <- metric[which.max(metric)]
     average_flips[i] <- average
     max_metric_flips[i] <- max_diff
 
-    all_accuracies[[i]] <- sapply(labelling_proposals, function(y) {
-      tmp2 <- as.data.frame(y) %>% dplyr::filter(.data$t >= treatment_time)
-      caret::confusionMatrix(as.factor(tmp2$inferred_process), as.factor(tmp2$process))$overall[["Accuracy"]]
-    })
+    all_accuracies[[i]] <- vapply(labelling_proposals, function(y) {
+      y_post <- y[is_post, ]
+      mean(y_post$inferred_process == y_post$process)
+    }, numeric(1))
     all_metrics[[i]] <- metric
     if (verbose) {
       print(summary(metric))
-      print(tmp %>% dplyr::group_by(.data$location_process, .data$process, .data$inferred_process) %>% dplyr::summarize(n = dplyr::n()))
+      print(mml_post_acc %>% dplyr::group_by(.data$location_process, .data$process, .data$inferred_process) %>% dplyr::summarize(n = dplyr::n()))
       print(paste0("Accuracy: ", accuracy))
-      print(paste0("Iteration ", i, " took ", proc.time()[3] - t_iter))
-      print(paste0("sampling took: ", t_samp))
-      print(paste0("Likelihood eval took: ", t_lik))
+      print(paste0("Iteration ", i, " took ", signif(proc.time()[3] - t_iter, 2)))
+      print(paste0("sampling took: ", signif(t_samp, 2)))
+      print(paste0("Likelihood eval took: ", signif(t_lik, 2)))
     }
   }
   return(list(

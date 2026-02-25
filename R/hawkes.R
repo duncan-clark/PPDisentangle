@@ -3,7 +3,7 @@
 #' @import spatstat.random
 #' @importFrom spatstat.geom owin as.owin inside.owin area.owin tileindex
 #'   tilenames tiles as.polygonal quadrats
-#' @importFrom data.table data.table rbindlist
+#' @importFrom data.table data.table rbindlist setDT
 #' @importFrom Rcpp sourceCpp
 #' @importFrom stats optim pnorm runif rpois rexp sd ks.test rbinom rmultinom
 #' @importFrom dplyr `%>%` filter arrange pull group_by summarize n
@@ -203,6 +203,8 @@ loglik_hawk <- function(params,
 #' @param windowS An owin object or convertible to one
 #' @param zero_background_region Optional owin where background intensity is zero
 #' @param background_rate_var Column name for inhomogeneous background (default "W")
+#' @param precomp Optional list from \code{precompute_loglik_args} to skip
+#'   redundant area/inside.owin calculations when called in a tight loop.
 #' @param ... Additional arguments
 #' @return Scalar log-likelihood value
 #' @export
@@ -212,6 +214,7 @@ loglik_hawk_fast <- function(params,
                              windowS,
                              zero_background_region = NULL,
                              background_rate_var = "W",
+                             precomp = NULL,
                              ...) {
   if (is.list(params)) {
     mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
@@ -222,36 +225,40 @@ loglik_hawk_fast <- function(params,
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
 
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
-  realiz <- realiz[t_idx, ]
+  if (!all(t_idx)) realiz <- realiz[t_idx, ]
   n <- nrow(realiz)
   if (n == 0) return(-Inf)
-
   if (min(mu, K, alpha, beta) < 0 || K >= 1) return(-Inf)
 
-  if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
-    W_vec <- realiz[[background_rate_var]]
+  W_vec <- if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
+    realiz[[background_rate_var]]
   } else {
-    W_vec <- rep(1.0, n)
+    rep(1.0, n)
   }
 
-  total_area <- spatstat.geom::area(as.owin(windowS))
-
-  if (!is.null(zero_background_region)) {
-    zero_area <- spatstat.geom::area(as.owin(zero_background_region))
-    active_area <- total_area - zero_area
-    if (active_area <= 0) warning("Zero background region covers entire window!")
+  if (!is.null(precomp)) {
+    active_area <- precomp$active_area
+    if (!is.null(precomp$in_zero_bg)) {
+      in_zero <- precomp$in_zero_bg
+      if (is.logical(in_zero) && length(in_zero) == n) {
+        W_vec[in_zero] <- 0
+      }
+    }
   } else {
-    active_area <- total_area
+    total_area <- spatstat.geom::area(as.owin(windowS))
+    if (!is.null(zero_background_region)) {
+      zero_area <- spatstat.geom::area(as.owin(zero_background_region))
+      active_area <- total_area - zero_area
+      if (active_area <= 0) warning("Zero background region covers entire window!")
+      in_zero_bg <- inside.owin(realiz[, c("x", "y")], w = zero_background_region)
+      W_vec[in_zero_bg] <- 0
+    } else {
+      active_area <- total_area
+    }
   }
 
   tval <- windowT[2] - windowT[1]
-
   intlam <- (mu * tval) + (K * n)
-
-  if (!is.null(zero_background_region)) {
-    in_zero_bg <- inside.owin(realiz[, c("x", "y")], w = zero_background_region)
-    W_vec[in_zero_bg] <- 0
-  }
 
   sum_log <- hawkes_loglik_inhom_cpp(
     t = realiz$t,
@@ -274,6 +281,37 @@ loglik_hawk_fast <- function(params,
   }
 
   return(loglik)
+}
+
+#' Pre-compute reusable values for repeated loglik_hawk_fast calls
+#'
+#' Computes owin areas and inside.owin membership once so they can be
+#' reused across many likelihood evaluations on the same point set.
+#'
+#' @param all_points Data frame with x, y columns for all candidate points
+#' @param windowS Full observation window (owin)
+#' @param zero_background_region Optional owin where background is zero
+#' @return A list with \code{active_area} and optionally
+#'   \code{in_zero_bg_all} (logical vector for all_points)
+#' @export
+precompute_loglik_args <- function(all_points, windowS, zero_background_region = NULL) {
+  if (!inherits(windowS, "owin")) windowS <- as.owin(windowS)
+  total_area <- spatstat.geom::area(windowS)
+
+  if (!is.null(zero_background_region)) {
+    if (!inherits(zero_background_region, "owin")) {
+      zero_background_region <- as.owin(zero_background_region)
+    }
+    zero_area <- spatstat.geom::area(zero_background_region)
+    active_area <- total_area - zero_area
+    in_zero_bg_all <- inside.owin(all_points[, c("x", "y")],
+                                  w = zero_background_region)
+  } else {
+    active_area <- total_area
+    in_zero_bg_all <- NULL
+  }
+
+  list(active_area = active_area, in_zero_bg_all = in_zero_bg_all)
 }
 
 #' Compensator of spatio-temporal Hawkes process (for RCT theorem)
@@ -629,100 +667,143 @@ sim_hawkes_fast <- function(params,
                             filtration = NULL,
                             covariate_lookup = NULL,
                             ...) {
+  mu <- params$mu
+  K  <- params$K
+
+  empty_result <- list(x = numeric(0), y = numeric(0), t = numeric(0),
+                       n = integer(0), background = logical(0), W = numeric(0))
+
+  if (mu < 1e-10 && K < 1e-6 && is.null(background_realization)) {
+    return(empty_result)
+  }
+
   if (!inherits(windowS, "owin")) {
     windowS <- as.owin(windowS)
   }
 
-  bbox <- windowS$xrange
-  x_min <- bbox[1]; x_max <- bbox[2]
-  bbox <- windowS$yrange
-  y_min <- bbox[1]; y_max <- bbox[2]
+  is_rect <- (windowS$type == "rectangle")
+  x_min <- windowS$xrange[1]; x_max <- windowS$xrange[2]
+  y_min <- windowS$yrange[1]; y_max <- windowS$yrange[2]
 
-  mu <- params$mu
   alpha <- params$alpha
-  beta <- params$beta
-  K <- params$K
+  beta  <- params$beta
+
+  bg_generated <- FALSE
 
   if (is.null(background_realization)) {
-    areaS <- spatstat.geom::area(windowS)
-    mu_star <- mu / areaS
-
     if (is.null(covariate_lookup)) {
       n_bg <- rpois(1, mu * (windowT[2] - windowT[1]))
       if (n_bg > 0) {
         bg_x <- runif(n_bg, x_min, x_max)
         bg_y <- runif(n_bg, y_min, y_max)
-        ok <- inside.owin(bg_x, bg_y, windowS)
-        bg_x <- bg_x[ok]
-        bg_y <- bg_y[ok]
-        bg_t <- sort(runif(length(bg_x), windowT[1], windowT[2]))
-        parents <- list(x = bg_x, y = bg_y, t = bg_t, background = rep(TRUE, length(bg_x)))
+        if (!is_rect) {
+          ok <- inside.owin(bg_x, bg_y, windowS)
+          bg_x <- bg_x[ok]
+          bg_y <- bg_y[ok]
+        }
+        n_ok <- length(bg_x)
+        if (n_ok > 0) {
+          bg_t <- sort(runif(n_ok, windowT[1], windowT[2]))
+          p_x <- bg_x; p_y <- bg_y; p_t <- bg_t
+          p_bg <- rep(TRUE, n_ok)
+        } else {
+          return(empty_result)
+        }
       } else {
-        parents <- list(x = numeric(0), y = numeric(0), t = numeric(0), background = logical(0))
+        if (K < 1e-6 && is.null(filtration)) return(empty_result)
+        p_x <- numeric(0); p_y <- numeric(0)
+        p_t <- numeric(0); p_bg <- logical(0)
       }
+      bg_generated <- TRUE
     } else {
+      areaS <- if (is_rect) (x_max - x_min) * (y_max - y_min) else spatstat.geom::area(windowS)
+      mu_star <- mu / areaS
       pixel_fun <- function(x, y) { (windowT[2] - windowT[1]) * mu_star * covariate_lookup(x, y) }
       bg_pp <- spatstat.random::rpoispp(pixel_fun, win = windowS)
       n_bg <- bg_pp$n
       if (n_bg > 0) {
         bg_t <- sort(runif(n_bg, windowT[1], windowT[2]))
-        parents <- list(x = bg_pp$x, y = bg_pp$y, t = bg_t, background = rep(TRUE, n_bg))
+        p_x <- bg_pp$x; p_y <- bg_pp$y; p_t <- bg_t
+        p_bg <- rep(TRUE, n_bg)
       } else {
-        parents <- list(x = numeric(0), y = numeric(0), t = numeric(0), background = logical(0))
+        p_x <- numeric(0); p_y <- numeric(0)
+        p_t <- numeric(0); p_bg <- logical(0)
       }
+      bg_generated <- TRUE
     }
   } else {
-    parents <- as.list(background_realization)
-    parents$background <- rep(TRUE, length(parents$x))
-    ord <- order(parents$t)
-    parents$x <- parents$x[ord]
-    parents$y <- parents$y[ord]
-    parents$t <- parents$t[ord]
+    if (is.data.frame(background_realization)) {
+      p_x <- background_realization$x
+      p_y <- background_realization$y
+      p_t <- background_realization$t
+    } else {
+      br <- if (is.list(background_realization)) background_realization else as.list(background_realization)
+      p_x <- br$x; p_y <- br$y; p_t <- br$t
+    }
+    p_bg <- rep(TRUE, length(p_x))
+    if (length(p_t) > 1L && is.unsorted(p_t)) {
+      ord <- order(p_t)
+      p_x <- p_x[ord]; p_y <- p_y[ord]; p_t <- p_t[ord]
+    }
   }
 
   if (!is.null(filtration)) {
-    f <- as.data.frame(filtration)
-    parents$x <- c(parents$x, f$x)
-    parents$y <- c(parents$y, f$y)
-    parents$t <- c(parents$t, f$t)
-    parents$background <- c(parents$background, rep(TRUE, nrow(f)))
+    if (is.data.frame(filtration)) {
+      f_x <- filtration$x; f_y <- filtration$y; f_t <- filtration$t
+      n_filt <- nrow(filtration)
+    } else if (is.list(filtration)) {
+      f_x <- filtration$x; f_y <- filtration$y; f_t <- filtration$t
+      n_filt <- length(f_x)
+    } else {
+      f <- as.data.frame(filtration)
+      f_x <- f$x; f_y <- f$y; f_t <- f$t
+      n_filt <- nrow(f)
+    }
+    p_x <- c(p_x, f_x); p_y <- c(p_y, f_y); p_t <- c(p_t, f_t)
+    p_bg <- c(p_bg, rep(TRUE, n_filt))
   }
 
-  if (K > 1e-6 && length(parents$t) > 0) {
+  if (K > 1e-6 && length(p_t) > 0) {
     children <- sim_hawkes_children_cpp(
-      parent_x = parents$x, parent_y = parents$y, parent_t = parents$t,
+      parent_x = p_x, parent_y = p_y, parent_t = p_t,
       alpha = alpha, beta = beta, K = K,
       t_min = windowT[1], t_max = windowT[2],
       x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max
     )
-
-    combined_x <- c(parents$x, children$x)
-    combined_y <- c(parents$y, children$y)
-    combined_t <- c(parents$t, children$t)
-    combined_bg <- c(parents$background, rep(FALSE, length(children$x)))
+    n_ch <- length(children$x)
+    if (n_ch > 0) {
+      combined_x <- c(p_x, children$x)
+      combined_y <- c(p_y, children$y)
+      combined_t <- c(p_t, children$t)
+      combined_bg <- c(p_bg, rep(FALSE, n_ch))
+    } else {
+      combined_x <- p_x; combined_y <- p_y
+      combined_t <- p_t; combined_bg <- p_bg
+    }
   } else {
-    combined_x <- parents$x
-    combined_y <- parents$y
-    combined_t <- parents$t
-    combined_bg <- parents$background
+    combined_x <- p_x; combined_y <- p_y
+    combined_t <- p_t; combined_bg <- p_bg
   }
+
+  n_total <- length(combined_t)
+  if (n_total == 0) return(empty_result)
 
   valid_t <- combined_t >= windowT[1] & combined_t <= windowT[2]
-  if (length(valid_t) > 0 && mean(valid_t) < 1.0) {
-    combined_x <- combined_x[valid_t]
-    combined_y <- combined_y[valid_t]
-    combined_t <- combined_t[valid_t]
-    combined_bg <- combined_bg[valid_t]
+  if (!all(valid_t)) {
+    combined_x <- combined_x[valid_t]; combined_y <- combined_y[valid_t]
+    combined_t <- combined_t[valid_t]; combined_bg <- combined_bg[valid_t]
   }
 
-  if (windowS$type != "rectangle") {
+  need_spatial <- !is_rect && length(combined_x) > 0
+  if (need_spatial && !(bg_generated && K < 1e-6 && is.null(filtration))) {
     inside <- inside.owin(combined_x, combined_y, windowS)
-    combined_x <- combined_x[inside]
-    combined_y <- combined_y[inside]
-    combined_t <- combined_t[inside]
-    combined_bg <- combined_bg[inside]
+    if (!all(inside)) {
+      combined_x <- combined_x[inside]; combined_y <- combined_y[inside]
+      combined_t <- combined_t[inside]; combined_bg <- combined_bg[inside]
+    }
   }
 
+  n_final <- length(combined_x)
   if (!is.null(covariate_lookup)) {
     if (is.function(covariate_lookup)) {
       W_vals <- covariate_lookup(combined_x, combined_y)
@@ -731,12 +812,12 @@ sim_hawkes_fast <- function(params,
     }
     W_vals[is.na(W_vals)] <- 0
   } else {
-    W_vals <- numeric(length(combined_x))
+    W_vals <- numeric(n_final)
   }
 
   list(
     x = combined_x, y = combined_y, t = combined_t,
-    n = rep(length(combined_x), length(combined_x)),
+    n = rep(n_final, n_final),
     background = combined_bg, W = W_vals
   )
 }
@@ -763,14 +844,11 @@ generate_inhomogeneous_hawkes <- function(Omega,
                                           filtration = NULL,
                                           space_triggering = FALSE,
                                           ...) {
-  events <- list()
-  events$n <- 0
-  events$x <- numeric()
-  events$y <- numeric()
-  events$t <- numeric()
-
-  total_time <- time_window[2] - time_window[1]
   processes <- unique(partition_processes)
+
+  if (!inherits(Omega, "owin")) {
+    Omega <- as.owin(Omega)
+  }
 
   if (is.null(state_spaces)) {
     state_spaces <- lapply(processes, function(p) {
@@ -778,55 +856,112 @@ generate_inhomogeneous_hawkes <- function(Omega,
       as.owin(partition[idx])
     })
   }
-  area_omega <- spatstat.geom::area(Omega)
-  events <- mapply(state_spaces, processes, FUN = function(s, p) {
-    tmp <- hawkes_params[[p]]
-    tmp$K <- 0
-    events <- sim_hawkes_fast(
-      params = tmp, windowT = time_window, windowS = s,
+
+  dots <- list(...)
+  has_covariate <- !is.null(dots$covariate_lookup) && is.function(dots$covariate_lookup)
+  filt_by_proc_precomputed <- dots$filt_by_proc
+
+  all_bg_x <- list(); all_bg_y <- list(); all_bg_t <- list()
+  all_bg_w <- list(); all_bg_proc <- list()
+  for (k in seq_along(processes)) {
+    p <- processes[k]
+    hp <- hawkes_params[[p]]
+    if (hp$mu < 1e-10) next
+    tmp_hp <- hp; tmp_hp$K <- 0
+    ev <- sim_hawkes_fast(
+      params = tmp_hp, windowT = time_window, windowS = state_spaces[[k]],
       background_realization = NULL, filtration = NULL, ...
     )
-    events$background <- rep(TRUE, length(events$x))
-    events$process <- rep(p, length(events$x))
-    events$location_process <- events$process
-    events <- as.data.frame(events)
-    return(events)
-  }, SIMPLIFY = FALSE)
-  events <- do.call(rbind, events)
-  events$n <- integer(nrow(events))
-
-  if (!is.null(filtration) & is.null(filtration$location_process)) {
-    filtration$location_process <- partition_processes[tileindex(filtration$x, filtration$y, partition)]
+    n_ev <- length(ev$x)
+    if (n_ev == 0) next
+    all_bg_x[[p]] <- ev$x
+    all_bg_y[[p]] <- ev$y
+    all_bg_t[[p]] <- ev$t
+    all_bg_w[[p]] <- if (length(ev$W) == n_ev) ev$W else numeric(n_ev)
+    all_bg_proc[[p]] <- p
   }
 
-  events_list <- lapply(processes, function(x) {
-    if (!is.null(filtration)) {
-      f <- as.data.frame(filtration)[filtration$location_process == x, ]
-      f <- as.list(f)
+  filt_by_proc <- filt_by_proc_precomputed
+  if (is.null(filt_by_proc) && !is.null(filtration)) {
+    if (is.null(filtration$location_process)) {
+      filtration$location_process <- partition_processes[tileindex(filtration$x, filtration$y, partition)]
+    }
+    if (is.data.frame(filtration)) {
+      filt_by_proc <- split(filtration, filtration$location_process)
     } else {
-      f <- NULL
+      filt_df <- as.data.frame(filtration)
+      filt_by_proc <- split(filt_df, filt_df$location_process)
     }
-    if (sum(events$process == x) != 0) {
-      new_events <- sim_hawkes_fast(
-        params = hawkes_params[[x]], windowT = time_window, windowS = Omega,
-        background_realization = events[events$process == x, ],
-        filtration = f, ...
-      )
+  }
+
+  out_x <- list(); out_y <- list(); out_t <- list()
+  out_bg <- list(); out_w <- list(); out_proc <- list()
+  out_loc <- list(); out_tile <- list()
+  idx <- 0L
+
+  for (k in seq_along(processes)) {
+    p <- processes[k]
+    f <- if (!is.null(filt_by_proc) && p %in% names(filt_by_proc)) filt_by_proc[[p]] else NULL
+
+    if (is.null(all_bg_x[[p]])) {
+      hp <- hawkes_params[[p]]
+      if (hp$K < 1e-6 && is.null(f)) next
+      bg_realization <- list(x = numeric(0), y = numeric(0), t = numeric(0))
     } else {
-      return(events[events$process == x, ])
-    }
-    new_events$process <- rep(x, length(new_events$t))
-    new_events$location_process <- partition_processes[tileindex(new_events$x, new_events$y, partition)]
-
-    dots <- list(...)
-    if (!is.null(events$W) && !is.null(dots$covariate_lookup) && is.function(dots$covariate_lookup)) {
-      new_events$W <- dots$covariate_lookup(new_events$x, new_events$y)
+      bg_realization <- list(x = all_bg_x[[p]], y = all_bg_y[[p]], t = all_bg_t[[p]])
     }
 
-    return(as.data.frame(new_events))
-  })
+    new_events <- sim_hawkes_fast(
+      params = hawkes_params[[p]], windowT = time_window, windowS = Omega,
+      background_realization = bg_realization,
+      filtration = f, ...
+    )
+    n_new <- length(new_events$t)
+    if (n_new == 0) next
 
-  events <- rbindlist(events_list)
+    tile_idx <- as.integer(tileindex(new_events$x, new_events$y, partition))
+    loc_proc <- partition_processes[tile_idx]
+
+    w_vals <- if (has_covariate) {
+      dots$covariate_lookup(new_events$x, new_events$y)
+    } else if (length(new_events$W) == n_new) {
+      new_events$W
+    } else {
+      numeric(n_new)
+    }
+
+    idx <- idx + 1L
+    out_x[[idx]] <- new_events$x
+    out_y[[idx]] <- new_events$y
+    out_t[[idx]] <- new_events$t
+    out_bg[[idx]] <- new_events$background
+    out_w[[idx]] <- w_vals
+    out_proc[[idx]] <- rep(p, n_new)
+    out_loc[[idx]] <- loc_proc
+    out_tile[[idx]] <- tile_idx
+  }
+
+  if (idx == 0L) {
+    events <- list(x = numeric(0), y = numeric(0), t = numeric(0),
+                   n = integer(0), background = logical(0), W = numeric(0),
+                   process = character(0), location_process = character(0),
+                   tile_index = integer(0))
+    setDT(events)
+    return(events)
+  }
+
+  events <- list(
+    x = unlist(out_x, use.names = FALSE),
+    y = unlist(out_y, use.names = FALSE),
+    t = unlist(out_t, use.names = FALSE),
+    n = integer(sum(vapply(out_x, length, 0L))),
+    background = unlist(out_bg, use.names = FALSE),
+    W = unlist(out_w, use.names = FALSE),
+    process = unlist(out_proc, use.names = FALSE),
+    location_process = unlist(out_loc, use.names = FALSE),
+    tile_index = unlist(out_tile, use.names = FALSE)
+  )
+  setDT(events)
   events$process[events$t < time_window[1]] <- "control"
   return(events)
 }

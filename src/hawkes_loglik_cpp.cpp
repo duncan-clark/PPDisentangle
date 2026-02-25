@@ -18,14 +18,27 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
 
   double const_val = K * (alpha / pi) * beta;
 
+  double dt_cutoff = 15.0 / beta;
+
   for(int i = 0; i < n; ++i) {
 
     double lambda_i = mu_base * W_val[i];
 
-    for(int j = 0; j < i; ++j) {
-      double dt = t[i] - t[j];
+    double t_lo = t[i] - dt_cutoff;
 
-      if(dt * beta > 15.0) continue;
+    int j_start = 0;
+    if(t_lo > t[0]) {
+      int lo = 0, hi = i;
+      while(lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if(t[mid] < t_lo) lo = mid + 1;
+        else hi = mid;
+      }
+      j_start = lo;
+    }
+
+    for(int j = j_start; j < i; ++j) {
+      double dt = t[i] - t[j];
 
       double dx = x[i] - x[j];
       double dy = y[i] - y[j];

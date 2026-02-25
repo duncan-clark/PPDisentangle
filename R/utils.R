@@ -1,19 +1,25 @@
-#' Normalize a vector of (log-)weights to sum to 1
+#' Normalize a vector of log-weights to proper weights summing to 1
 #'
-#' Shifts to non-negative, scales by max, then normalizes.
-#' Returns uniform weights if all values are identical.
+#' Uses the log-sum-exp trick for numerical stability.
+#' Non-finite inputs (e.g. -Inf) receive zero weight.
+#' Returns uniform weights if all finite values are identical.
 #'
-#' @param w Numeric vector of weights
-#' @return Numeric vector summing to 1
+#' @param w Numeric vector of log-weights (e.g. log-likelihoods)
+#' @return Numeric vector of same length as \code{w}, summing to 1
 #' @export
 normalize_weights <- function(w) {
-  if (sd(w) == 0) {
-    return(rep(1 / length(w), length(w)))
+  n <- length(w)
+  if (n == 0) return(numeric(0))
+  if (n == 1) return(1)
+  ok <- is.finite(w)
+  if (!any(ok)) return(rep(1 / n, n))
+  w_max <- max(w[ok])
+  if (w_max - min(w[ok]) < .Machine$double.eps * 100) {
+    return(rep(1 / n, n))
   }
-  w <- w - min(w)
-  w <- w / max(w)
-  w <- w / sum(w)
-  return(w)
+  log_w <- ifelse(ok, w - w_max, -Inf)
+  weights <- exp(log_w)
+  weights / sum(weights)
 }
 
 #' Generate Poisson point process data under a treatment partition

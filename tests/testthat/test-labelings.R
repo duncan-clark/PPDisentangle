@@ -19,8 +19,36 @@ test_that("normalize_weights returns valid probability vector", {
   nw <- normalize_weights(w)
   expect_equal(sum(nw), 1)
   expect_true(all(nw >= 0))
+  expect_equal(length(nw), length(w))
 
   w_same <- rep(3, 5)
   nw_same <- normalize_weights(w_same)
   expect_equal(nw_same, rep(0.2, 5))
+})
+
+test_that("normalize_weights uses log-sum-exp correctly", {
+  w <- c(-100, -90, -80)
+  nw <- normalize_weights(w)
+  expect_equal(sum(nw), 1)
+  expect_equal(length(nw), 3)
+  expect_true(nw[3] > 0.99)
+  expect_true(nw[1] < 0.001)
+  expected <- exp(w - max(w)) / sum(exp(w - max(w)))
+  expect_equal(nw, expected)
+})
+
+test_that("normalize_weights handles -Inf with zero weight", {
+  w <- c(-500, -Inf, -490)
+  nw <- normalize_weights(w)
+  expect_equal(length(nw), 3)
+  expect_equal(nw[2], 0)
+  expect_equal(sum(nw), 1)
+  expect_true(nw[3] > nw[1])
+})
+
+test_that("normalize_weights edge cases", {
+  expect_equal(normalize_weights(numeric(0)), numeric(0))
+  expect_equal(normalize_weights(42), 1)
+  nw_inf <- normalize_weights(c(-Inf, -Inf))
+  expect_equal(nw_inf, c(0.5, 0.5))
 })

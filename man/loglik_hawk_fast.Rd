@@ -11,6 +11,7 @@ loglik_hawk_fast(
   windowS,
   zero_background_region = NULL,
   background_rate_var = "W",
+  precomp = NULL,
   ...
 )
 }
@@ -26,6 +27,9 @@ loglik_hawk_fast(
 \item{zero_background_region}{Optional owin where background intensity is zero}
 
 \item{background_rate_var}{Column name for inhomogeneous background (default "W")}
+
+\item{precomp}{Optional list from \code{precompute_loglik_args} to skip
+redundant area/inside.owin calculations when called in a tight loop.}
 
 \item{...}{Additional arguments}
 }

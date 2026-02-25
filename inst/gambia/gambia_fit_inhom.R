@@ -19,7 +19,6 @@ library(lubridate)
 
 TREATMENT_DATE <- as_datetime("2011-05-01")
 
-
 # 2 years of data # to make smaller
 # Define treatment as "close to health center" distance in km
 HEALTH_CENTER_DIST <- 10000 # 10 km
@@ -71,6 +70,7 @@ table(pp_data$IPD)
 # =============================================
 # Partition the space
 # =============================================
+
 # 1) Distance to nearest X
 dmap <- distmap(hc)
 bands <- cut(as.im(dmap),

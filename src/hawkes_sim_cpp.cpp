@@ -66,7 +66,7 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
     }
   }
 
-  return DataFrame::create(
+  return List::create(
     Named("x") = out_x,
     Named("y") = out_y,
     Named("t") = out_t

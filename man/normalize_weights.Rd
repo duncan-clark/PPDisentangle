@@ -2,17 +2,18 @@
 % Please edit documentation in R/utils.R
 \name{normalize_weights}
 \alias{normalize_weights}
-\title{Normalize a vector of (log-)weights to sum to 1}
+\title{Normalize a vector of log-weights to proper weights summing to 1}
 \usage{
 normalize_weights(w)
 }
 \arguments{
-\item{w}{Numeric vector of weights}
+\item{w}{Numeric vector of log-weights (e.g. log-likelihoods)}
 }
 \value{
-Numeric vector summing to 1
+Numeric vector of same length as \code{w}, summing to 1
 }
 \description{
-Shifts to non-negative, scales by max, then normalizes.
-Returns uniform weights if all values are identical.
+Uses the log-sum-exp trick for numerical stability.
+Non-finite inputs (e.g. -Inf) receive zero weight.
+Returns uniform weights if all finite values are identical.
 }

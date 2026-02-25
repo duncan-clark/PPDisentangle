@@ -172,7 +172,7 @@ adaptive_SEM <- function(pp_data,
       t_params <- adapt$treated_par
       print("generating labellings")
       labellings <- lapply(1:N_labellings, function(i) {
-        simulation_labeling_hawkes_hawkes(
+        simulation_labeling_hawkes_hawkes_fast(
           adapt$adaptive_labelling,
           partition = partition, partition_process = partition_processes,
           statespace = statespace,
@@ -181,7 +181,7 @@ adaptive_SEM <- function(pp_data,
           hawkes_params_control = hawkes_params_control,
           hawkes_params_treated = t_params[[length(t_params)]],
           change_factor = adaptive_control$change_factor,
-          filtration = pre, verbose = FALSE, ...
+          filtration = pre, proximity_weight = 0, verbose = FALSE, ...
         )
       })
       counter <- 0
@@ -210,7 +210,7 @@ adaptive_SEM <- function(pp_data,
           background_rate_var = "W"
         )
       })
-      return(sum(liks_optim * weights[keepers]))
+      return(sum(liks_optim * weights))
     }
     if (verbose) print("doing fit")
     t_fit <- proc.time()[3]
@@ -229,13 +229,13 @@ adaptive_SEM <- function(pp_data,
     if (verbose) {
       print(paste0("Iteration ", counter))
       print(fit$par)
-      print(paste("fit took", proc.time()[3] - t_fit))
+      print(paste("fit took", signif(proc.time()[3] - t_fit, 2)))
     }
     counter <- counter + 1
     t_params[[length(t_params) + 1]] <- fit$par
   }
 
-  print(paste0("Total time taken for SEM: ", proc.time()[3] - t_global))
+  print(paste0("Total time taken for SEM: ", signif(proc.time()[3] - t_global, 2)))
   return(list(
     hawkes_params_control = c_params[[length(c_params)]],
     hawkes_params_treated = t_params[[length(t_params)]],
