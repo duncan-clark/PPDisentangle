@@ -80,6 +80,7 @@ adaptive_SEM <- function(pp_data,
   }
 
   adaptive_step <- function(starting_data) {
+    t_adapt_start <- proc.time()[3]
     result <- em_style_labelling(
       pp_data = starting_data,
       partition = partition,
@@ -104,6 +105,7 @@ adaptive_SEM <- function(pp_data,
       verbose = TRUE,
       ...
     )
+    t_adapt_end <- proc.time()[3]
     return(list(
       adaptive_labelling = result$labelling,
       treated_par = result$treated_par,
@@ -115,7 +117,8 @@ adaptive_SEM <- function(pp_data,
       all_accuracies = result$all_accuracies,
       all_metrics = result$all_metrics,
       class_results = result$class_results,
-      fits = result$fits
+      fits = result$fits,
+      time_taken = t_adapt_end - t_adapt_start
     ))
   }
 
@@ -158,6 +161,7 @@ adaptive_SEM <- function(pp_data,
     })
   }
 
+  t_main_sem_start <- proc.time()[3]
   while (counter < N_iter) {
     if (verbose) print(paste0("doing iteration ", counter))
     if (check_weights(weights) == TRUE | adaptive_counter == 0) {
@@ -234,6 +238,7 @@ adaptive_SEM <- function(pp_data,
     counter <- counter + 1
     t_params[[length(t_params) + 1]] <- fit$par
   }
+  t_main_sem_end <- proc.time()[3]
 
   print(paste0("Total time taken for SEM: ", signif(proc.time()[3] - t_global, 2)))
   return(list(
@@ -242,7 +247,8 @@ adaptive_SEM <- function(pp_data,
     t_params = t_params,
     labellings = labellings,
     adaptive = adapt,
-    time = proc.time()[3] - t_global
+    time = proc.time()[3] - t_global,
+    time_main_sem = t_main_sem_end - t_main_sem_start
   ))
 }
 
