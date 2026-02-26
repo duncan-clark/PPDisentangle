@@ -923,6 +923,7 @@ em_style_labelling <- function(pp_data,
                   i, length(labelling_proposals),
                   min(flips_per_proposal), average, max(flips_per_proposal),
                   n_post, max_diff))
+      cat("  Metric summary:\n")
       print(summary(metric))
       print(mml_post_acc %>% dplyr::group_by(.data$location_process, .data$process, .data$inferred_process) %>% dplyr::summarize(n = dplyr::n()))
       print(paste0("Accuracy: ", accuracy))
