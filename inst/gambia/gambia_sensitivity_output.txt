@@ -1,0 +1,44 @@
+
+=== Homogeneous, no jitter, beta=0.05 ===
+  Pre-Control (N=37): mu=2.2299e-02  alpha=4.44e-06  beta=0.0500  K=0.3087  | dist= 474m  ll=-913.8
+  Pre-Treated (N=133): mu=7.9295e-02  alpha=7.32e-06  beta=0.0500  K=0.2602  | dist= 370m  ll=-3093.3
+  Post-Control (N=43): mu=2.1659e-02  alpha=1.63e-06  beta=0.0500  K=0.3050  | dist= 784m  ll=-1102.4
+  Post-Treated (N=131): mu=5.6605e-02  alpha=5.09e-06  beta=0.0500  K=0.3159  | dist= 443m  ll=-3112.8
+
+bw.diggle (IPD pre-treatment): 190.6 m
+
+=== IPD bw.diggle, no jitter, beta=0.05 ===
+  Pre-Control (N=37): mu=3.1743e-02  alpha=4.44e-06  beta=0.0500  K=0.2990  | dist= 474m  ll=-751.4
+  Pre-Treated (N=133): mu=1.3242e-01  alpha=8.84e-06  beta=0.0500  K=0.1606  | dist= 336m  ll=-2666.7
+  Post-Control (N=43): mu=1.5499e-02  alpha=1.80e-08  beta=0.0500  K=0.3150  | dist=7459m  ll=-1062.8
+  Post-Treated (N=131): mu=5.8502e-02  alpha=1.48e-08  beta=0.0500  K=0.3055  | dist=8223m  ll=-2941.6
+
+=== IPD bw*20, no jitter, beta=0.05 ===
+  Pre-Control (N=37): mu=2.4302e-02  alpha=4.44e-06  beta=0.0500  K=0.2887  | dist= 474m  ll=-873.6
+  Pre-Treated (N=133): mu=8.9261e-02  alpha=8.84e-06  beta=0.0500  K=0.2798  | dist= 336m  ll=-3038.6
+  Post-Control (N=43): mu=2.3021e-02  alpha=4.44e-06  beta=0.0500  K=0.2984  | dist= 474m  ll=-1048.3
+  Post-Treated (N=131): mu=5.9595e-02  alpha=5.32e-06  beta=0.0500  K=0.2753  | dist= 433m  ll=-3072.4
+
+bw.diggle (non-IPD 1000): 111.2 m
+
+=== non-IPD bw.diggle, no jitter, beta=0.05 ===
+  Pre-Control (N=37): mu=2.3177e-02  alpha=2.15e-08  beta=0.0500  K=0.3000  | dist=6819m  ll=-855.1
+  Pre-Treated (N=133): mu=1.1427e-01  alpha=1.66e-08  beta=0.0500  K=0.2591  | dist=7772m  ll=-2828.0
+  Post-Control (N=43): mu=1.9434e-02  alpha=1.22e-08  beta=0.0500  K=0.3000  | dist=9050m  ll=-992.0
+  Post-Treated (N=131): mu=3.0500e-02  alpha=2.31e-08  beta=0.0500  K=0.3000  | dist=6573m  ll=-2852.9
+
+=== non-IPD bw*20, no jitter, beta=0.05 ===
+  Pre-Control (N=37): mu=2.8620e-02  alpha=4.44e-06  beta=0.0500  K=0.3000  | dist= 474m  ll=-865.6
+  Pre-Treated (N=133): mu=9.1706e-02  alpha=8.84e-06  beta=0.0500  K=0.3024  | dist= 336m  ll=-3016.6
+  Post-Control (N=43): mu=2.2036e-02  alpha=4.44e-06  beta=0.0500  K=0.3000  | dist= 474m  ll=-1028.9
+  Post-Treated (N=131): mu=6.2570e-02  alpha=5.80e-06  beta=0.0500  K=0.2542  | dist= 415m  ll=-3044.0
+
+
+=== SUMMARY: K estimates (beta fixed at 0.05, no jitter) ===
+Setting                    Pre-Ctrl   Pre-Trt  Post-Ctrl  Post-Trt
+----------------------------------------------------------------- 
+Homogeneous                   0.309     0.260     0.305     0.316
+IPD bw.diggle                 0.299     0.161     0.315     0.305
+IPD bw*20                     0.289     0.280     0.298     0.275
+non-IPD bw.diggle             0.300     0.259     0.300     0.300
+non-IPD bw*20                 0.300     0.302     0.300     0.254
