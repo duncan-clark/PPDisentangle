@@ -229,6 +229,41 @@ adaptive_SEM <- function(pp_data,
       return(sum(liks_optim * weights))
     }
 
+    if (verbose) {
+      cat("  [diag] per-labelling treated subset sizes (post-treatment):\n")
+      sizes <- sapply(labellings[keepers], function(y) {
+        sub <- y %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
+        nrow(sub)
+      })
+      cat("    n_treated:", paste(sizes, collapse = ", "), "\n")
+      has_W <- sapply(labellings[keepers], function(y) "W" %in% names(y))
+      cat("    has W col:", paste(has_W, collapse = ", "), "\n")
+      init_liks <- sapply(labellings[keepers], function(y) {
+        sub <- y %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
+        loglik_hawk_fast(
+          params = unlist(t_params[[length(t_params)]]),
+          realiz = sub,
+          windowT = c(treatment_time, max(starting_data$t)),
+          windowS = statespace, zero_background_region = control_state_space,
+          density_approx = FALSE, numeric_integral = FALSE,
+          background_rate_var = "W"
+        )
+      })
+      cat("    init liks:", paste(signif(init_liks, 5), collapse = ", "), "\n")
+      if (any(init_liks <= -1e14)) {
+        bad_idx <- which(init_liks <= -1e14)[1]
+        bad_sub <- labellings[keepers][[bad_idx]] %>%
+          dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
+        cat(sprintf("    BAD labelling %d: n=%d, W range=[%s, %s], t range=[%s, %s]\n",
+                    bad_idx, nrow(bad_sub),
+                    signif(min(bad_sub$W, na.rm = TRUE), 4), signif(max(bad_sub$W, na.rm = TRUE), 4),
+                    signif(min(bad_sub$t), 4), signif(max(bad_sub$t), 4)))
+        pv <- unlist(t_params[[length(t_params)]])
+        cat(sprintf("    params: mu=%s alpha=%s beta=%s K=%s\n",
+                    signif(pv[1], 5), signif(pv[2], 5), signif(pv[3], 5), signif(pv[4], 5)))
+      }
+    }
+
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
     all_names <- c("mu", "alpha", "beta", "K")
     fp_idx <- if (!is.null(fp)) match(names(fp), all_names) else integer(0)
