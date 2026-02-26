@@ -690,10 +690,15 @@ em_style_labelling <- function(pp_data,
                                change_factor = 0.1,
                                MCMC_style = FALSE,
                                proposal_method = "simulation",
+                               fixed_params = NULL,
                                verbose = FALSE,
                                ...) {
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
+
+  all_names <- c("mu", "alpha", "beta", "K")
+  fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
+  free_idx  <- setdiff(seq_along(all_names), fixed_idx)
 
   class_func <- function(labelling) {
     truth_factor <- factor(labelling$process, levels = c("control", "treated"))
@@ -846,6 +851,32 @@ em_style_labelling <- function(pp_data,
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
+        profile_optim <- function(full_par, obj_fn, label) {
+          full_vec <- unlist(full_par)
+          if (length(fixed_idx) > 0) {
+            free_par <- full_vec[free_idx]
+            wrap_fn <- function(fp, ...) {
+              p4 <- full_vec; p4[free_idx] <- fp
+              obj_fn(p4, ...)
+            }
+            res <- tryCatch(
+              optim(par = free_par, fn = wrap_fn, method = "Nelder-Mead",
+                    control = list(fnscale = -1, trace = 0, maxit = 1000), ...),
+              error = function(e) { cat("  error fitting", label, ":", e$message, "\n"); list(par = free_par) }
+            )
+            out <- full_vec; out[free_idx] <- res$par
+            res$par <- out
+          } else {
+            res <- tryCatch(
+              optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
+                    control = list(fnscale = -1, trace = 0, maxit = 1000), ...),
+              error = function(e) { cat("  error fitting", label, ":", e$message, "\n"); list(par = full_vec) }
+            )
+          }
+          pv <- as.numeric(res$par)
+          list(fit = res, par_list = list(mu = pv[1], alpha = pv[2], beta = pv[3], K = pv[4]))
+        }
+
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
             loglik_hawk_fast(
@@ -861,35 +892,12 @@ em_style_labelling <- function(pp_data,
               zero_background_region = treated_state_space, ...
             )
           }
-          fit <- tryCatch(
-            optim(
-              par = unlist(treated_par[[length(treated_par)]]),
-              fn = optim_func_treat, method = "Nelder-Mead",
-              control = list(fnscale = -1, trace = 0, maxit = 1000), ...
-            ),
-            error = function(e) {
-              print("error fitting the treated model - returning current params")
-              list(par = treated_par[[length(treated_par)]])
-            }
-          )
-          fits[[i]] <- fit
-          par_vec <- as.numeric(fit$par)
-          treated_par[[length(treated_par) + 1]] <- list(mu = par_vec[1], alpha = par_vec[2], beta = par_vec[3], K = par_vec[4])
+          res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func_treat, "treated")
+          fits[[i]] <- res_t$fit
+          treated_par[[length(treated_par) + 1]] <- res_t$par_list
 
-          fit_ctrl <- tryCatch(
-            optim(
-              par = unlist(control_par[[length(control_par)]]),
-              fn = optim_func_control, method = "Nelder-Mead",
-              control = list(fnscale = -1, trace = 0, maxit = 1000), ...
-            ),
-            error = function(e) {
-              print("error fitting the control model - returning current params")
-              list(par = control_par[[length(control_par)]])
-            }
-          )
-          par_c <- fit_ctrl$par
-          names(par_c) <- NULL
-          control_par[[length(control_par) + 1]] <- list(mu = par_c[1], alpha = par_c[2], beta = par_c[3], K = par_c[4])
+          res_c <- profile_optim(control_par[[length(control_par)]], optim_func_control, "control")
+          control_par[[length(control_par) + 1]] <- res_c$par_list
         } else {
           optim_func <- function(params, ...) {
             loglik_hawk_fast(
@@ -898,20 +906,9 @@ em_style_labelling <- function(pp_data,
               zero_background_region = control_state_space, ...
             )
           }
-          fit <- tryCatch(
-            optim(
-              par = unlist(treated_par[[length(treated_par)]]),
-              fn = optim_func, method = "Nelder-Mead",
-              control = list(fnscale = -1, trace = 0, maxit = 1000)
-            ),
-            error = function(e) {
-              print("error fitting the model - returning current params")
-              list(par = treated_par[[length(treated_par)]])
-            }
-          )
-          par_vec <- fit$par
-          names(par_vec) <- NULL
-          treated_par[[length(treated_par) + 1]] <- list(mu = par_vec[1], alpha = par_vec[2], beta = par_vec[3], K = par_vec[4])
+          res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func, "treated")
+          fits[[i]] <- res_t$fit
+          treated_par[[length(treated_par) + 1]] <- res_t$par_list
         }
         if (verbose) {
           print("Estimated Hawkes Params")

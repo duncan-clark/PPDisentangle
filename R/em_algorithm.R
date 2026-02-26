@@ -103,6 +103,7 @@ adaptive_SEM <- function(pp_data,
       change_factor = adaptive_control$change_factor,
       MCMC_style = FALSE,
       proposal_method = if (!is.null(adaptive_control$proposal_method)) adaptive_control$proposal_method else "simulation",
+      fixed_params = if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL,
       verbose = TRUE,
       ...
     )
@@ -219,18 +220,33 @@ adaptive_SEM <- function(pp_data,
     }
     if (verbose) print("doing fit")
     t_fit <- proc.time()[3]
-    fit <- tryCatch(
-      optim(
-        par = unlist(t_params[[length(t_params)]]),
-        fn = optim_func, method = "Nelder-Mead",
-        control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)
-      ),
-      error = function(e) {
-        print("Optim failed for some reason")
-        warning(e)
-        list(par = t_params[[length(t_params)]])
+
+    fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
+    all_names <- c("mu", "alpha", "beta", "K")
+    fp_idx <- if (!is.null(fp)) match(names(fp), all_names) else integer(0)
+    fr_idx <- setdiff(seq_along(all_names), fp_idx)
+    full_vec <- unlist(t_params[[length(t_params)]])
+
+    if (length(fp_idx) > 0) {
+      wrap_fn <- function(free_par) {
+        p4 <- full_vec; p4[fr_idx] <- free_par
+        optim_func(p4)
       }
-    )
+      fit <- tryCatch(
+        optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
+              control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+        error = function(e) { warning(e); list(par = full_vec[fr_idx]) }
+      )
+      out_par <- full_vec; out_par[fr_idx] <- fit$par
+      fit$par <- out_par
+    } else {
+      fit <- tryCatch(
+        optim(par = full_vec, fn = optim_func, method = "Nelder-Mead",
+              control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+        error = function(e) { warning(e); list(par = full_vec) }
+      )
+    }
+
     if (verbose) {
       print(paste0("Iteration ", counter))
       print(fit$par)
