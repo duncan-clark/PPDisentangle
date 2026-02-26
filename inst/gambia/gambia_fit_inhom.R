@@ -19,6 +19,13 @@ library(lubridate)
 
 TREATMENT_DATE <- as_datetime("2011-05-01")
 
+# Spatial jitter SD (meters) to break village-level geocoding ties.
+# 500m ~ Gambian village catchment radius.
+JITTER_SD <- 500
+
+# Fixed temporal decay rate for profile likelihood (1/beta = mean trigger days).
+# Set to NULL to estimate beta freely.
+FIXED_BETA <- 0.05  # ~20 day mean trigger time
 
 # 2 years of data # to make smaller
 # Define treatment as "close to health center" distance in km
@@ -135,11 +142,8 @@ pp_data$background <- TRUE
 pp_data$process <- pp_data$location_process
 plot_pp(pp_data,partition)
 
-# Jitter to break village-level geocoding ties. sd=500m is the approximate
-# radius of a Gambian village catchment area; 1m was far too small and
-# caused alpha to collapse onto near-duplicate locations.
-pp_data$x <- pp_data$x + rnorm(nrow(pp_data), mean = 0, sd = 500)
-pp_data$y <- pp_data$y + rnorm(nrow(pp_data), mean = 0, sd = 500)
+pp_data$x <- pp_data$x + rnorm(nrow(pp_data), mean = 0, sd = JITTER_SD)
+pp_data$y <- pp_data$y + rnorm(nrow(pp_data), mean = 0, sd = JITTER_SD)
 plot_pp(pp_data,partition)
 pp_data <- pp_data[inside.owin(pp_data$x, pp_data$y, win),]
 
@@ -214,16 +218,16 @@ pp_final <- rbind(res_pre_trtd$new_df,
 # 2. Perform the 4 Segmented Fits
 # =========================================================
 
-# Helper to run fit and return a named vector + diagnostics
-# alpha ~ 1e-7 gives mean trigger dist ~ sqrt(1/alpha) ~ 3.2 km (meter-scale coords)
-# beta ~ 0.05 gives mean trigger time ~ 20 days
 run_full_fit <- function(df, win, label,
+                         fixed_beta = FIXED_BETA,
                          starts = list(
                            list(mu = 0.0001, alpha = 1e-7, beta = 0.05, K = 0.3),
                            list(mu = 0.001,  alpha = 1e-6, beta = 0.03, K = 0.2),
                            list(mu = 0.0005, alpha = 1e-8, beta = 0.1,  K = 0.4)
                          )) {
-  cat("\nFitting:", label, "with", length(starts), "starting points...\n")
+  fp <- if (!is.null(fixed_beta)) list(beta = fixed_beta) else NULL
+  mode_str <- if (!is.null(fixed_beta)) paste0("profile (beta=", fixed_beta, ")") else "full MLE"
+  cat("\nFitting:", label, "|", mode_str, "| starts:", length(starts), "\n")
   best_fit <- NULL
   best_val <- -Inf
   for(i in seq_along(starts)) {
@@ -234,9 +238,10 @@ run_full_fit <- function(df, win, label,
         windowT = range(df$t),
         windowS = win,
         background_rate_var = 'W',
-        maxit = 2000,
+        maxit = 5000,
         use_fast = TRUE,
-        method = "Nelder-Mead"
+        method = "Nelder-Mead",
+        fixed_params = fp
       ),
       error = function(e) { cat("  Start", i, "failed:", e$message, "\n"); NULL }
     )

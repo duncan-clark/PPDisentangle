@@ -440,8 +440,13 @@ ks_test_pval <- function(realiz, windowT, windowS, hawkes_par, zero_background_r
 #' @param beta_min Lower bound on beta passed to loglik_hawk_fast.
 #'   NULL (default) sets 1/(windowT[2]-windowT[1]) so mean trigger time
 #'   cannot exceed the observation window.
+#' @param fixed_params Named list of parameters to hold fixed during
+#'   optimization (profile likelihood). For example,
+#'   \code{fixed_params = list(beta = 0.05)} optimizes only mu, alpha, K
+#'   with beta fixed at 0.05. The fixed values override params_init.
 #' @param ... Additional arguments passed to loglik_hawk or loglik_hawk_fast
-#' @return An optim result list with element par
+#' @return An optim result list with element par (always length-4 named
+#'   vector including fixed values)
 #' @export
 fit_hawkes <- function(params_init,
                        realiz,
@@ -457,6 +462,7 @@ fit_hawkes <- function(params_init,
                        upper = NULL,
                        alpha_max = NULL,
                        beta_min = NULL,
+                       fixed_params = NULL,
                        ...) {
   if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
   if (poisson_flag) {
@@ -470,7 +476,6 @@ fit_hawkes <- function(params_init,
     }
   } else {
     realiz <- realiz[order(realiz$t), ]
-    # Avoid passing optim() formals via ... so 'method' (and lower/upper/control) are not duplicated
     optim_formals <- c("par", "fn", "gr", "method", "lower", "upper", "control", "hessian")
     dots <- list(...)
     dot_names <- names(dots)
@@ -479,11 +484,36 @@ fit_hawkes <- function(params_init,
     } else TRUE
     extra <- if (length(dots)) dots[keep_extra] else list()
 
+    all_names <- c("mu", "alpha", "beta", "K")
+    if (!is.null(names(params_init))) {
+      full_init <- params_init[all_names]
+    } else {
+      full_init <- params_init
+      names(full_init) <- all_names
+    }
+    if (!is.null(fixed_params)) {
+      for (nm in names(fixed_params)) full_init[nm] <- fixed_params[[nm]]
+    }
+
+    fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
+    free_idx  <- setdiff(seq_along(all_names), fixed_idx)
+    free_init <- full_init[free_idx]
+
+    profile_fn <- function(free_par, ...) {
+      par4 <- full_init
+      par4[free_idx] <- free_par
+      if (use_fast) {
+        loglik_hawk_fast(par4, ...)
+      } else {
+        loglik_hawk(par4, ...)
+      }
+    }
+
     if (use_fast) {
       opt_args <- c(
         list(
-          par = params_init,
-          fn = loglik_hawk_fast,
+          par = free_init,
+          fn = profile_fn,
           method = method,
           control = list(fnscale = -1, trace = trace, maxit = maxit),
           realiz = realiz,
@@ -496,8 +526,8 @@ fit_hawkes <- function(params_init,
         extra
       )
       if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
-        opt_args$lower <- lower
-        opt_args$upper <- upper
+        opt_args$lower <- lower[free_idx]
+        opt_args$upper <- upper[free_idx]
       }
       fit <- do.call(stats::optim, opt_args)
     } else {
@@ -509,8 +539,8 @@ fit_hawkes <- function(params_init,
 
       fit <- do.call(stats::optim, c(
         list(
-          par = params_init,
-          fn = loglik_hawk,
+          par = free_init,
+          fn = profile_fn,
           method = method,
           control = list(fnscale = -1, trace = trace, maxit = maxit),
           realiz = realiz,
@@ -522,6 +552,10 @@ fit_hawkes <- function(params_init,
         extra
       ))
     }
+
+    par4 <- full_init
+    par4[free_idx] <- fit$par
+    fit$par <- par4
   }
   return(fit)
 }
