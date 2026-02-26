@@ -19,16 +19,14 @@ library(lubridate)
 
 TREATMENT_DATE <- as_datetime("2011-05-01")
 
+
 # 2 years of data # to make smaller
 # Define treatment as "close to health center" distance in km
-HEALTH_CENTER_DIST <- 500
-WINDOW_CENTER_DIST <- 10000
+HEALTH_CENTER_DIST <- 10000 # 10 km
 
 # Get data:
 gambia_data <- dget(system.file("extdata/gambia/DISCLEAN.txt", package = "PPDisentangle"))
-# gambia_data <- gambia_data %>% filter(IPDEvent == "Y")
-# sample 5000 points
-gambia_data <- gambia_data[sample(1:dim(gambia_data)[1],1000),]
+gambia_data <- gambia_data %>% filter(IPDEvent == "Y")
 TREATMENT_TIME <- as.numeric(as.Date(TREATMENT_DATE) -
                                min(as.Date(gambia_data$date_IPD_Pne_Event)))
 STUDY_END <- as.numeric(max(as.Date(gambia_data$date_IPD_Pne_Event)) -
@@ -73,7 +71,6 @@ table(pp_data$IPD)
 # =============================================
 # Partition the space
 # =============================================
-
 # 1) Distance to nearest X
 dmap <- distmap(hc)
 bands <- cut(as.im(dmap),
@@ -94,8 +91,8 @@ discs_list <- lapply(seq_len(npoints(hc)), function(i) {
        npoly = 200)    # increase npoly for smoother circles
 })
 
-disc_list_win <- lapply(seq_len(npoints(hc)), function(i) {
-  disc(radius = WINDOW_CENTER_DIST,
+disc_list_double <- lapply(seq_len(npoints(hc)), function(i) {
+  disc(radius = HEALTH_CENTER_DIST * 2,
        centre = c(hc$x[i], hc$y[i]),
        npoly = 200)    # increase npoly for smoother circles
 })
@@ -106,11 +103,8 @@ control_state_space <- setminus.owin(win, treated_state_space)
 
 # if do far near from health center
 control_state_space <- setminus.owin(Reduce(union.owin, disc_list_double), treated_state_space)
-win <- Reduce(union.owin, disc_list_win)
+win <- Reduce(union.owin, disc_list_double)
 pp_data <- pp_data[inside.owin(pp_data$x, pp_data$y, win),]
-
-# print how many points left with
-print(paste('Number of points inside window: ',dim(pp_data)[1]))
 
 # make this into a tessalation object
 tiles <- discs_list
@@ -159,15 +153,14 @@ X_pre <- ppp(
 )
 
 # Use automated bandwidth selection (Diggle's method)
-bw_sigma <- bw.diggle(X_pre)*10
+bw_sigma <- bw.diggle(X_pre)*20
 lambda_space_gambia <- density(X_pre, sigma = bw_sigma, edge = TRUE, at = "pixels")
 
 # Ensure positivity for numerical stability
 min_non_zero <- min(lambda_space_gambia$v[lambda_space_gambia$v > 0], na.rm = TRUE)
 lambda_space_gambia$v[lambda_space_gambia$v <= 0] <- min_non_zero
 
-plot(lambda_space_gambia,
-     main = "Gambia: Kernel-smoothed Background Rate (Pre-Treatment)")
+plot(lambda_space_gambia, main = "Gambia: Kernel-smoothed Background Rate (Pre-Treatment)")
 
 # =========================================================
 # 2. Regional Normalization (The NYC Logic)
@@ -175,11 +168,7 @@ plot(lambda_space_gambia,
 # This ensures that the background rate W integrates to the area of the window.
 # This makes 'mu' comparable between regions with different base densities.
 
-normalize_marks_gambia <- function(df_sub,
-                                   win_sub,
-                                   covariate_im,
-                                   mark_name = "W") {
-  # browser()
+normalize_marks_gambia <- function(df_sub, win_sub, covariate_im, mark_name = "W") {
   # 1. Calculate the Raw Mass in this specific window
   cov_in_window <- covariate_im[win_sub, drop = FALSE]
   total_mass_raw <- integral.im(cov_in_window)
@@ -210,7 +199,6 @@ res_pre_trtd  <- normalize_marks_gambia(pp_data %>% filter(t <  TREATMENT_TIME, 
 res_pre_ctrl  <- normalize_marks_gambia(pp_data %>% filter(t <  TREATMENT_TIME, location_process == "control"), control_state_space, lambda_space_gambia)
 res_post_trtd <- normalize_marks_gambia(pp_data %>% filter(t >= TREATMENT_TIME, location_process == "treated"), treated_state_space, lambda_space_gambia)
 res_post_ctrl <- normalize_marks_gambia(pp_data %>% filter(t >= TREATMENT_TIME, location_process == "control"), control_state_space, lambda_space_gambia)
-res_pre_all <-  normalize_marks_gambia(pp_data %>% filter(t <= TREATMENT_TIME), win, lambda_space_gambia)
 
 # Combine for the SEM
 pp_final <- rbind(res_pre_trtd$new_df,
@@ -226,28 +214,51 @@ pp_final <- rbind(res_pre_trtd$new_df,
 # =========================================================
 
 # Helper to run fit and return a named vector + diagnostics
-run_full_fit <- function(df, win, label,background_var = 'W') {
-  cat("\nFitting:", label, "...\n")
-  fit <- fit_hawkes(
-    params_init = list(mu = 0.0001, alpha = 0.01, beta = 0.1, K = 0.2),
-    realiz = df,
-    windowT = range(df$t),
-    windowS = win,
-    background_rate_var = background_var,
-    maxit = 1000
-  )
-
-  # Calculate physical scales
-  pars <- fit$par
+# alpha ~ 1e-7 gives mean trigger dist ~ sqrt(1/alpha) ~ 3.2 km (meter-scale coords)
+# beta ~ 0.05 gives mean trigger time ~ 20 days
+run_full_fit <- function(df, win, label,
+                         starts = list(
+                           list(mu = 0.0001, alpha = 1e-7, beta = 0.05, K = 0.3),
+                           list(mu = 0.001,  alpha = 1e-6, beta = 0.03, K = 0.2),
+                           list(mu = 0.0005, alpha = 1e-8, beta = 0.1,  K = 0.4)
+                         )) {
+  cat("\nFitting:", label, "with", length(starts), "starting points...\n")
+  best_fit <- NULL
+  best_val <- -Inf
+  for(i in seq_along(starts)) {
+    fit <- tryCatch(
+      fit_hawkes(
+        params_init = starts[[i]],
+        realiz = df,
+        windowT = range(df$t),
+        windowS = win,
+        background_rate_var = 'W',
+        maxit = 2000,
+        use_fast = TRUE,
+        method = "Nelder-Mead"
+      ),
+      error = function(e) { cat("  Start", i, "failed:", e$message, "\n"); NULL }
+    )
+    if(!is.null(fit) && fit$value > best_val) {
+      best_val <- fit$value
+      best_fit <- fit
+      cat("  Start", i, "=> loglik =", fit$value,
+          " K =", fit$par[4], " beta =", fit$par[3],
+          " mean_time =", round(1/fit$par[3], 1), "days\n")
+    }
+  }
+  pars <- best_fit$par
+  cat("  BEST:", label, "=> K =", round(pars[4], 4),
+      " beta =", round(pars[3], 6), " mean_time =", round(1/pars[3], 1),
+      " alpha =", signif(pars[2], 3), " mean_dist =", round(sqrt(1/pars[2])), "m\n")
   return(data.frame(
     Segment = label,
     mu = pars['mu'],
     alpha = pars['alpha'],
     beta = pars['beta'],
     K = pars['K'],
-    mean_dist_m = 1/pars['alpha'],
+    mean_dist_m = sqrt(1/pars['alpha']),
     mean_time_days = 1/pars['beta'],
-    n_points = dim(df)[1],
     row.names = NULL
   ))
 }
@@ -257,16 +268,6 @@ fit_pre_ctrl  <- run_full_fit(res_pre_ctrl$new_df,  control_state_space, "Pre-Co
 fit_pre_trtd  <- run_full_fit(res_pre_trtd$new_df,  treated_state_space, "Pre-Treated")
 fit_post_ctrl <- run_full_fit(res_post_ctrl$new_df, control_state_space, "Post-Control")
 fit_post_trtd <- run_full_fit(res_post_trtd$new_df, treated_state_space, "Post-Treated")
-fit_pre_both  <- run_full_fit(res_pre_all$new_df,win,"Pre-All")
-
-
-# no background:
-fit_pre_ctrl_no_back  <- run_full_fit(res_pre_ctrl$new_df,  control_state_space, "Pre-Control",background_var = NULL)
-fit_pre_trtd_no_back  <- run_full_fit(res_pre_trtd$new_df,  treated_state_space, "Pre-Treated",background_var = NULL)
-fit_post_ctrl_no_back <- run_full_fit(res_post_ctrl$new_df, control_state_space, "Post-Control",background_var = NULL)
-fit_post_trtd_no_back <- run_full_fit(res_post_trtd$new_df, treated_state_space, "Post-Treated",background_var = NULL)
-fit_pre_both_no_back  <- run_full_fit(res_pre_all$new_df,win,"Pre-All",background_var = NULL)
-
 
 # =========================================================
 # 3. Rbind the Results Dataframe for Inspection
@@ -276,31 +277,13 @@ results_df <- rbind(
   fit_pre_ctrl,
   fit_pre_trtd,
   fit_post_ctrl,
-  fit_post_trtd,
-  fit_pre_both
+  fit_post_trtd
 )
 results_df
-
-results_df_no_back <- rbind(
-  fit_pre_ctrl_no_back,
-  fit_pre_trtd_no_back,
-  fit_post_ctrl_no_back,
-  fit_post_trtd_no_back,
-  fit_pre_both_no_back
-)
-results_df_no_back
-
-
-# comments the backgron rate isn't making a super big difference and it doesn't really appear hawkesian 
-
 
 # =========================================================
 # 4. Adaptive SEM (Spillover Correction)
 # =========================================================
-
-# NOTE: Before running the full SEM, it is recommended to run 
-# inst/gambia/gambia_pilot_tuning.R to find the optimal change_factor.
-# A target of ~1 flip per iteration on average is ideal for stability.
 
 # Define piecewise covariate lookup for the SEM
 # It must apply the correct regional normalization factor based on location
@@ -366,8 +349,8 @@ results_all <- results_all %>%
 # 5. Add interpretation columns (Radiuses) for the SEM rows to match your inspection_results
 results_all <- results_all %>%
   mutate(
-    mean_dist_m = round(1/alpha, 2),
-    mean_time_days = round(1/beta, 2)
+    mean_dist_m = round(sqrt(1/alpha), 0),
+    mean_time_days = round(1/beta, 1)
   )
 print(results_all)
 
@@ -471,5 +454,3 @@ savings_report_naive <- estimate_hawkes_savings(
   duration = duration_post,
   verbose = T
 )
-
-

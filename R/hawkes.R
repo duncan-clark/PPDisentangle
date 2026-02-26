@@ -227,8 +227,11 @@ loglik_hawk_fast <- function(params,
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
   n <- nrow(realiz)
-  if (n == 0) return(-Inf)
-  if (min(mu, K, alpha, beta) < 0 || K >= 1) return(-Inf)
+  if (n == 0) return(-1e15)
+  if (min(mu, K, alpha, beta) < 0 || K >= 1) return(-1e15)
+  
+  # Penalty for very large parameters to prevent Nelder-Mead from jumping to infinity
+  if(mu > 1e6 || alpha > 1e12 || beta > 1e6) return(-1e15)
 
   W_vec <- if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
     realiz[[background_rate_var]]
@@ -258,10 +261,9 @@ loglik_hawk_fast <- function(params,
   }
 
   tval <- windowT[2] - windowT[1]
-  intlam <- (mu * tval) + (K * n)
 
-  sum_log <- hawkes_loglik_inhom_cpp(
-    t = realiz$t,
+  loglik <- hawkes_loglik_inhom_cpp(
+    t = realiz$t - windowT[1],
     x = realiz$x,
     y = realiz$y,
     W_val = W_vec,
@@ -270,10 +272,8 @@ loglik_hawk_fast <- function(params,
     beta = beta,
     K = K,
     areaS = active_area,
-    t_max = windowT[2]
+    t_max = tval
   )
-
-  loglik <- sum_log - intlam
 
   if (K == 0) {
     stirling_approx <- n * log(n) - n + 0.5 * log(2 * pi * n)
@@ -423,7 +423,11 @@ ks_test_pval <- function(realiz, windowT, windowS, hawkes_par, zero_background_r
 #' @param maxit Maximum iterations for optim
 #' @param poisson_flag If TRUE, return Poisson MLE directly
 #' @param zero_background_region Optional owin where background is zero
-#' @param ... Additional arguments passed to loglik_hawk
+#' @param use_fast Logical; use C++ accelerated likelihood
+#' @param method Optimization method (default "Nelder-Mead")
+#' @param lower Optional lower bounds for L-BFGS-B
+#' @param upper Optional upper bounds for L-BFGS-B
+#' @param ... Additional arguments passed to loglik_hawk or loglik_hawk_fast
 #' @return An optim result list with element par
 #' @export
 fit_hawkes <- function(params_init,
@@ -434,6 +438,10 @@ fit_hawkes <- function(params_init,
                        maxit,
                        poisson_flag = FALSE,
                        zero_background_region = NULL,
+                       use_fast = TRUE,
+                       method = "Nelder-Mead",
+                       lower = NULL,
+                       upper = NULL,
                        ...) {
   if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
   if (poisson_flag) {
@@ -447,24 +455,44 @@ fit_hawkes <- function(params_init,
     }
   } else {
     realiz <- realiz[order(realiz$t), ]
-    x_diff <- outer(realiz$x, realiz$x, "-")
-    y_diff <- outer(realiz$y, realiz$y, "-")
-    space_dist <- x_diff^2 + y_diff^2
-    time_dist <- outer(realiz$t, realiz$t, "-")
-    dists <- list(space_dist = space_dist, time_dist = time_dist)
+    
+    if (use_fast) {
+      opt_args <- list(
+        par = params_init,
+        fn = loglik_hawk_fast,
+        method = method,
+        control = list(fnscale = -1, trace = trace, maxit = maxit),
+        realiz = realiz,
+        windowT = windowT,
+        windowS = windowS,
+        zero_background_region = zero_background_region,
+        ...
+      )
+      if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
+        opt_args$lower <- lower
+        opt_args$upper <- upper
+      }
+      fit <- do.call(stats::optim, opt_args)
+    } else {
+      x_diff <- outer(realiz$x, realiz$x, "-")
+      y_diff <- outer(realiz$y, realiz$y, "-")
+      space_dist <- x_diff^2 + y_diff^2
+      time_dist <- outer(realiz$t, realiz$t, "-")
+      dists <- list(space_dist = space_dist, time_dist = time_dist)
 
-    fit <- optim(
-      par = params_init,
-      fn = loglik_hawk,
-      method = "Nelder-Mead",
-      control = list(fnscale = -1, trace = trace, maxit = maxit),
-      realiz = realiz,
-      windowT = windowT,
-      windowS = windowS,
-      dists = dists,
-      zero_background_region = zero_background_region,
-      ...
-    )
+      fit <- optim(
+        par = params_init,
+        fn = loglik_hawk,
+        method = method,
+        control = list(fnscale = -1, trace = trace, maxit = maxit),
+        realiz = realiz,
+        windowT = windowT,
+        windowS = windowS,
+        dists = dists,
+        zero_background_region = zero_background_region,
+        ...
+      )
+    }
   }
   return(fit)
 }
@@ -808,6 +836,7 @@ sim_hawkes_fast <- function(params,
     if (is.function(covariate_lookup)) {
       W_vals <- covariate_lookup(combined_x, combined_y)
     } else {
+      # Raster extraction
       W_vals <- raster::extract(covariate_lookup, cbind(combined_x, combined_y))
     }
     W_vals[is.na(W_vals)] <- 0
