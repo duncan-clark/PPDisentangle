@@ -207,6 +207,9 @@ loglik_hawk <- function(params,
 #' @param alpha_max Upper bound on alpha. If NULL (default), computed from
 #'   windowS so the minimum triggering standard deviation is 1\% of the
 #'   window's characteristic length.
+#' @param beta_min Lower bound on beta (upper bound on mean trigger time).
+#'   If NULL (default), set to \code{1 / (windowT[2] - windowT[1])} so that
+#'   the mean triggering time cannot exceed the observation window.
 #' @param ... Additional arguments
 #' @return Scalar log-likelihood value
 #' @export
@@ -218,6 +221,7 @@ loglik_hawk_fast <- function(params,
                              background_rate_var = "W",
                              precomp = NULL,
                              alpha_max = NULL,
+                             beta_min = NULL,
                              ...) {
   if (is.list(params)) {
     mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
@@ -265,9 +269,11 @@ loglik_hawk_fast <- function(params,
     min_trigger_sd <- 0.01 * sqrt(total_area)
     alpha_max <- 1 / min_trigger_sd^2
   }
-  if (mu > 1e6 || alpha > alpha_max || beta > 1e6) return(-1e15)
-
   tval <- windowT[2] - windowT[1]
+  if (is.null(beta_min)) {
+    beta_min <- 1 / tval
+  }
+  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) return(-1e15)
 
   loglik <- hawkes_loglik_inhom_cpp(
     t = realiz$t - windowT[1],
@@ -431,6 +437,9 @@ ks_test_pval <- function(realiz, windowT, windowS, hawkes_par, zero_background_r
 #' @param upper Optional upper bounds for L-BFGS-B
 #' @param alpha_max Upper bound on alpha passed to loglik_hawk_fast.
 #'   NULL (default) derives a bound from the window dimensions.
+#' @param beta_min Lower bound on beta passed to loglik_hawk_fast.
+#'   NULL (default) sets 1/(windowT[2]-windowT[1]) so mean trigger time
+#'   cannot exceed the observation window.
 #' @param ... Additional arguments passed to loglik_hawk or loglik_hawk_fast
 #' @return An optim result list with element par
 #' @export
@@ -447,6 +456,7 @@ fit_hawkes <- function(params_init,
                        lower = NULL,
                        upper = NULL,
                        alpha_max = NULL,
+                       beta_min = NULL,
                        ...) {
   if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
   if (poisson_flag) {
@@ -480,7 +490,8 @@ fit_hawkes <- function(params_init,
           windowT = windowT,
           windowS = windowS,
           zero_background_region = zero_background_region,
-          alpha_max = alpha_max
+          alpha_max = alpha_max,
+          beta_min = beta_min
         ),
         extra
       )
