@@ -266,7 +266,7 @@ loglik_hawk_fast <- function(params,
   }
 
   if (is.null(alpha_max)) {
-    min_trigger_sd <- 0.01 * sqrt(total_area)
+    min_trigger_sd <- 0.01 * sqrt(active_area)
     alpha_max <- 1 / min_trigger_sd^2
   }
   tval <- windowT[2] - windowT[1]
