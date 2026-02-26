@@ -576,8 +576,6 @@ ni_fit_post_ctrl <- run_full_fit(ni_res_post_ctrl$new_df, control_state_space, "
 ni_fit_post_trtd <- run_full_fit(ni_res_post_trtd$new_df, treated_state_space, "NI-Post-Treated", fixed_beta = NULL)
 
 ni_results_df <- rbind(ni_fit_pre_ctrl, ni_fit_pre_trtd, ni_fit_post_ctrl, ni_fit_post_trtd)
-cat("\n--- Non-IPD results ---\n")
-print(ni_results_df)
 
 # --- Non-IPD SEM (simulation-based EM labelling, free beta) ---
 ni_pp_final <- rbind(ni_res_pre_ctrl$new_df, ni_res_pre_trtd$new_df,
@@ -626,9 +624,37 @@ ni_result_sem <- adaptive_SEM(
 
 ni_sem_ctrl <- ni_result_sem$hawkes_params_control
 ni_sem_trtd <- ni_result_sem$hawkes_params_treated
-cat("\n--- Non-IPD SEM results ---\n")
-cat("Control:", paste(names(ni_sem_ctrl), signif(unlist(ni_sem_ctrl), 4), sep = "=", collapse = "  "), "\n")
-cat("Treated:", paste(names(ni_sem_trtd), signif(unlist(ni_sem_trtd), 4), sep = "=", collapse = "  "), "\n")
+
+# --- Non-IPD combined results table ---
+ni_results_all <- rbind(
+  ni_results_df[, 1:5],
+  extract_sem_row(ni_result_sem, "Sim")
+)
+ni_results_all <- ni_results_all %>%
+  mutate(across(2:5, ~ round(as.numeric(.), 4))) %>%
+  mutate(
+    mean_dist_m    = round(sqrt(1/alpha), 0),
+    mean_time_days = round(1/beta, 1),
+    n_pts = c(
+      nrow(ni_res_pre_ctrl$new_df),  nrow(ni_res_pre_trtd$new_df),
+      nrow(ni_res_post_ctrl$new_df), nrow(ni_res_post_trtd$new_df),
+      NA, NA
+    )
+  )
+
+cat("\n")
+cat("================================================================\n")
+cat("        NON-IPD FIT: Parameter Comparison Table\n")
+cat("================================================================\n")
+cat(sprintf("  Background: KDE from ALL %d IPD cases (bw.diggle)\n",
+            nrow(ipd_for_bg)))
+cat(sprintf("  Time window: %d days pre/post intervention\n",
+            NONIPD_WINDOW_DAYS))
+cat(sprintf("  Beta: free (estimated)\n"))
+cat(sprintf("  Total non-IPD pts in window: %d\n", nrow(nonipd_pp)))
+cat("----------------------------------------------------------------\n")
+print(ni_results_all, row.names = FALSE)
+cat("================================================================\n\n")
 
 # --- Non-IPD savings reports ---
 ni_duration_post   <- NONIPD_WINDOW_DAYS
