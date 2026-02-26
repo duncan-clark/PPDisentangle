@@ -215,98 +215,75 @@ adaptive_SEM <- function(pp_data,
       cat("  normalized weights: ", paste(signif(weights, 4), collapse = ", "), "\n")
     }
 
-    optim_func <- function(params) {
-      liks_optim <- sapply(labellings[keepers], function(y) {
-        loglik_hawk_fast(
-          params = params,
-          realiz = y %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated"),
-          windowT = c(treatment_time, max(starting_data$t)),
-          windowS = statespace, zero_background_region = control_state_space,
-          density_approx = FALSE, numeric_integral = FALSE,
-          background_rate_var = "W"
-        )
-      })
-      return(sum(liks_optim * weights))
-    }
-
-    if (verbose) {
-      cat("  [diag] per-labelling treated subset sizes (post-treatment):\n")
-      sizes <- sapply(labellings[keepers], function(y) {
-        sub <- y %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
-        nrow(sub)
-      })
-      cat("    n_treated:", paste(sizes, collapse = ", "), "\n")
-      has_W <- sapply(labellings[keepers], function(y) "W" %in% names(y))
-      cat("    has W col:", paste(has_W, collapse = ", "), "\n")
-      init_liks <- sapply(labellings[keepers], function(y) {
-        sub <- y %>% dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
-        loglik_hawk_fast(
-          params = unlist(t_params[[length(t_params)]]),
-          realiz = sub,
-          windowT = c(treatment_time, max(starting_data$t)),
-          windowS = statespace, zero_background_region = control_state_space,
-          density_approx = FALSE, numeric_integral = FALSE,
-          background_rate_var = "W"
-        )
-      })
-      cat("    init liks:", paste(signif(init_liks, 5), collapse = ", "), "\n")
-      if (any(init_liks <= -1e14)) {
-        bad_idx <- which(init_liks <= -1e14)[1]
-        bad_sub <- labellings[keepers][[bad_idx]] %>%
-          dplyr::filter(.data$t >= treatment_time, .data$inferred_process == "treated")
-        cat(sprintf("    BAD labelling %d: n=%d, W range=[%s, %s], t range=[%s, %s]\n",
-                    bad_idx, nrow(bad_sub),
-                    signif(min(bad_sub$W, na.rm = TRUE), 4), signif(max(bad_sub$W, na.rm = TRUE), 4),
-                    signif(min(bad_sub$t), 4), signif(max(bad_sub$t), 4)))
-        pv <- unlist(t_params[[length(t_params)]])
-        cat(sprintf("    params: mu=%s alpha=%s beta=%s K=%s\n",
-                    signif(pv[1], 5), signif(pv[2], 5), signif(pv[3], 5), signif(pv[4], 5)))
-      }
-    }
-
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
     all_names <- c("mu", "alpha", "beta", "K")
     fp_idx <- if (!is.null(fp)) match(names(fp), all_names) else integer(0)
     fr_idx <- setdiff(seq_along(all_names), fp_idx)
-    full_vec <- unlist(t_params[[length(t_params)]])
 
-    if (verbose) {
-      cat("  starting treated par: ", paste(names(full_vec), signif(full_vec, 5), sep = "=", collapse = "  "), "\n")
-      start_lik <- optim_func(full_vec)
-      cat(sprintf("  starting lik: %s\n", signif(start_lik, 6)))
-    }
-
-    t_fit <- proc.time()[3]
-    if (length(fp_idx) > 0) {
-      wrap_fn <- function(free_par) {
-        p4 <- full_vec; p4[fr_idx] <- free_par
-        optim_func(p4)
+    run_outer_optim <- function(process_label, zero_bg_region, par_list) {
+      obj_fn <- function(params) {
+        liks <- sapply(labellings[keepers], function(y) {
+          loglik_hawk_fast(
+            params = params,
+            realiz = y %>% dplyr::filter(.data$t >= treatment_time,
+                                         .data$inferred_process == process_label),
+            windowT = c(treatment_time, max(starting_data$t)),
+            windowS = statespace, zero_background_region = zero_bg_region,
+            density_approx = FALSE, numeric_integral = FALSE,
+            background_rate_var = "W"
+          )
+        })
+        return(sum(liks * weights))
       }
-      fit <- tryCatch(
-        optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
-              control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
-        error = function(e) { cat("  OUTER OPTIM ERROR:", e$message, "\n"); list(par = full_vec[fr_idx], convergence = -99) }
-      )
-      out_par <- full_vec; out_par[fr_idx] <- fit$par
-      fit$par <- out_par
-    } else {
-      fit <- tryCatch(
-        optim(par = full_vec, fn = optim_func, method = "Nelder-Mead",
-              control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
-        error = function(e) { cat("  OUTER OPTIM ERROR:", e$message, "\n"); list(par = full_vec, convergence = -99) }
-      )
+
+      full_vec <- unlist(par_list)
+      if (verbose) {
+        cat(sprintf("  [%s] starting par: %s\n", process_label,
+                    paste(all_names, signif(full_vec, 5), sep = "=", collapse = "  ")))
+        cat(sprintf("  [%s] starting lik: %s\n", process_label, signif(obj_fn(full_vec), 6)))
+      }
+
+      t0 <- proc.time()[3]
+      if (length(fp_idx) > 0) {
+        wrap_fn <- function(free_par) {
+          p4 <- full_vec; p4[fr_idx] <- free_par
+          obj_fn(p4)
+        }
+        res <- tryCatch(
+          optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+          error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec[fr_idx], convergence = -99) }
+        )
+        out_par <- full_vec; out_par[fr_idx] <- res$par
+        res$par <- out_par
+      } else {
+        res <- tryCatch(
+          optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+          error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec, convergence = -99) }
+        )
+      }
+
+      if (verbose) {
+        cat(sprintf("  [%s] convergence: %s\n", process_label,
+                    if (!is.null(res$convergence)) res$convergence else "NULL"))
+        cat(sprintf("  [%s] final par:   %s\n", process_label,
+                    paste(all_names, signif(as.numeric(res$par), 5), sep = "=", collapse = "  ")))
+        cat(sprintf("  [%s] final lik: %s  (took %.1fs)\n", process_label,
+                    signif(obj_fn(res$par), 6), proc.time()[3] - t0))
+      }
+      return(res$par)
     }
 
-    if (verbose) {
-      cat(sprintf("  convergence: %s  (0=ok, 1=maxit, 10=degenerate, -99=error)\n",
-                  if (!is.null(fit$convergence)) fit$convergence else "NULL"))
-      cat("  final treated par:   ", paste(all_names, signif(as.numeric(fit$par), 5), sep = "=", collapse = "  "), "\n")
-      end_lik <- optim_func(fit$par)
-      cat(sprintf("  final lik: %s\n", signif(end_lik, 6)))
-      cat(sprintf("  fit took %.1fs\n", proc.time()[3] - t_fit))
-    }
+    if (verbose) cat("\n--- Outer optim: treated ---\n")
+    fit_t <- run_outer_optim("treated", control_state_space, t_params[[length(t_params)]])
+    t_params[[length(t_params) + 1]] <- fit_t
+
+    if (verbose) cat("\n--- Outer optim: control ---\n")
+    fit_c <- run_outer_optim("control", treated_state_space, c_params[[length(c_params)]])
+    c_params[[length(c_params) + 1]] <- fit_c
+
     counter <- counter + 1
-    t_params[[length(t_params) + 1]] <- fit$par
   }
   t_main_sem_end <- proc.time()[3]
 
