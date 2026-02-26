@@ -193,18 +193,28 @@ adaptive_SEM <- function(pp_data,
       counter <- 0
       adaptive_counter <- adaptive_counter + 1
     }
-    weights <- calculate_weights(
+    raw_weights <- calculate_weights(
       labellings,
       treat_par = unlist(t_params[[length(t_params)]]),
       control_par = unlist(c_params[[length(c_params)]]),
       ...
     )
-    keepers <- which(weights != 0 & !is.na(weights))
-    weights <- normalize_weights(weights[keepers])
+    keepers <- which(raw_weights != 0 & !is.na(raw_weights) & is.finite(raw_weights))
     if (verbose) {
-      print("summary of weights ")
-      print(summary(weights))
+      cat(sprintf("\n[Outer iter %d] raw weights: %s\n", counter,
+                  paste(signif(raw_weights, 4), collapse = ", ")))
+      cat(sprintf("  keepers: %d / %d labellings\n", length(keepers), length(labellings)))
     }
+    if (length(keepers) == 0) {
+      warning("All weights are zero/NA/Inf — skipping outer optim")
+      counter <- counter + 1
+      next
+    }
+    weights <- normalize_weights(raw_weights[keepers])
+    if (verbose) {
+      cat("  normalized weights: ", paste(signif(weights, 4), collapse = ", "), "\n")
+    }
+
     optim_func <- function(params) {
       liks_optim <- sapply(labellings[keepers], function(y) {
         loglik_hawk_fast(
@@ -218,8 +228,6 @@ adaptive_SEM <- function(pp_data,
       })
       return(sum(liks_optim * weights))
     }
-    if (verbose) print("doing fit")
-    t_fit <- proc.time()[3]
 
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
     all_names <- c("mu", "alpha", "beta", "K")
@@ -227,6 +235,13 @@ adaptive_SEM <- function(pp_data,
     fr_idx <- setdiff(seq_along(all_names), fp_idx)
     full_vec <- unlist(t_params[[length(t_params)]])
 
+    if (verbose) {
+      cat("  starting treated par: ", paste(names(full_vec), signif(full_vec, 5), sep = "=", collapse = "  "), "\n")
+      start_lik <- optim_func(full_vec)
+      cat(sprintf("  starting lik: %s\n", signif(start_lik, 6)))
+    }
+
+    t_fit <- proc.time()[3]
     if (length(fp_idx) > 0) {
       wrap_fn <- function(free_par) {
         p4 <- full_vec; p4[fr_idx] <- free_par
@@ -235,7 +250,7 @@ adaptive_SEM <- function(pp_data,
       fit <- tryCatch(
         optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
               control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
-        error = function(e) { warning(e); list(par = full_vec[fr_idx]) }
+        error = function(e) { cat("  OUTER OPTIM ERROR:", e$message, "\n"); list(par = full_vec[fr_idx], convergence = -99) }
       )
       out_par <- full_vec; out_par[fr_idx] <- fit$par
       fit$par <- out_par
@@ -243,14 +258,17 @@ adaptive_SEM <- function(pp_data,
       fit <- tryCatch(
         optim(par = full_vec, fn = optim_func, method = "Nelder-Mead",
               control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
-        error = function(e) { warning(e); list(par = full_vec) }
+        error = function(e) { cat("  OUTER OPTIM ERROR:", e$message, "\n"); list(par = full_vec, convergence = -99) }
       )
     }
 
     if (verbose) {
-      print(paste0("Iteration ", counter))
-      print(fit$par)
-      print(paste("fit took", signif(proc.time()[3] - t_fit, 2)))
+      cat(sprintf("  convergence: %s  (0=ok, 1=maxit, 10=degenerate, -99=error)\n",
+                  if (!is.null(fit$convergence)) fit$convergence else "NULL"))
+      cat("  final treated par:   ", paste(all_names, signif(as.numeric(fit$par), 5), sep = "=", collapse = "  "), "\n")
+      end_lik <- optim_func(fit$par)
+      cat(sprintf("  final lik: %s\n", signif(end_lik, 6)))
+      cat(sprintf("  fit took %.1fs\n", proc.time()[3] - t_fit))
     }
     counter <- counter + 1
     t_params[[length(t_params) + 1]] <- fit$par

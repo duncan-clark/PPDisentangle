@@ -603,7 +603,7 @@ ni_result_sem <- adaptive_SEM(
   treatment_time = TREATMENT_TIME,
   hawkes_params_control = df_to_parlist(ni_fit_pre_ctrl),
   hawkes_params_treated = df_to_parlist(ni_fit_pre_trtd),
-  N_labellings = 2,
+  N_labellings = 20,
   N_iter = 1,
   covariate_lookup = ni_covariate_lookup,
   background_rate_var = 'W',
