@@ -19,21 +19,19 @@ library(lubridate)
 
 TREATMENT_DATE <- as_datetime("2011-05-01")
 
-# Spatial jitter SD (meters) to break village-level geocoding ties.
-# 500m ~ Gambian village catchment radius.
-JITTER_SD <- 500
-
 # Fixed temporal decay rate for profile likelihood (1/beta = mean trigger days).
 # Set to NULL to estimate beta freely.
 FIXED_BETA <- 0.05  # ~20 day mean trigger time
 
-# 2 years of data # to make smaller
+# Number of non-IPD cases to sample for background KDE.
+N_BG_SAMPLE <- 1000
+
 # Define treatment as "close to health center" distance in km
 HEALTH_CENTER_DIST <- 10000 # 10 km
 
-# Get data:
-gambia_data <- dget(system.file("extdata/gambia/DISCLEAN.txt", package = "PPDisentangle"))
-gambia_data <- gambia_data %>% filter(IPDEvent == "Y")
+# Get data — load the full dataset first for background estimation
+gambia_all <- dget(system.file("extdata/gambia/DISCLEAN.txt", package = "PPDisentangle"))
+gambia_data <- gambia_all %>% filter(IPDEvent == "Y")
 TREATMENT_TIME <- as.numeric(as.Date(TREATMENT_DATE) -
                                min(as.Date(gambia_data$date_IPD_Pne_Event)))
 STUDY_END <- as.numeric(max(as.Date(gambia_data$date_IPD_Pne_Event)) -
@@ -46,15 +44,16 @@ win <- affine.owin(win, mat = S, vec = t)
 hc <- dget(system.file("extdata/gambia/hc.txt", package = "PPDisentangle"))
 hc <- affine(hc, mat = S, vec = t)
 
-# make the northing and easting a projection with terra - so we can recreate later:
-# 1. Create a SpatVector of points, original CRS WGS84:
-v <- vect(gambia_data, geom = c("long","lat"), crs = "EPSG:4326")
-# 2. Project to UTM Zone 28N:
-v_utm <- project(v, "EPSG:32628")
-# 3. Extract coordinates: in km
-coords <- crds(v_utm)
-gambia_data$easting <- coords[,1]
-gambia_data$northing <- coords[,2]
+# Project ALL cases to UTM for background estimation
+v_all <- vect(gambia_all, geom = c("long","lat"), crs = "EPSG:4326")
+v_all_utm <- project(v_all, "EPSG:32628")
+coords_all <- crds(v_all_utm)
+gambia_all$easting <- coords_all[,1]
+gambia_all$northing <- coords_all[,2]
+
+# IPD subset gets the same coordinates
+gambia_data$easting  <- coords_all[gambia_all$IPDEvent == "Y", 1]
+gambia_data$northing <- coords_all[gambia_all$IPDEvent == "Y", 2]
 
 pp_data <- data.frame(
   x = gambia_data$easting,
@@ -142,30 +141,28 @@ pp_data$background <- TRUE
 pp_data$process <- pp_data$location_process
 plot_pp(pp_data,partition)
 
-pp_data$x <- pp_data$x + rnorm(nrow(pp_data), mean = 0, sd = JITTER_SD)
-pp_data$y <- pp_data$y + rnorm(nrow(pp_data), mean = 0, sd = JITTER_SD)
-plot_pp(pp_data,partition)
-pp_data <- pp_data[inside.owin(pp_data$x, pp_data$y, win),]
+# No spatial jitter — sensitivity analysis shows K and mu are robust
+# when beta is fixed (see gambia_sensitivity.R).
 
 # =========================================================
-# 1. Background Rate Estimation (Pre-Treatment Kernel)
+# 1. Background Rate Estimation (Non-IPD Kernel)
 # =========================================================
-# Establish "historical" risk using pre-treatment points across the whole window
-X_pre <- ppp(
-  x = pp_data$x[pp_data$t < TREATMENT_TIME],
-  y = pp_data$y[pp_data$t < TREATMENT_TIME],
-  window = win
-)
+# Use non-IPD cases so the background is estimated independently of the outcome.
+set.seed(42)
+non_ipd <- gambia_all %>% filter(IPDEvent == "N")
+non_ipd <- non_ipd[inside.owin(non_ipd$easting, non_ipd$northing, win), ]
+bg_sample <- non_ipd[sample(nrow(non_ipd), min(N_BG_SAMPLE, nrow(non_ipd))), ]
+cat("Background sample N:", nrow(bg_sample), "\n")
 
-# Use automated bandwidth selection (Diggle's method)
-bw_sigma <- bw.diggle(X_pre)*20
-lambda_space_gambia <- density(X_pre, sigma = bw_sigma, edge = TRUE, at = "pixels")
+X_bg <- ppp(x = bg_sample$easting, y = bg_sample$northing, window = win)
+bw_sigma <- bw.diggle(X_bg)
+cat("bw.diggle (non-IPD):", bw_sigma, "m\n")
+lambda_space_gambia <- density(X_bg, sigma = bw_sigma, edge = TRUE, at = "pixels")
 
-# Ensure positivity for numerical stability
 min_non_zero <- min(lambda_space_gambia$v[lambda_space_gambia$v > 0], na.rm = TRUE)
 lambda_space_gambia$v[lambda_space_gambia$v <= 0] <- min_non_zero
 
-plot(lambda_space_gambia, main = "Gambia: Kernel-smoothed Background Rate (Pre-Treatment)")
+plot(lambda_space_gambia, main = "Gambia: Background Rate (non-IPD, bw.diggle)")
 
 # =========================================================
 # 2. Regional Normalization (The NYC Logic)
@@ -305,6 +302,10 @@ covariate_lookup_func <- function(x, y) {
   return(w_vals)
 }
 
+df_to_parlist <- function(df_row) {
+  list(mu = df_row$mu, alpha = df_row$alpha, beta = df_row$beta, K = df_row$K)
+}
+
 result_sem <- adaptive_SEM(
   pp_data = pp_final,
   partition = tess(tiles = list("control" = control_state_space,
@@ -313,23 +314,23 @@ result_sem <- adaptive_SEM(
   statespace = win,
   time_window = c(0, STUDY_END),
   treatment_time = TREATMENT_TIME,
-  hawkes_params_control = as.list(fit_pre_ctrl$par),
-  hawkes_params_treated = as.list(fit_pre_ctrl$par),
-  N_labellings = 10,
+  hawkes_params_control = df_to_parlist(fit_pre_ctrl),
+  hawkes_params_treated = df_to_parlist(fit_pre_trtd),
+  N_labellings = 2,
   N_iter = 1,
   covariate_lookup = covariate_lookup_func,
   background_rate_var = 'W',
   adaptive_control = list(
     update_control_params = TRUE,
-    param_update_cadence = 10,
+    param_update_cadence = 1,
     proposal_update_cadence = 1,
-    state_spaces = list(control_state_space,treated_state_space),
-    iter  = 100,
-    n_props = 100,
+    state_spaces = list(control_state_space, treated_state_space),
+    iter  = 3,
+    n_props = 5,
     change_factor = 0.1,
-    include_starting_data = F,
-    update_starting_data = T,
-    verbose = T
+    include_starting_data = FALSE,
+    update_starting_data = TRUE,
+    verbose = TRUE
   )
 )
 
