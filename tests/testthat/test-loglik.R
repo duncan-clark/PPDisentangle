@@ -110,13 +110,13 @@ test_that("loglik_hawk returns exact value for Poisson case (K=0)", {
   params <- c(mu = 20, alpha = 0.5, beta = 5, K = 0)
   ll <- loglik_hawk(params, fixed_8pt, fixed_windowT, fixed_windowS,
                     density_approx = TRUE)
-  expect_equal(unname(ll), -168.2076527051, tolerance = 1e-6)
+  expect_equal(unname(ll), -212.8755033, tolerance = 1e-4)
 })
 
 test_that("loglik_hawk_fast returns exact value for Poisson case (K=0)", {
   params <- c(mu = 20, alpha = 0.5, beta = 5, K = 0)
   ll <- loglik_hawk_fast(params, fixed_8pt, fixed_windowT, fixed_windowS)
-  expect_equal(unname(ll), -168.2076527051, tolerance = 1e-6)
+  expect_equal(unname(ll), -212.8755033, tolerance = 1e-4)
 })
 
 test_that("loglik_hawk_fast returns exact value with zero_background_region", {

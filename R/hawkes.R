@@ -187,11 +187,6 @@ loglik_hawk <- function(params,
   if (loglik == -Inf) {
     return(-999999)
   }
-  if (K == 0) {
-    n <- sum(1 - in_zero_background)
-    stirling_approx <- n * log(n) - n + 0.5 * log(2 * pi * n)
-    loglik <- loglik + n * log(tval * spatstat.geom::area(windowS) * adjust_factor) - stirling_approx
-  }
   return(loglik)
 }
 
@@ -276,11 +271,6 @@ loglik_hawk_fast <- function(params,
     areaS = active_area,
     t_max = tval
   )
-
-  if (K == 0) {
-    stirling_approx <- n * log(n) - n + 0.5 * log(2 * pi * n)
-    loglik <- loglik + n * log(tval * active_area) - stirling_approx
-  }
 
   return(loglik)
 }
@@ -549,7 +539,7 @@ sim_hawkes <- function(params,
   mu_star <- mu / areaS
 
   get_covariate <- function(x, y) {
-    if (is.null(covariate_lookup)) return(rep(0, length(x)))
+    if (is.null(covariate_lookup)) return(rep(1, length(x)))
     if (is.function(covariate_lookup)) {
       res <- covariate_lookup(x, y)
     } else if (inherits(covariate_lookup, "Raster")) {
@@ -855,7 +845,7 @@ sim_hawkes_fast <- function(params,
     }
     W_vals[is.na(W_vals)] <- 0
   } else {
-    W_vals <- numeric(n_final)
+    W_vals <- rep(1.0, n_final)
   }
 
   list(
