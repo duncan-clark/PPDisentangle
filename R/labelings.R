@@ -892,11 +892,12 @@ em_style_labelling <- function(pp_data,
     }
 
     sd_ip <- starting_data$inferred_process[order(starting_data$t)]
+    flips_per_proposal <- vapply(labelling_proposals, function(y) {
+      sum(sd_ip != y$inferred_process[order(y$t)])
+    }, numeric(1))
     mml_ip <- max_metric_labelling$inferred_process[order(max_metric_labelling$t)]
     max_diff <- sum(sd_ip != mml_ip)
-    average <- mean(vapply(labelling_proposals, function(y) {
-      sum(sd_ip != y$inferred_process[order(y$t)])
-    }, numeric(1)))
+    average <- mean(flips_per_proposal)
 
     if (update_starting_data) {
       starting_data <- as.data.frame(max_metric_labelling)
@@ -917,6 +918,11 @@ em_style_labelling <- function(pp_data,
     }, numeric(1))
     all_metrics[[i]] <- metric
     if (verbose) {
+      n_post <- sum(is_post)
+      cat(sprintf("  [Iter %d] Proposals: %d | Proposed flips: min=%d avg=%.1f max=%d (of %d post pts) | Accepted (best): %d\n",
+                  i, length(labelling_proposals),
+                  min(flips_per_proposal), average, max(flips_per_proposal),
+                  n_post, max_diff))
       print(summary(metric))
       print(mml_post_acc %>% dplyr::group_by(.data$location_process, .data$process, .data$inferred_process) %>% dplyr::summarize(n = dplyr::n()))
       print(paste0("Accuracy: ", accuracy))
