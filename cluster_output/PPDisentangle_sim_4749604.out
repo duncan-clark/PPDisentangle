@@ -1,0 +1,133 @@
+Starting job at Thu 26 Feb 2026 04:38:08 NZDT
+Loading required package: spatstat
+Loading required package: spatstat.data
+Loading required package: spatstat.univar
+spatstat.univar 3.1-6
+Loading required package: spatstat.geom
+spatstat.geom 3.7-0
+Loading required package: spatstat.random
+spatstat.random 3.4-4
+Loading required package: spatstat.explore
+Loading required package: nlme
+spatstat.explore 3.7-0
+Loading required package: spatstat.model
+Loading required package: rpart
+spatstat.model 3.6-1
+Loading required package: spatstat.linnet
+spatstat.linnet 3.4-1
+
+spatstat 3.5-1 
+For an introduction to spatstat, type ‘beginner’ 
+
+Registered S3 method overwritten by 'pROC':
+  method   from            
+  plot.roc spatstat.explore
+
+Attaching package: ‘dplyr’
+
+The following object is masked from ‘package:nlme’:
+
+    collapse
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+
+Attaching package: ‘data.table’
+
+The following objects are masked from ‘package:dplyr’:
+
+    between, first, last
+
+The following object is masked from ‘package:spatstat.geom’:
+
+    shift
+
+Loading required package: foreach
+Loading required package: iterators
+Loading required package: R.oo
+Loading required package: R.methodsS3
+R.methodsS3 v1.8.2 (2022-06-13 22:00:14 UTC) successfully loaded. See ?R.methodsS3 for help.
+R.oo v1.25.0 (2022-06-12 02:20:02 UTC) successfully loaded. See ?R.oo for help.
+
+Attaching package: ‘R.oo’
+
+The following object is masked from ‘package:R.methodsS3’:
+
+    throw
+
+The following objects are masked from ‘package:methods’:
+
+    getClasses, getMethods
+
+The following objects are masked from ‘package:base’:
+
+    attach, detach, load, save
+
+R.utils v2.12.2 (2022-11-11 22:00:03 UTC) successfully loaded. See ?R.utils for help.
+
+Attaching package: ‘R.utils’
+
+The following object is masked from ‘package:utils’:
+
+    timestamp
+
+The following objects are masked from ‘package:base’:
+
+    cat, commandArgs, getOption, isOpen, nullfile, parse, warnings
+
+Loading required package: lattice
+
+Attaching package: ‘lattice’
+
+The following object is masked from ‘package:spatstat.model’:
+
+    panel.histogram
+
+The following object is masked from ‘package:spatstat.explore’:
+
+    panel.histogram
+
+
+Attaching package: ‘reshape2’
+
+The following objects are masked from ‘package:data.table’:
+
+    dcast, melt
+
+
+Attaching package: ‘gridExtra’
+
+The following object is masked from ‘package:dplyr’:
+
+    combine
+
+
+Attaching package: ‘scales’
+
+The following object is masked from ‘package:spatstat.geom’:
+
+    rescale
+
+=== Simulation Study Config ===
+  Mode: CLUSTER 
+  Cores: 100  Sims: 100 
+  Omega: 0 100 0 100  T: 110  t*: 10 
+  Grid: 10 x 10 
+  Save: /nesi/project/uoo04008/Duncan/causal_pp/PPDisentangle/cluster_output 
+  EM-style: iter=1000 n_props=10 | SEM adaptive: iter=5000 n_props=10 | SEM full: N_iter=10 N_labellings=10
+===============================
+True all/nothing ATE: -30 
+Computing true tau_i ... 2.6 s
+True one-flip ATE: -0.139 
+Generating 100 observed datasets ... 0.8 s
+Points per sim: 2107, 2530, 1961, 2436, 2257, 2546, 2543, 2258, 2422, 2221, 2175, 2132, 2114, 2436, 2238, 2489, 2469, 2713, 2405, 2527, 2107, 2401, 2504, 2438, 2085, 2533, 2345, 2372, 2267, 2421, 2275, 2102, 2543, 2156, 2221, 2349, 2225, 2010, 2384, 2148, 1961, 2358, 2575, 2128, 2443, 2528, 2596, 2606, 2323, 2701, 2211, 2550, 2474, 2156, 2437, 2232, 2386, 2191, 2435, 2647, 2302, 2352, 3004, 2434, 2532, 2157, 2220, 2344, 2399, 2138, 2334, 2231, 2353, 2330, 2469, 2221, 2368, 2214, 2285, 2397, 2237, 2075, 2584, 2517, 2167, 2664, 2147, 2488, 2157, 2233, 2141, 2581, 2376, 2220, 2532, 2399, 2631, 2452, 2092, 2388 
+Computing oracle and naive labellings ...
+Generating 100 labelling proposals per sim ... 64.2 s
+Running EM-style labelling ... 158.5 s
+Running adaptive SEM ... 

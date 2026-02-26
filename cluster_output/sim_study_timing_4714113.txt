@@ -1,0 +1,7 @@
+PPDisentangle simulation study timing
+Start:     2026-02-24 15:11:52 NZDT
+End:       2026-02-24 15:24:48 NZDT
+Elapsed:   775.7 sec ( 12.93 min)
+Job ID:    4714113
+Cores:     100
+Sim size:  100
