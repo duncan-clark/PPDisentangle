@@ -617,8 +617,8 @@ ni_result_sem <- adaptive_SEM(
     state_spaces = list(control_state_space, treated_state_space),
     iter  = 50,
     n_props = 20,
-    change_factor = 0.1,
-    include_starting_data = FALSE,
+    change_factor = 0.01,
+    include_starting_data = TRUE,
     update_starting_data = TRUE,
     verbose = TRUE
   )
