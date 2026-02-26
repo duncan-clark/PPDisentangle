@@ -135,10 +135,11 @@ pp_data$background <- TRUE
 pp_data$process <- pp_data$location_process
 plot_pp(pp_data,partition)
 
-# jitter the points ~ 1 units
-# probably not right but don't want to have to deal with heterogeneity in background rate:
-pp_data$x <- pp_data$x + rnorm(nrow(pp_data), mean = 0, sd = 1)
-pp_data$y <- pp_data$y + rnorm(nrow(pp_data), mean = 0, sd = 1)
+# Jitter to break village-level geocoding ties. sd=500m is the approximate
+# radius of a Gambian village catchment area; 1m was far too small and
+# caused alpha to collapse onto near-duplicate locations.
+pp_data$x <- pp_data$x + rnorm(nrow(pp_data), mean = 0, sd = 500)
+pp_data$y <- pp_data$y + rnorm(nrow(pp_data), mean = 0, sd = 500)
 plot_pp(pp_data,partition)
 pp_data <- pp_data[inside.owin(pp_data$x, pp_data$y, win),]
 

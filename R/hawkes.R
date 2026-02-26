@@ -56,6 +56,8 @@ loglik_hawk <- function(params,
 
   if (min(mu, K, alpha, beta) < 0) return(-999999)
   if (K > .99999) return(-999999)
+  a_max <- 1 / (0.01 * sqrt(spatstat.geom::area(windowS)))^2
+  if (alpha > a_max) return(-999999)
 
   if (is.null(dists)) {
     realiz <- realiz[order(realiz$t), ]
@@ -202,6 +204,9 @@ loglik_hawk <- function(params,
 #' @param background_rate_var Column name for inhomogeneous background (default "W")
 #' @param precomp Optional list from \code{precompute_loglik_args} to skip
 #'   redundant area/inside.owin calculations when called in a tight loop.
+#' @param alpha_max Upper bound on alpha. If NULL (default), computed from
+#'   windowS so the minimum triggering standard deviation is 1\% of the
+#'   window's characteristic length.
 #' @param ... Additional arguments
 #' @return Scalar log-likelihood value
 #' @export
@@ -212,6 +217,7 @@ loglik_hawk_fast <- function(params,
                              zero_background_region = NULL,
                              background_rate_var = "W",
                              precomp = NULL,
+                             alpha_max = NULL,
                              ...) {
   if (is.list(params)) {
     mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
@@ -226,9 +232,6 @@ loglik_hawk_fast <- function(params,
   n <- nrow(realiz)
   if (n == 0) return(-1e15)
   if (min(mu, K, alpha, beta) < 0 || K >= 1) return(-1e15)
-  
-  # Penalty for very large parameters to prevent Nelder-Mead from jumping to infinity
-  if(mu > 1e6 || alpha > 1e12 || beta > 1e6) return(-1e15)
 
   W_vec <- if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
     realiz[[background_rate_var]]
@@ -244,6 +247,7 @@ loglik_hawk_fast <- function(params,
         W_vec[in_zero] <- 0
       }
     }
+    total_area <- active_area
   } else {
     total_area <- spatstat.geom::area(as.owin(windowS))
     if (!is.null(zero_background_region)) {
@@ -256,6 +260,12 @@ loglik_hawk_fast <- function(params,
       active_area <- total_area
     }
   }
+
+  if (is.null(alpha_max)) {
+    min_trigger_sd <- 0.01 * sqrt(total_area)
+    alpha_max <- 1 / min_trigger_sd^2
+  }
+  if (mu > 1e6 || alpha > alpha_max || beta > 1e6) return(-1e15)
 
   tval <- windowT[2] - windowT[1]
 
@@ -419,6 +429,8 @@ ks_test_pval <- function(realiz, windowT, windowS, hawkes_par, zero_background_r
 #' @param method Optimization method (default "Nelder-Mead")
 #' @param lower Optional lower bounds for L-BFGS-B
 #' @param upper Optional upper bounds for L-BFGS-B
+#' @param alpha_max Upper bound on alpha passed to loglik_hawk_fast.
+#'   NULL (default) derives a bound from the window dimensions.
 #' @param ... Additional arguments passed to loglik_hawk or loglik_hawk_fast
 #' @return An optim result list with element par
 #' @export
@@ -434,6 +446,7 @@ fit_hawkes <- function(params_init,
                        method = "Nelder-Mead",
                        lower = NULL,
                        upper = NULL,
+                       alpha_max = NULL,
                        ...) {
   if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
   if (poisson_flag) {
@@ -466,7 +479,8 @@ fit_hawkes <- function(params_init,
           realiz = realiz,
           windowT = windowT,
           windowS = windowS,
-          zero_background_region = zero_background_region
+          zero_background_region = zero_background_region,
+          alpha_max = alpha_max
         ),
         extra
       )
