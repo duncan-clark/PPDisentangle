@@ -629,3 +629,29 @@ ni_sem_trtd <- ni_result_sem$hawkes_params_treated
 cat("\n--- Non-IPD SEM results ---\n")
 cat("Control:", paste(names(ni_sem_ctrl), signif(unlist(ni_sem_ctrl), 4), sep = "=", collapse = "  "), "\n")
 cat("Treated:", paste(names(ni_sem_trtd), signif(unlist(ni_sem_trtd), 4), sep = "=", collapse = "  "), "\n")
+
+# --- Non-IPD savings reports ---
+ni_duration_post   <- NONIPD_WINDOW_DAYS
+ni_total_mass      <- ni_res_pre_trtd$mass + ni_res_pre_ctrl$mass
+
+cat("\n--- Non-IPD Naive (no SEM) savings ---\n")
+ni_savings_naive <- estimate_hawkes_savings(
+  par_control = ni_fit_post_ctrl %>% dplyr::select(mu, K) %>% as.list(),
+  par_treated = ni_fit_post_trtd %>% dplyr::select(mu, K) %>% as.list(),
+  mass_origin_control = ni_res_pre_ctrl$mass,
+  mass_origin_treated = ni_res_pre_trtd$mass,
+  mass_target = ni_total_mass,
+  duration = ni_duration_post,
+  verbose = TRUE
+)
+
+cat("\n--- Non-IPD SEM (simulation) savings ---\n")
+ni_savings_sem <- estimate_hawkes_savings(
+  par_control = ni_result_sem$hawkes_params_control,
+  par_treated = ni_result_sem$hawkes_params_treated,
+  mass_origin_control = ni_res_pre_ctrl$mass,
+  mass_origin_treated = ni_res_pre_trtd$mass,
+  mass_target = ni_total_mass,
+  duration = ni_duration_post,
+  verbose = TRUE
+)
