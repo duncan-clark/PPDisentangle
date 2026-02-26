@@ -102,6 +102,7 @@ adaptive_SEM <- function(pp_data,
       n_props = adaptive_control$n_props,
       change_factor = adaptive_control$change_factor,
       MCMC_style = FALSE,
+      proposal_method = if (!is.null(adaptive_control$proposal_method)) adaptive_control$proposal_method else "simulation",
       verbose = TRUE,
       ...
     )

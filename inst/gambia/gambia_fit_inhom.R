@@ -323,10 +323,9 @@ result_sem <- adaptive_SEM(
   adaptive_control = list(
     update_control_params = TRUE,
     param_update_cadence = 1,
-    proposal_update_cadence = 1,
+    proposal_method = "single_flip",
     state_spaces = list(control_state_space, treated_state_space),
-    iter  = 3,
-    n_props = 5,
+    iter  = 50,
     change_factor = 0.1,
     include_starting_data = FALSE,
     update_starting_data = TRUE,

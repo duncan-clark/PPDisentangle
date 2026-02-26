@@ -442,6 +442,30 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
 #' @param ... Additional arguments passed to generate_inhomogeneous_hawkes
 #' @return pp_data with updated inferred_process
 #' @export
+#'
+#' Generate all single-flip labelling proposals
+#'
+#' For each post-treatment point, create one proposal where that point's
+#' label is toggled (control <-> treated). Returns N proposals for N post
+#' points -- exhaustive over all single-point moves.
+#'
+#' @param post Data frame of post-treatment points (with inferred_process)
+#' @param pre Data frame of pre-treatment points (all labelled "control")
+#' @return List of N data frames, each with one point's label flipped
+#' @export
+single_flip_proposals <- function(post, pre) {
+  n <- nrow(post)
+  lapply(seq_len(n), function(j) {
+    proposed <- post
+    proposed$inferred_process[j] <- if (post$inferred_process[j] == "control") {
+      "treated"
+    } else {
+      "control"
+    }
+    rbind(pre, proposed)
+  })
+}
+
 simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    partition,
                                                    partition_process,
@@ -665,6 +689,7 @@ em_style_labelling <- function(pp_data,
                                n_props = 100,
                                change_factor = 0.1,
                                MCMC_style = FALSE,
+                               proposal_method = "simulation",
                                verbose = FALSE,
                                ...) {
   dots <- list(...)
@@ -713,7 +738,13 @@ em_style_labelling <- function(pp_data,
     pre$location_process <- "control"
     pre$inferred_process <- NULL
     t_samp <- proc.time()[3]
-    if (!is.null(proposal_update_cadence)) {
+    if (proposal_method == "single_flip") {
+      pre$inferred_process <- "control"
+      labelling_proposals <- single_flip_proposals(post, pre)
+      if (verbose && i == 1) {
+        cat(sprintf("  single_flip: %d proposals (one per post-treatment point)\n", length(labelling_proposals)))
+      }
+    } else if (!is.null(proposal_update_cadence)) {
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
         post_inds <- as.numeric(tileindex(post$x, post$y, partition))
