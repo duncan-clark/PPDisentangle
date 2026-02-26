@@ -455,18 +455,28 @@ fit_hawkes <- function(params_init,
     }
   } else {
     realiz <- realiz[order(realiz$t), ]
-    
+    # Avoid passing optim() formals via ... so 'method' (and lower/upper/control) are not duplicated
+    optim_formals <- c("par", "fn", "gr", "method", "lower", "upper", "control", "hessian")
+    dots <- list(...)
+    dot_names <- names(dots)
+    keep_extra <- if (length(dots)) {
+      if (is.null(dot_names)) rep(TRUE, length(dots)) else (dot_names == "" | !dot_names %in% optim_formals)
+    } else TRUE
+    extra <- if (length(dots)) dots[keep_extra] else list()
+
     if (use_fast) {
-      opt_args <- list(
-        par = params_init,
-        fn = loglik_hawk_fast,
-        method = method,
-        control = list(fnscale = -1, trace = trace, maxit = maxit),
-        realiz = realiz,
-        windowT = windowT,
-        windowS = windowS,
-        zero_background_region = zero_background_region,
-        ...
+      opt_args <- c(
+        list(
+          par = params_init,
+          fn = loglik_hawk_fast,
+          method = method,
+          control = list(fnscale = -1, trace = trace, maxit = maxit),
+          realiz = realiz,
+          windowT = windowT,
+          windowS = windowS,
+          zero_background_region = zero_background_region
+        ),
+        extra
       )
       if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
         opt_args$lower <- lower
@@ -480,18 +490,20 @@ fit_hawkes <- function(params_init,
       time_dist <- outer(realiz$t, realiz$t, "-")
       dists <- list(space_dist = space_dist, time_dist = time_dist)
 
-      fit <- optim(
-        par = params_init,
-        fn = loglik_hawk,
-        method = method,
-        control = list(fnscale = -1, trace = trace, maxit = maxit),
-        realiz = realiz,
-        windowT = windowT,
-        windowS = windowS,
-        dists = dists,
-        zero_background_region = zero_background_region,
-        ...
-      )
+      fit <- do.call(stats::optim, c(
+        list(
+          par = params_init,
+          fn = loglik_hawk,
+          method = method,
+          control = list(fnscale = -1, trace = trace, maxit = maxit),
+          realiz = realiz,
+          windowT = windowT,
+          windowS = windowS,
+          dists = dists,
+          zero_background_region = zero_background_region
+        ),
+        extra
+      ))
     }
   }
   return(fit)
