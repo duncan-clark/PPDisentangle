@@ -58,11 +58,10 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
     loglik += std::log(lambda_i);
   }
 
-  // INTEGRAL TERM (Negative part of log-likelihood)
+  // INTEGRAL TERM (Negative part of log-likelihood). Option B: exact for exponential temporal kernel.
   // loglik = sum(log(lambda(t_i))) - integral(lambda(t) dt)
-  // The integral of lambda(t,x,y) over [0,T] x S is:
-  // mu * T + sum_{i=1}^N K * (1 - exp(-beta * (T - t_i)))
-  
+  // Triggering part: integral over [0,T] of contribution from each event i is K*(1 - exp(-beta*(T - t_i))).
+  // Spatial kernel assumed to integrate to 1 over the full plane (no finite-window correction).
   double triggering_integral = 0;
   for(int i = 0; i < n; ++i) {
     triggering_integral += K * (1.0 - std::exp(-beta * (t_max - t[i])));

@@ -197,6 +197,8 @@ loglik_hawk <- function(params,
 
 #' Fast log-likelihood for a spatio-temporal Hawkes process (C++ accelerated)
 #'
+#' The integral term uses the time-dependent form (Option B): \eqn{\mu T + K \sum_i (1 - \exp(-\beta(T - t_i)))}, which is exact for the exponential temporal kernel. The spatial kernel is assumed to integrate to 1 over the full plane (no finite-window correction). This differs from \code{loglik_hawk(..., density_approx = TRUE)}, which uses \eqn{\mu T + K n}.
+#'
 #' @param params Numeric vector c(mu, alpha, beta, K) or named list
 #' @param realiz Data frame with columns x, y, t (and optionally W)
 #' @param windowT Numeric vector c(start, end) for the time window
