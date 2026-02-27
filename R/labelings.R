@@ -734,6 +734,7 @@ em_style_labelling <- function(pp_data,
   is_post <- !is_pre
 
   fits <- list()
+  labelling_proposals <- list()
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]

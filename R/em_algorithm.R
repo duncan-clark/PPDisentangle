@@ -79,6 +79,17 @@ adaptive_SEM <- function(pp_data,
     hawkes_params_treated <- hawkes_params_control
   }
 
+  ac_defaults <- list(
+    update_control_params = FALSE, param_update_cadence = 20,
+    proposal_update_cadence = 1, update_starting_data = TRUE,
+    include_starting_data = FALSE, iter = 100, n_props = 10,
+    change_factor = 0.1, proposal_method = "simulation",
+    fixed_params = NULL, verbose = FALSE, state_spaces = NULL
+  )
+  for (nm in names(ac_defaults)) {
+    if (is.null(adaptive_control[[nm]])) adaptive_control[[nm]] <- ac_defaults[[nm]]
+  }
+
   adaptive_step <- function(starting_data) {
     t_adapt_start <- proc.time()[3]
     result <- em_style_labelling(
@@ -102,8 +113,8 @@ adaptive_SEM <- function(pp_data,
       n_props = adaptive_control$n_props,
       change_factor = adaptive_control$change_factor,
       MCMC_style = FALSE,
-      proposal_method = if (!is.null(adaptive_control$proposal_method)) adaptive_control$proposal_method else "simulation",
-      fixed_params = if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL,
+      proposal_method = adaptive_control$proposal_method,
+      fixed_params = adaptive_control$fixed_params,
       verbose = TRUE,
       ...
     )
