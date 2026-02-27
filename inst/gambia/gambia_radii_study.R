@@ -127,6 +127,14 @@ for (r_km in RADII_KM) {
   
   # 2. Filter data for this study window
   pp_study <- pp_data_full[inside.owin(pp_data_full$x, pp_data_full$y, win_study),]
+  
+  # Remove duplicated points to avoid spatstat warnings and potential issues
+  dups <- duplicated(pp_study[, c("x", "y", "t")])
+  if (any(dups)) {
+    cat(sprintf("  Removing %d duplicated points...\n", sum(dups)))
+    pp_study <- pp_study[!dups, ]
+  }
+  
   pp_study$location_process <- ifelse(inside.owin(pp_study$x, pp_study$y, treated_ss), "treated", "control")
   
   # 3. Background rate from ALL non-IPD cases in this window

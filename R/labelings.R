@@ -769,7 +769,7 @@ em_style_labelling <- function(pp_data,
         labelling_proposals <- lapply(post_proposals, function(tmp) rbind(pre, tmp))
       }
     }
-    if (i != 1 & include_starting_data) {
+    if (i != 1 && !is.null(include_starting_data) && include_starting_data) {
       pre$inferred_process <- "control"
       labelling_proposals[[length(labelling_proposals) + 1]] <- rbind(pre, post)
     }
