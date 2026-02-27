@@ -99,13 +99,19 @@ run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA) {
   return(list(mu = pars['mu'], alpha = pars['alpha'], beta = pars['beta'], K = pars['K']))
 }
 
+get_par <- function(p, name) {
+  if (is.list(p)) return(p[[name]])
+  if (!is.null(names(p))) return(p[[name]])
+  stop("Cannot extract ", name, " from params")
+}
+
 estimate_savings_simple <- function(p_ctrl, p_trtd, m_ctrl, m_trtd, m_target, duration) {
-  rate_c <- p_ctrl$mu / m_ctrl
-  rate_t <- p_trtd$mu / m_trtd
+  rate_c <- get_par(p_ctrl, "mu") / m_ctrl
+  rate_t <- get_par(p_trtd, "mu") / m_trtd
   bg_c <- rate_c * m_target * duration
   bg_t <- rate_t * m_target * duration
-  exp_c <- bg_c / (1 - p_ctrl$K)
-  exp_t <- bg_t / (1 - p_trtd$K)
+  exp_c <- bg_c / (1 - get_par(p_ctrl, "K"))
+  exp_t <- bg_t / (1 - get_par(p_trtd, "K"))
   return(list(exp_c = exp_c, exp_t = exp_t, savings = exp_c - exp_t, pct = (exp_c - exp_t)/exp_c))
 }
 
@@ -187,7 +193,9 @@ for (r_km in RADII_KM) {
       update_control_params = TRUE, param_update_cadence = 5,
       proposal_method = "simulation", fixed_params = list(beta = FIXED_BETA),
       state_spaces = list(control_ss, treated_ss),
-      iter = 20, n_props = 10, change_factor = 0.05, verbose = FALSE
+      iter = 20, n_props = 10, change_factor = 0.05,
+      include_starting_data = TRUE, update_starting_data = TRUE,
+      verbose = FALSE
     )
   )
   
@@ -199,16 +207,18 @@ for (r_km in RADII_KM) {
   sav_sem     <- estimate_savings_simple(sem_res$hawkes_params_control, sem_res$hawkes_params_treated, res_pre_ctrl$mass, res_pre_trtd$mass, total_m, duration_post)
   
   # 8. Store Results
+  sem_ctrl <- sem_res$hawkes_params_control
+  sem_trtd <- sem_res$hawkes_params_treated
   results_list[[as.character(r_km)]] <- data.frame(
     radius_km = r_km,
-    vanilla_K_ctrl = vanilla_ctrl$K,
-    vanilla_K_trtd = vanilla_trtd$K,
-    vanilla_mu_ctrl = vanilla_ctrl$mu,
-    vanilla_mu_trtd = vanilla_trtd$mu,
-    sem_K_ctrl = sem_res$hawkes_params_control$K,
-    sem_K_trtd = sem_res$hawkes_params_treated$K,
-    sem_mu_ctrl = sem_res$hawkes_params_control$mu,
-    sem_mu_trtd = sem_res$hawkes_params_treated$mu,
+    vanilla_K_ctrl = get_par(vanilla_ctrl, "K"),
+    vanilla_K_trtd = get_par(vanilla_trtd, "K"),
+    vanilla_mu_ctrl = get_par(vanilla_ctrl, "mu"),
+    vanilla_mu_trtd = get_par(vanilla_trtd, "mu"),
+    sem_K_ctrl = get_par(sem_ctrl, "K"),
+    sem_K_trtd = get_par(sem_trtd, "K"),
+    sem_mu_ctrl = get_par(sem_ctrl, "mu"),
+    sem_mu_trtd = get_par(sem_trtd, "mu"),
     vanilla_savings_pct = sav_vanilla$pct,
     sem_savings_pct = sav_sem$pct
   )
