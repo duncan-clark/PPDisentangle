@@ -273,7 +273,7 @@ loglik_hawk_fast <- function(params,
   if (is.null(beta_min)) {
     beta_min <- 1 / tval
   }
-  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) return(-1e15)
+  if (mu > 1e6 || alpha > alpha_max * 1.01 || beta < beta_min * 0.99 || beta > 1e6) return(-1e15)
 
   loglik <- hawkes_loglik_inhom_cpp(
     t = realiz$t - windowT[1],
