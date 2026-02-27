@@ -787,7 +787,8 @@ em_style_labelling <- function(pp_data,
       ctrl_params_vec <- unlist(hawkes_params_control)
       treat_params_vec <- unlist(treated_par[[length(treated_par)]])
 
-      metric <- vapply(labelling_proposals, function(y) {
+      metric <- vapply(seq_along(labelling_proposals), function(j) {
+        y <- labelling_proposals[[j]]
         realiz <- y[is_post, ]
 
         ctrl_rows <- realiz$inferred_process == "control"
@@ -807,6 +808,22 @@ em_style_labelling <- function(pp_data,
           precomp = list(active_area = pc_treat_all$active_area,
                          in_zero_bg = pc_treat_all$in_zero_bg_all[treat_rows]), ...
         )
+        if (verbose && j == 1 && i == 1) {
+          cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
+                      sum(ctrl_rows), sum(treat_rows), signif(control_lik, 6), signif(treat_lik, 6)))
+          cat(sprintf("    ctrl params: %s\n", paste(names(ctrl_params_vec), signif(ctrl_params_vec, 5), sep="=", collapse="  ")))
+          cat(sprintf("    treat params: %s\n", paste(names(treat_params_vec), signif(treat_params_vec, 5), sep="=", collapse="  ")))
+          cat(sprintf("    pc_ctrl active_area=%.1f  pc_treat active_area=%.1f\n",
+                      pc_ctrl_all$active_area, pc_treat_all$active_area))
+          cat(sprintf("    in_zero_bg ctrl: %d of %d TRUE  treat: %d of %d TRUE\n",
+                      sum(pc_ctrl_all$in_zero_bg_all[ctrl_rows]), sum(ctrl_rows),
+                      sum(pc_treat_all$in_zero_bg_all[treat_rows]), sum(treat_rows)))
+          ctrl_sub <- realiz[ctrl_rows, ]
+          cat(sprintf("    ctrl W range: [%s, %s]  treat W range: [%s, %s]\n",
+                      signif(min(ctrl_sub$W, na.rm=TRUE), 4), signif(max(ctrl_sub$W, na.rm=TRUE), 4),
+                      signif(min(realiz[treat_rows, "W"], na.rm=TRUE), 4),
+                      signif(max(realiz[treat_rows, "W"], na.rm=TRUE), 4)))
+        }
         control_lik + treat_lik
       }, numeric(1))
     }
