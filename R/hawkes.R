@@ -266,14 +266,15 @@ loglik_hawk_fast <- function(params,
   }
 
   if (is.null(alpha_max)) {
-    min_trigger_sd <- 0.01 * sqrt(active_area)
+    full_area <- spatstat.geom::area(as.owin(windowS))
+    min_trigger_sd <- 0.001 * sqrt(full_area)
     alpha_max <- 1 / min_trigger_sd^2
   }
   tval <- windowT[2] - windowT[1]
   if (is.null(beta_min)) {
-    beta_min <- 1 / tval
+    beta_min <- 0.1 / tval
   }
-  if (mu > 1e6 || alpha > alpha_max * 2 || beta < beta_min * 0.5 || beta > 1e6) return(-1e15)
+  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) return(-1e15)
 
   loglik <- hawkes_loglik_inhom_cpp(
     t = realiz$t - windowT[1],
