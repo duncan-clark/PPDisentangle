@@ -701,8 +701,12 @@ em_style_labelling <- function(pp_data,
   free_idx  <- setdiff(seq_along(all_names), fixed_idx)
 
   class_func <- function(labelling) {
+    if (is.null(labelling$process)) {
+      return(list())
+    }
     truth_factor <- factor(labelling$process, levels = c("control", "treated"))
     inferred_factor <- factor(labelling$inferred_process, levels = c("control", "treated"))
+    if (length(truth_factor) != length(inferred_factor)) return(list())
     tab <- table(truth_factor, inferred_factor)
     l <- as.list(tab)
     names(l) <- paste0(rep(rownames(tab), times = 2), "_as_", rep(colnames(tab), each = 2))

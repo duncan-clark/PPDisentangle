@@ -136,6 +136,8 @@ for (r_km in RADII_KM) {
   }
   
   pp_study$location_process <- ifelse(inside.owin(pp_study$x, pp_study$y, treated_ss), "treated", "control")
+  pp_study$process <- pp_study$location_process
+  pp_study$background <- TRUE
   
   # 3. Background rate from ALL non-IPD cases in this window
   non_ipd_study <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_study), ]
