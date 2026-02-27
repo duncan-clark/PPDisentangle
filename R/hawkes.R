@@ -234,8 +234,15 @@ loglik_hawk_fast <- function(params,
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
   n <- nrow(realiz)
-  if (n == 0) return(-1e15)
-  if (min(mu, K, alpha, beta) < 0 || K >= 1) return(-1e15)
+  verbose_trace <- getOption("hawkes_trace", FALSE)
+  if (n == 0) {
+    if (verbose_trace) cat("[loglik_hawk_fast REJECT] n==0\n")
+    return(-1e15)
+  }
+  if (min(mu, K, alpha, beta) < 0 || K >= 1) {
+    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] param bounds: mu=%g alpha=%g beta=%g K=%g\n", mu, alpha, beta, K))
+    return(-1e15)
+  }
 
   W_vec <- if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
     realiz[[background_rate_var]]
@@ -274,7 +281,11 @@ loglik_hawk_fast <- function(params,
   if (is.null(beta_min)) {
     beta_min <- 0.1 / tval
   }
-  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) return(-1e15)
+  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) {
+    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] constraint: mu=%g alpha=%g (max=%g) beta=%g (min=%g) K=%g\n",
+                                   mu, alpha, alpha_max, beta, beta_min, K))
+    return(-1e15)
+  }
 
   loglik <- hawkes_loglik_inhom_cpp(
     t = realiz$t - windowT[1],
@@ -288,6 +299,12 @@ loglik_hawk_fast <- function(params,
     areaS = active_area,
     t_max = tval
   )
+
+  if (verbose_trace && loglik <= -1e14) {
+    cat(sprintf("[loglik_hawk_fast CPP] returned %g | n=%d active_area=%g mu=%g alpha=%g beta=%g K=%g tval=%g W_range=[%g,%g] n_zero_W=%d\n",
+                loglik, n, active_area, mu, alpha, beta, K, tval,
+                min(W_vec), max(W_vec), sum(W_vec == 0)))
+  }
 
   return(loglik)
 }

@@ -597,6 +597,7 @@ ni_covariate_lookup <- function(x, y) {
 
 cat(sprintf("\n--- Non-IPD SEM (simulation, beta fixed at %g) ---\n", NONIPD_FIXED_BETA))
 cat("NOTE: this section is slow (~minutes). Comment out if not needed.\n")
+options(hawkes_trace = TRUE)
 ni_result_sem <- adaptive_SEM(
   pp_data = ni_pp_final,
   partition = tess(tiles = list("control" = control_state_space,
@@ -626,6 +627,7 @@ ni_result_sem <- adaptive_SEM(
     verbose = TRUE
   )
 )
+options(hawkes_trace = FALSE)
 
 ni_sem_ctrl <- ni_result_sem$hawkes_params_control
 ni_sem_trtd <- ni_result_sem$hawkes_params_treated
