@@ -769,10 +769,18 @@ em_style_labelling <- function(pp_data,
         labelling_proposals <- lapply(post_proposals, function(tmp) rbind(pre, tmp))
       }
     }
-    if (i != 1 && !is.null(include_starting_data) && include_starting_data) {
+    if (i != 1 && isTRUE(include_starting_data)) {
+      if (length(labelling_proposals) == 0) {
+        labelling_proposals <- list()
+      }
       pre$inferred_process <- "control"
       labelling_proposals[[length(labelling_proposals) + 1]] <- rbind(pre, post)
     }
+
+    if (length(labelling_proposals) == 0) {
+      stop("No labelling proposals generated in iteration ", i)
+    }
+
     class_results <- c(class_results, lapply(labelling_proposals, function(d) {
       d_post <- d[d$t > treatment_time, ]
       class_func(d_post)
