@@ -507,7 +507,7 @@ savings_report_naive <- estimate_hawkes_savings(
 # Use ALL non-IPD cases as the point pattern.
 # Background rate estimated from ALL IPD cases via bw.diggle.
 # 1-year windows: control = [T-365, T), treatment = [T, T+365).
-# Beta estimated freely (no fixed_params).
+# Beta fixed at 0.05 (same as IPD fits) for identifiability.
 # EM simulation-based labelling (not greedy single_flip).
 
 cat("\n\n========== NON-IPD FIT ==========\n")
@@ -568,16 +568,20 @@ ni_res_post_ctrl <- normalize_marks_gambia(nonipd_pp %>% filter(t >= TREATMENT_T
 ni_res_post_trtd <- normalize_marks_gambia(nonipd_pp %>% filter(t >= TREATMENT_TIME, location_process == "treated"),
                                            treated_state_space, lambda_nonipd_bg)
 
-# --- Initial Hawkes fits (free beta) ---
-cat("\n--- Non-IPD Hawkes fits (free beta) ---\n")
-ni_fit_pre_ctrl  <- run_full_fit(ni_res_pre_ctrl$new_df,  control_state_space, "NI-Pre-Control",  fixed_beta = NULL)
-ni_fit_pre_trtd  <- run_full_fit(ni_res_pre_trtd$new_df,  treated_state_space, "NI-Pre-Treated",  fixed_beta = NULL)
-ni_fit_post_ctrl <- run_full_fit(ni_res_post_ctrl$new_df, control_state_space, "NI-Post-Control", fixed_beta = NULL)
-ni_fit_post_trtd <- run_full_fit(ni_res_post_trtd$new_df, treated_state_space, "NI-Post-Treated", fixed_beta = NULL)
+NONIPD_FIXED_BETA <- 0.05
+
+# --- Initial Hawkes fits (beta fixed at 0.05) ---
+cat(sprintf("\n--- Non-IPD Hawkes fits (beta fixed at %g) ---\n", NONIPD_FIXED_BETA))
+ni_fit_pre_ctrl  <- run_full_fit(ni_res_pre_ctrl$new_df,  control_state_space, "NI-Pre-Control",  fixed_beta = NONIPD_FIXED_BETA)
+ni_fit_pre_trtd  <- run_full_fit(ni_res_pre_trtd$new_df,  treated_state_space, "NI-Pre-Treated",  fixed_beta = NONIPD_FIXED_BETA)
+ni_fit_post_ctrl <- run_full_fit(ni_res_post_ctrl$new_df, control_state_space, "NI-Post-Control", fixed_beta = NONIPD_FIXED_BETA)
+ni_fit_post_trtd <- run_full_fit(ni_res_post_trtd$new_df, treated_state_space, "NI-Post-Treated", fixed_beta = NONIPD_FIXED_BETA)
 
 ni_results_df <- rbind(ni_fit_pre_ctrl, ni_fit_pre_trtd, ni_fit_post_ctrl, ni_fit_post_trtd)
 
-# --- Non-IPD SEM (simulation-based EM labelling, free beta) ---
+ni_fp_sem <- if (!is.null(NONIPD_FIXED_BETA)) list(beta = NONIPD_FIXED_BETA) else NULL
+
+# --- Non-IPD SEM (simulation-based EM labelling, beta fixed at 0.05) ---
 ni_pp_final <- rbind(ni_res_pre_ctrl$new_df, ni_res_pre_trtd$new_df,
                      ni_res_post_ctrl$new_df, ni_res_post_trtd$new_df)
 
@@ -591,7 +595,7 @@ ni_covariate_lookup <- function(x, y) {
   return(w_vals)
 }
 
-cat("\n--- Non-IPD SEM (simulation, free beta) ---\n")
+cat(sprintf("\n--- Non-IPD SEM (simulation, beta fixed at %g) ---\n", NONIPD_FIXED_BETA))
 cat("NOTE: this section is slow (~minutes). Comment out if not needed.\n")
 ni_result_sem <- adaptive_SEM(
   pp_data = ni_pp_final,
@@ -612,6 +616,7 @@ ni_result_sem <- adaptive_SEM(
     param_update_cadence = 10,
     proposal_update_cadence = 1,
     proposal_method = "simulation",
+    fixed_params = ni_fp_sem,
     state_spaces = list(control_state_space, treated_state_space),
     iter  = 50,
     n_props = 20,
@@ -650,7 +655,7 @@ cat(sprintf("  Background: KDE from ALL %d IPD cases (bw.diggle)\n",
             nrow(ipd_for_bg)))
 cat(sprintf("  Time window: %d days pre/post intervention\n",
             NONIPD_WINDOW_DAYS))
-cat(sprintf("  Beta: free (estimated)\n"))
+cat(sprintf("  Beta: fixed at %g\n", NONIPD_FIXED_BETA))
 cat(sprintf("  Total non-IPD pts in window: %d\n", nrow(nonipd_pp)))
 cat("----------------------------------------------------------------\n")
 print(ni_results_all, row.names = FALSE)
