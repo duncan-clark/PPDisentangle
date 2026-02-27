@@ -15,7 +15,11 @@ library(raster)
 # =========================================================
 TREATMENT_DATE <- as_datetime("2011-05-01")
 FIXED_BETA <- 0.05  # ~20 day mean trigger time
-RADII_KM <- seq(0.5, 20, length.out = 10) # 10 radii from 500m to 20km
+RADII_KM <- c(
+  seq(0.5, 3.0, by = 0.5),
+  seq(4, 10, by = 1),
+  seq(12, 20, by = 2)
+)
 N_BG_SAMPLE <- 1000 # Sample size for background KDE if needed, but we'll use all non-IPD
 
 # =========================================================
@@ -226,6 +230,8 @@ for (r_km in RADII_KM) {
 # Final Comparison Table
 # =========================================================
 final_results <- do.call(rbind, results_list)
+final_results$diff <- final_results$vanilla_savings_pct - final_results$sem_savings_pct
+final_results
 cat("\n\n================================================================\n")
 cat("        RADII STUDY RESULTS: IPD ANALYSIS\n")
 cat("================================================================\n")
