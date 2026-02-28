@@ -25,7 +25,7 @@ out_report <- "tmp_profiling_report.txt"
 cat("Profiling sim_study.R with --small ...\n")
 Rprof(out_prof, interval = 0.02, memory.profiling = FALSE)
 t0 <- proc.time()
-source("sim_study.R", local = new.env())
+source("sim_study.R", local = FALSE)
 t1 <- proc.time()
 Rprof(NULL)
 elapsed <- t1 - t0

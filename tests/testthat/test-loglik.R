@@ -182,3 +182,76 @@ test_that("loglik_hawk and loglik_hawk_fast both return finite values on fixed d
     expect_true(is.finite(ll_cpp), info = paste("Case", i, "C++"))
   }
 })
+
+# ---- temporal truncation (t_trunc) tests ----
+
+test_that("t_trunc=NULL gives identical results to no truncation (backward compat)", {
+  params <- c(mu = 10, alpha = 0.5, beta = 5, K = 0.3)
+  ll_no_trunc <- loglik_hawk_fast(params, fixed_3pt, fixed_windowT, fixed_windowS)
+  ll_null     <- loglik_hawk_fast(params, fixed_3pt, fixed_windowT, fixed_windowS, t_trunc = NULL)
+  expect_equal(ll_no_trunc, ll_null)
+})
+
+test_that("t_trunc very large equals no truncation", {
+  params <- c(mu = 30, alpha = 0.2, beta = 3, K = 0.5)
+  ll_none <- loglik_hawk_fast(params, fixed_8pt, fixed_windowT, fixed_windowS, t_trunc = NULL)
+  ll_big  <- loglik_hawk_fast(params, fixed_8pt, fixed_windowT, fixed_windowS, t_trunc = 1e6)
+  expect_equal(ll_none, ll_big, tolerance = 1e-8)
+})
+
+test_that("truncation zeros triggering from distant events", {
+  far_apart <- data.frame(
+    x = c(5.0, 5.1),
+    y = c(5.0, 5.1),
+    t = c(0.0, 50.0),
+    W = c(1.0, 1.0)
+  )
+  params <- c(mu = 10, alpha = 0.5, beta = 0.05, K = 0.5)
+  wT <- c(0, 100)
+  wS <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+
+  ll_trunc30 <- loglik_hawk_fast(params, far_apart, wT, wS, t_trunc = 30)
+
+  poisson_params <- c(mu = 10, alpha = 0.5, beta = 0.05, K = 0)
+  ll_poisson <- loglik_hawk_fast(poisson_params, far_apart, wT, wS)
+
+  ll_no_trunc <- loglik_hawk_fast(params, far_apart, wT, wS, t_trunc = NULL)
+  expect_true(abs(ll_trunc30 - ll_no_trunc) > 0.01,
+              label = "truncation should change likelihood for distant events")
+})
+
+test_that("compensator saturates at t_trunc", {
+  single_pt <- data.frame(x = 5.0, y = 5.0, t = 0.0, W = 1.0)
+  params <- c(mu = 0, alpha = 0.5, beta = 0.1, K = 0.5)
+  wS <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+
+  ll_trunc30 <- hawkes_loglik_inhom_cpp(
+    t = 0, x = 5.0, y = 5.0, W_val = 1.0,
+    mu = 0, alpha = 0.5, beta = 0.1, K = 0.5,
+    areaS = 100, t_max = 200, t_trunc = 30
+  )
+  ll_trunc30_shorter <- hawkes_loglik_inhom_cpp(
+    t = 0, x = 5.0, y = 5.0, W_val = 1.0,
+    mu = 0, alpha = 0.5, beta = 0.1, K = 0.5,
+    areaS = 100, t_max = 500, t_trunc = 30
+  )
+  expect_equal(ll_trunc30, ll_trunc30_shorter, tolerance = 1e-10,
+               label = "compensator should saturate once T - t_i > t_trunc")
+})
+
+test_that("truncation is stricter than no truncation for close-in-time events", {
+  close_events <- data.frame(
+    x = c(5.0, 5.1, 5.05),
+    y = c(5.0, 5.0, 5.1),
+    t = c(1.0, 2.0, 3.0),
+    W = c(1.0, 1.0, 1.0)
+  )
+  params <- c(mu = 10, alpha = 0.5, beta = 1.0, K = 0.5)
+  wT <- c(0, 10)
+  wS <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+
+  ll_no_trunc <- loglik_hawk_fast(params, close_events, wT, wS, t_trunc = NULL)
+  ll_trunc5   <- loglik_hawk_fast(params, close_events, wT, wS, t_trunc = 5)
+  expect_true(is.finite(ll_no_trunc))
+  expect_true(is.finite(ll_trunc5))
+})

@@ -695,6 +695,7 @@ em_style_labelling <- function(pp_data,
                                ...) {
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
+  t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
 
   all_names <- c("mu", "alpha", "beta", "K")
   fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)

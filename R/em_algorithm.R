@@ -45,6 +45,7 @@ adaptive_SEM <- function(pp_data,
   t_global <- proc.time()[3]
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
+  t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
 
   if (partition$type != "mask") {
     if (verbose) message("Converting partition to raster mask for speed...")
@@ -160,7 +161,7 @@ adaptive_SEM <- function(pp_data,
         params = control_par, realiz = realiz[include, ],
         windowT = c(treatment_time, max(starting_data$t)),
         windowS = statespace, zero_background_region = treated_state_space,
-        density_approx = FALSE, numeric_integral = FALSE, ...
+        density_approx = FALSE, numeric_integral = FALSE, t_trunc = t_trunc, ...
       )
       include <- which(realiz$inferred_process == "treated")
       if (length(include) == 0) return(-Inf)
@@ -168,7 +169,7 @@ adaptive_SEM <- function(pp_data,
         params = treat_par, realiz = realiz[include, ],
         windowT = c(treatment_time, max(starting_data$t)),
         windowS = statespace, zero_background_region = control_state_space,
-        density_approx = FALSE, numeric_integral = FALSE, ...
+        density_approx = FALSE, numeric_integral = FALSE, t_trunc = t_trunc, ...
       )
       return(control_lik + treat_lik)
     })
@@ -241,7 +242,8 @@ adaptive_SEM <- function(pp_data,
             windowT = c(treatment_time, max(starting_data$t)),
             windowS = statespace, zero_background_region = zero_bg_region,
             density_approx = FALSE, numeric_integral = FALSE,
-            background_rate_var = "W"
+            background_rate_var = "W",
+            t_trunc = t_trunc
           )
         })
         return(sum(liks * weights))

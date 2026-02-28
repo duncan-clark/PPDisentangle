@@ -222,6 +222,7 @@ loglik_hawk_fast <- function(params,
                              precomp = NULL,
                              alpha_max = NULL,
                              beta_min = NULL,
+                             t_trunc = NULL,
                              ...) {
   if (is.list(params)) {
     mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
@@ -297,7 +298,8 @@ loglik_hawk_fast <- function(params,
     beta = beta,
     K = K,
     areaS = active_area,
-    t_max = tval
+    t_max = tval,
+    t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
   )
 
   if (verbose_trace && loglik <= -1e14) {
@@ -481,6 +483,7 @@ fit_hawkes <- function(params_init,
                        alpha_max = NULL,
                        beta_min = NULL,
                        fixed_params = NULL,
+                       t_trunc = NULL,
                        ...) {
   if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
   if (poisson_flag) {
@@ -539,7 +542,8 @@ fit_hawkes <- function(params_init,
           windowS = windowS,
           zero_background_region = zero_background_region,
           alpha_max = alpha_max,
-          beta_min = beta_min
+          beta_min = beta_min,
+          t_trunc = t_trunc
         ),
         extra
       )
@@ -775,6 +779,7 @@ sim_hawkes_fast <- function(params,
                             background_realization = NULL,
                             filtration = NULL,
                             covariate_lookup = NULL,
+                            t_trunc = NULL,
                             ...) {
   mu <- params$mu
   K  <- params$K
@@ -877,7 +882,8 @@ sim_hawkes_fast <- function(params,
       parent_x = p_x, parent_y = p_y, parent_t = p_t,
       alpha = alpha, beta = beta, K = K,
       t_min = windowT[1], t_max = windowT[2],
-      x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max
+      x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max,
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
     )
     n_ch <- length(children$x)
     if (n_ch > 0) {
@@ -953,6 +959,7 @@ generate_inhomogeneous_hawkes <- function(Omega,
                                           state_spaces = NULL,
                                           filtration = NULL,
                                           space_triggering = FALSE,
+                                          t_trunc = NULL,
                                           ...) {
   processes <- unique(partition_processes)
 
@@ -980,7 +987,7 @@ generate_inhomogeneous_hawkes <- function(Omega,
     tmp_hp <- hp; tmp_hp$K <- 0
     ev <- sim_hawkes_fast(
       params = tmp_hp, windowT = time_window, windowS = state_spaces[[k]],
-      background_realization = NULL, filtration = NULL, ...
+      background_realization = NULL, filtration = NULL, t_trunc = t_trunc, ...
     )
     n_ev <- length(ev$x)
     if (n_ev == 0) next
@@ -1024,7 +1031,7 @@ generate_inhomogeneous_hawkes <- function(Omega,
     new_events <- sim_hawkes_fast(
       params = hawkes_params[[p]], windowT = time_window, windowS = Omega,
       background_realization = bg_realization,
-      filtration = f, ...
+      filtration = f, t_trunc = t_trunc, ...
     )
     n_new <- length(new_events$t)
     if (n_new == 0) next

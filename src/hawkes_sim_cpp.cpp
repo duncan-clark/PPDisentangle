@@ -11,7 +11,10 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
                                   double t_min,
                                   double t_max,
                                   double x_min, double x_max,
-                                  double y_min, double y_max) {
+                                  double y_min, double y_max,
+                                  double t_trunc = -1.0) {
+
+  bool do_trunc = (t_trunc > 0.0);
 
   std::vector<double> out_x;
   std::vector<double> out_y;
@@ -27,6 +30,9 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
   std::vector<double> q_y = as<std::vector<double>>(parent_y);
   std::vector<double> q_t = as<std::vector<double>>(parent_t);
 
+  // CDF at t_trunc for truncated exponential inverse-CDF sampling
+  double cdf_max = do_trunc ? (1.0 - std::exp(-beta * t_trunc)) : 0.0;
+
   size_t head = 0;
 
   while(head < q_x.size()) {
@@ -39,7 +45,13 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
     if(n_kids == 0) continue;
 
     for(int k = 0; k < n_kids; ++k) {
-      double dt = R::rexp(1.0/beta);
+      double dt;
+      if(do_trunc) {
+        double u = R::runif(0.0, 1.0);
+        dt = -std::log(1.0 - u * cdf_max) / beta;
+      } else {
+        dt = R::rexp(1.0/beta);
+      }
       double new_t = pt + dt;
 
       if(new_t > t_max) continue;
