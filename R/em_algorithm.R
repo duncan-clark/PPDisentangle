@@ -13,6 +13,7 @@
 #' @param hawkes_params_treated Initial treated Hawkes parameters
 #' @param N_labellings Number of labeling proposals per outer iteration
 #' @param N_iter Number of outer EM iterations
+#' @param reset Logical; if TRUE, the outer loop counter resets to 0 whenever the adaptive step is triggered by weight concentration.
 #' @param verbose Print progress
 #' @param adaptive_control List of adaptive control parameters
 #' @param ... Additional arguments passed through (e.g. background_rate_var, covariate_lookup)
@@ -29,6 +30,7 @@ adaptive_SEM <- function(pp_data,
                          hawkes_params_treated,
                          N_labellings,
                          N_iter,
+                         reset = FALSE,
                          verbose = TRUE,
                          adaptive_control = list(
                            param_update_cadence = 20,
@@ -202,7 +204,9 @@ adaptive_SEM <- function(pp_data,
           filtration = pre, proximity_weight = 0, verbose = FALSE, ...
         )
       })
-      counter <- 0
+      if (reset) {
+        counter <- 0
+      }
       adaptive_counter <- adaptive_counter + 1
     }
     raw_weights <- calculate_weights(
