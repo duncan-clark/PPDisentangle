@@ -27,7 +27,6 @@ Imports:
     data.table,
     dplyr,
     ggplot2,
-    sf,
     caret,
     reshape2,
     parallel,
@@ -42,5 +41,6 @@ Suggests:
     raster,
     lubridate,
     cubature,
-    doParallel
+    doParallel,
+    sf
 Config/testthat/edition: 3
