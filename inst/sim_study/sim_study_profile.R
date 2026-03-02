@@ -3,7 +3,15 @@
 # Adds better logging, intermediate saving, and runtime estimation.
 
 # Find the package root (two levels up from this script's location)
-SCRIPT_DIR <- if (interactive()) getwd() else dirname(normalizePath(sys.frame(1)$ofile))
+get_script_dir <- function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+  if (length(file_arg) > 0) {
+    return(dirname(normalizePath(sub("^--file=", "", file_arg[1]))))
+  }
+  return(getwd())
+}
+SCRIPT_DIR <- get_script_dir()
 PKG_ROOT <- normalizePath(file.path(SCRIPT_DIR, "..", ".."))
 cat("Package root:", PKG_ROOT, "\n")
 
