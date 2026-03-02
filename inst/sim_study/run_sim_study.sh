@@ -34,8 +34,12 @@ cd "$PKG_ROOT"
 git pull origin main
 
 # 2. Load necessary modules
-echo "Loading R module..."
-module load R 2>/dev/null || echo "Warning: 'module load R' failed (may not be on a module system). Attempting to continue..."
+echo "Loading modules..."
+module load R 2>/dev/null || echo "Warning: 'module load R' failed. Attempting to continue..."
+module load UDUNITS 2>/dev/null || module load udunits2 2>/dev/null || module load udunits 2>/dev/null || echo "Warning: could not load UDUNITS module"
+module load GDAL 2>/dev/null || true
+module load GEOS 2>/dev/null || true
+module load PROJ 2>/dev/null || true
 
 # 3. Verify Rscript is available
 if ! command -v Rscript &>/dev/null; then
