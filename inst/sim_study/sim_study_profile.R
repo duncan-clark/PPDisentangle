@@ -2,7 +2,22 @@
 # Profiled simulation study for PPDisentangle
 # Adds better logging, intermediate saving, and runtime estimation.
 
-devtools::load_all("../..")
+# Find the package root (two levels up from this script's location)
+SCRIPT_DIR <- if (interactive()) getwd() else dirname(normalizePath(sys.frame(1)$ofile))
+PKG_ROOT <- normalizePath(file.path(SCRIPT_DIR, "..", ".."))
+cat("Package root:", PKG_ROOT, "\n")
+
+# On cluster: install first then load; locally: use load_all for dev
+if (nzchar(Sys.getenv("SLURM_JOB_ID")) || "--cluster" %in% commandArgs(trailingOnly = TRUE)) {
+  cat("Installing package from source...\n")
+  tryCatch(
+    devtools::install(PKG_ROOT, upgrade = "never", quiet = TRUE),
+    error = function(e) cat("Install failed (may already be installed):", e$message, "\n")
+  )
+  library(PPDisentangle)
+} else {
+  devtools::load_all(PKG_ROOT)
+}
 library(spatstat)
 library(ggplot2)
 library(dplyr)
@@ -109,7 +124,11 @@ obs_data <- lapply(1:N_SIMS, function(i) {
 cl <- makeCluster(N_CORES, outfile = file.path(LOG_DIR, "worker_log.txt"))
 registerDoParallel(cl)
 clusterExport(cl, ls())
-clusterEvalQ(cl, devtools::load_all("../.."))
+if (nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER) {
+  clusterEvalQ(cl, library(PPDisentangle))
+} else {
+  clusterEvalQ(cl, devtools::load_all(PKG_ROOT))
+}
 
 cat("Starting parallel simulations. Check logs/worker_log.txt for detailed progress.\n")
 
