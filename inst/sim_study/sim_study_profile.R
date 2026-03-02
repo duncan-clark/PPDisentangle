@@ -39,13 +39,16 @@ if (ON_CLUSTER) {
   SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 10
   SAVE_DIR     <- file.path(Sys.getenv("SLURM_SUBMIT_DIR", getwd()), "cluster_output_profiled")
+  LOG_DIR      <- file.path(SAVE_DIR, "logs")
 } else if (SMALL) {
   N_CORES <- 2; N_SIMS <- 4; SEM_EM_ADAPTIVE_ITER <- 50; SEM_N_ITER <- 2
   SAVE_DIR <- getwd()
+  LOG_DIR  <- file.path(SAVE_DIR, "logs")
 } else {
   N_CORES <- max(1, parallel::detectCores() - 1); N_SIMS <- 10
   SEM_EM_ADAPTIVE_ITER <- 100; SEM_N_ITER <- 5
   SAVE_DIR <- getwd()
+  LOG_DIR  <- file.path(SAVE_DIR, "logs")
 }
 
 OMEGA <- c(0, 100, 0, 100); END_TIME <- 110; TREATMENT_TIME <- 10
@@ -53,6 +56,7 @@ NX <- 10; NY <- 10; EM_ITER <- 100; SEM_N_LABELLINGS <- 10; TREAT_PROP <- 0.5
 TIME_INT <- END_TIME - TREATMENT_TIME
 
 dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
+dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
 
 cat(sprintf("Config: %s mode | %d sims | %d cores | %d SEM iter | save: %s\n",
     if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL" else "LOCAL",
@@ -83,7 +87,7 @@ obs_data <- lapply(1:N_SIMS, function(i) {
 })
 
 # --- Parallel Loop ---
-cl <- makeCluster(N_CORES, outfile = file.path(SAVE_DIR, "worker_log.txt"))
+cl <- makeCluster(N_CORES, outfile = file.path(LOG_DIR, "worker_log.txt"))
 registerDoParallel(cl)
 clusterExport(cl, ls())
 clusterEvalQ(cl, devtools::load_all(PKG_ROOT))
