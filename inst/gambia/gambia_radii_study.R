@@ -21,10 +21,10 @@ library(raster)
 # Data: IPD cases for estimation, non-IPD cases for background rate.
 # Background: inhomogeneous KDE via bw.diggle on all non-IPD cases.
 #
-# QUICK_TEST: if TRUE, use tiny maxit/iters and first 3 radii only (local sanity check)
+# QUICK_TEST: if TRUE, use tiny maxit/iters (all radii still run)
 
-QUICK_TEST     <- FALSE  # set TRUE for local sanity check (3 radii, tiny iters)
-MIN_POST_CASES <- 25     # skip radius if post-treatment trt or ctrl < this
+QUICK_TEST     <- FALSE  # set TRUE for fast local iteration
+MIN_POST_CASES <- 15     # skip radius if either partition has fewer cases
 
 TEMPORAL_MODE   <- "fixed_beta"   # "fixed_beta" or "truncated"
 TREATMENT_DATE  <- as_datetime("2011-05-01")
@@ -40,18 +40,17 @@ if (TEMPORAL_MODE == "fixed_beta") {
   OUT_FILE   <- sprintf("gambia_radii_results_trunc%d.rds", TRUNC_DAYS)
 }
 
-RADII_KM_FULL <- c(seq(0.5, 3.0, by = 0.5), seq(4, 10, by = 1), seq(12, 20, by = 2))
-RADII_KM      <- if (QUICK_TEST) RADII_KM_FULL[1:3] else RADII_KM_FULL
+RADII_KM <- c(seq(0.5, 3.0, by = 0.5), seq(4, 10, by = 1), seq(12, 20, by = 2))
 
-# Vanilla Hawkes
-VANILLA_MAXIT  <- if (QUICK_TEST) 50 else 5000
+VANILLA_MAXIT  <- if (QUICK_TEST) 100 else 5000
 VANILLA_STARTS <- list(
-  list(mu = 0.0005, alpha = 1e-7, beta = 0.05, K = 0.3),
-  list(mu = 0.001,  alpha = 1e-6, beta = 0.03, K = 0.2),
-  list(mu = 0.0005, alpha = 1e-8, beta = 0.1,  K = 0.4)
+  list(mu = 0.0005, alpha = 1e-7,  beta = 0.05, K = 0.3),
+  list(mu = 0.001,  alpha = 1e-6,  beta = 0.03, K = 0.2),
+  list(mu = 0.0005, alpha = 1e-8,  beta = 0.1,  K = 0.4),
+  list(mu = 0.002,  alpha = 1e-5,  beta = 0.05, K = 0.15),
+  list(mu = 0.0003, alpha = 1e-9,  beta = 0.05, K = 0.5)
 )
 
-# SEM
 SEM_N_LABELLINGS         <- if (QUICK_TEST) 5 else 20
 SEM_N_ITER               <- if (QUICK_TEST) 1 else 2
 SEM_INNER_ITER           <- if (QUICK_TEST) 5 else 50
@@ -82,7 +81,6 @@ coords_all <- crds(v_all_utm)
 gambia_all$easting <- coords_all[,1]
 gambia_all$northing <- coords_all[,2]
 
-# IPD cases for estimation
 pp_data_full <- data.frame(
   x = gambia_all$easting[gambia_all$IPDEvent == "Y"],
   y = gambia_all$northing[gambia_all$IPDEvent == "Y"],
@@ -94,14 +92,36 @@ pp_data_full <- pp_data_full[inside.owin(pp_data_full$x, pp_data_full$y, win_ful
 pp_data_full$t <- pp_data_full$t - min(pp_data_full$t)
 pp_data_full <- pp_data_full %>% filter(t <= STUDY_END)
 
-# Non-IPD cases for background rate
+# Jitter exact duplicates once upfront
+dups <- duplicated(pp_data_full[, c("x", "y", "t")])
+if (any(dups)) {
+  set.seed(42)
+  n_dup <- sum(dups)
+  dup_idx <- which(dups)
+  pp_data_full$x[dup_idx] <- pp_data_full$x[dup_idx] + runif(n_dup, -0.1, 0.1)
+  pp_data_full$y[dup_idx] <- pp_data_full$y[dup_idx] + runif(n_dup, -0.1, 0.1)
+  pp_data_full$t[dup_idx] <- pp_data_full$t[dup_idx] + runif(n_dup, -0.01, 0.01)
+  cat(sprintf("Jittered %d duplicate IPD points\n", n_dup))
+}
+
 non_ipd_all <- gambia_all %>% filter(IPDEvent == "N")
 non_ipd_all <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_full), ]
+
+# =========================================================
+# Background KDE (computed once -- same non-IPD window for all radii)
+# =========================================================
+X_bg <- ppp(x = non_ipd_all$easting, y = non_ipd_all$northing, window = win_full)
+bw_sigma <- suppressWarnings(bw.diggle(X_bg))
+lambda_im <- density(X_bg, sigma = bw_sigma, edge = TRUE, at = "pixels")
+min_nz <- min(lambda_im$v[lambda_im$v > 0], na.rm = TRUE)
+lambda_im$v[lambda_im$v <= 0] <- min_nz
+cat(sprintf("Background KDE: %d non-IPD points, bw=%.1f m\n", non_ipd_all %>% nrow(), as.numeric(bw_sigma)))
 
 # =========================================================
 # Helper Functions
 # =========================================================
 normalize_marks_gambia <- function(df_sub, win_sub, covariate_im, mark_name = "W") {
+  if (nrow(df_sub) == 0) return(list(new_df = df_sub, mass = 0, norm = 0))
   cov_in_window <- covariate_im[win_sub, drop = FALSE]
   total_mass_raw <- integral.im(cov_in_window)
   target_area <- spatstat.geom::area(win_sub)
@@ -118,25 +138,30 @@ normalize_marks_gambia <- function(df_sub, win_sub, covariate_im, mark_name = "W
 run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA,
                          starts = VANILLA_STARTS, maxit = VANILLA_MAXIT,
                          t_trunc = T_TRUNC) {
+  if (nrow(df) < 5) return(NULL)
   fp <- if (!is.null(fixed_beta)) list(beta = fixed_beta) else NULL
   best_fit <- NULL; best_val <- -Inf
   for (i in seq_along(starts)) {
     fit <- tryCatch(
-      fit_hawkes(params_init = starts[[i]], realiz = df, windowT = range(df$t),
-                 windowS = win, background_rate_var = "W", maxit = maxit,
-                 use_fast = TRUE, method = "Nelder-Mead", fixed_params = fp,
-                 t_trunc = t_trunc),
-      error = function(e) NULL
+      suppressWarnings(fit_hawkes(
+        params_init = starts[[i]], realiz = df, windowT = range(df$t),
+        windowS = win, background_rate_var = "W", maxit = maxit,
+        use_fast = TRUE, method = "Nelder-Mead", fixed_params = fp,
+        t_trunc = t_trunc)),
+      error = function(e) { cat(sprintf("    [%s start %d] %s\n", label, i, e$message)); NULL }
     )
-    if (!is.null(fit) && fit$value > best_val) {
-      par <- as.numeric(fit$par)
-      if (length(par) == 4L) { best_val <- fit$value; best_fit <- fit }
+    if (is.null(fit) || !is.finite(fit$value) || fit$value <= -1e14) next
+    pars <- as.numeric(unlist(fit$par))
+    if (length(pars) == 4L && all(is.finite(pars)) && pars[4] >= 0 && pars[4] < 0.999 && fit$value > best_val) {
+      best_val <- fit$value
+      best_fit <- fit
     }
   }
-  if (is.null(best_fit) || length(as.numeric(best_fit$par)) != 4L)
-    return(NULL)
-  pars <- as.numeric(best_fit$par)
+  if (is.null(best_fit)) return(NULL)
+  pars <- as.numeric(unlist(best_fit$par))
   names(pars) <- c("mu", "alpha", "beta", "K")
+  cat(sprintf("    [%s] best ll=%.1f | %s\n", label,
+      best_val, paste(names(pars), signif(pars, 4), sep="=", collapse=" ")))
   return(as.list(pars))
 }
 
@@ -144,83 +169,95 @@ as_parlist <- function(p) {
   v <- as.numeric(p); names(v) <- c("mu", "alpha", "beta", "K"); as.list(v)
 }
 
+params_valid <- function(p, label = "") {
+  K <- p[["K"]]; mu <- p[["mu"]]
+  ok <- is.finite(K) && is.finite(mu) && K >= 0 && K < 0.999 && mu > 1e-12
+  if (!ok) cat(sprintf("    [%s] degenerate: mu=%.2e K=%.4f\n", label, mu, K))
+  ok
+}
+
 estimate_savings_simple <- function(p_ctrl, p_trtd, m_ctrl, m_trtd, m_target, duration) {
+  denom_c <- 1 - p_ctrl[["K"]]
+  denom_t <- 1 - p_trtd[["K"]]
+  if (denom_c < 1e-3 || denom_t < 1e-3 || m_ctrl < 1e-10 || m_trtd < 1e-10 ||
+      p_ctrl[["mu"]] < 1e-12 || p_trtd[["mu"]] < 1e-12)
+    return(list(exp_c = NA, exp_t = NA, savings = NA, pct = NA))
   rate_c <- p_ctrl[["mu"]] / m_ctrl
   rate_t <- p_trtd[["mu"]] / m_trtd
   bg_c <- rate_c * m_target * duration
   bg_t <- rate_t * m_target * duration
-  exp_c <- bg_c / (1 - p_ctrl[["K"]])
-  exp_t <- bg_t / (1 - p_trtd[["K"]])
-  return(list(exp_c = exp_c, exp_t = exp_t, savings = exp_c - exp_t, pct = (exp_c - exp_t) / exp_c))
+  exp_c <- bg_c / denom_c
+  exp_t <- bg_t / denom_t
+  pct <- if (exp_c > 0) (exp_c - exp_t) / exp_c else NA
+  if (!is.na(pct) && (pct < -10 || pct > 10))
+    return(list(exp_c = exp_c, exp_t = exp_t, savings = exp_c - exp_t, pct = NA))
+  return(list(exp_c = exp_c, exp_t = exp_t, savings = exp_c - exp_t, pct = pct))
 }
 
 # =========================================================
 # Radii Study
 # =========================================================
 results_list <- list()
+skipped <- character()
 t_study_start <- proc.time()[3]
 
-cat(sprintf("Radii study: %s | %d radii | beta=%s | t_trunc=%s\n",
+cat(sprintf("\nRadii study: %s | %d radii | beta=%s | t_trunc=%s | quick=%s\n",
     TEMPORAL_MODE, length(RADII_KM),
     if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
-    if (is.null(T_TRUNC)) "none" else sprintf("%d days", T_TRUNC)))
+    if (is.null(T_TRUNC)) "none" else sprintf("%d days", T_TRUNC),
+    QUICK_TEST))
 
 for (r_km in RADII_KM) {
   r_m <- r_km * 1000
   t_radius_start <- proc.time()[3]
   cat(sprintf("\n=== Radius: %.1f km ===\n", r_km))
 
-  # Partitions
-  discs <- lapply(seq_len(npoints(hc)), function(i) disc(radius = r_m, centre = c(hc$x[i], hc$y[i]), npoly = 128))
+  discs <- lapply(seq_len(npoints(hc)), function(i)
+    disc(radius = r_m, centre = c(hc$x[i], hc$y[i]), npoly = 128))
   treated_ss <- Reduce(union.owin, discs)
   control_ss <- setminus.owin(win_full, treated_ss)
 
-  # Filter & label
-  pp_study <- pp_data_full[inside.owin(pp_data_full$x, pp_data_full$y, win_full),]
-  dups <- duplicated(pp_study[, c("x", "y", "t")])
-  if (any(dups)) { cat(sprintf("  Removing %d duplicates\n", sum(dups))); pp_study <- pp_study[!dups, ] }
-  pp_study$location_process <- ifelse(inside.owin(pp_study$x, pp_study$y, treated_ss), "treated", "control")
+  pp_study <- pp_data_full
+  pp_study$location_process <- ifelse(
+    inside.owin(pp_study$x, pp_study$y, treated_ss), "treated", "control")
   pp_study$process <- pp_study$location_process
   pp_study$background <- TRUE
 
+  n_pre_t  <- sum(pp_study$t <  TREATMENT_TIME & pp_study$location_process == "treated")
+  n_pre_c  <- sum(pp_study$t <  TREATMENT_TIME & pp_study$location_process == "control")
   n_post_t <- sum(pp_study$t >= TREATMENT_TIME & pp_study$location_process == "treated")
   n_post_c <- sum(pp_study$t >= TREATMENT_TIME & pp_study$location_process == "control")
-  cat(sprintf("  Post-treatment: trt=%d ctrl=%d\n", n_post_t, n_post_c))
+  cat(sprintf("  Pre: trt=%d ctrl=%d | Post: trt=%d ctrl=%d\n", n_pre_t, n_pre_c, n_post_t, n_post_c))
 
   if (n_post_t < MIN_POST_CASES || n_post_c < MIN_POST_CASES) {
     cat(sprintf("  SKIP: too few post-treatment cases (min=%d)\n", MIN_POST_CASES))
+    skipped <- c(skipped, sprintf("%.1f km: too few cases (trt=%d ctrl=%d)", r_km, n_post_t, n_post_c))
     next
   }
 
-  # Background from non-IPD
-  non_ipd_study <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_full), ]
-  X_bg <- ppp(x = non_ipd_study$easting, y = non_ipd_study$northing, window = win_full)
-  bw_sigma <- bw.diggle(X_bg)
-  lambda_im <- density(X_bg, sigma = bw_sigma, edge = TRUE, at = "pixels")
-  min_nz <- min(lambda_im$v[lambda_im$v > 0], na.rm = TRUE)
-  lambda_im$v[lambda_im$v <= 0] <- min_nz
-
-  # Normalize marks
-  res_pre_trtd  <- normalize_marks_gambia(pp_study %>% filter(t <  TREATMENT_TIME, location_process == "treated"), treated_ss, lambda_im)
+  # Normalize marks per partition
+  res_pre_trtd  <- normalize_marks_gambia(pp_study %>% filter(t <  TREATMENT_TIME, location_process == "treated"),  treated_ss, lambda_im)
   res_pre_ctrl  <- normalize_marks_gambia(pp_study %>% filter(t <  TREATMENT_TIME, location_process == "control"), control_ss, lambda_im)
-  res_post_trtd <- normalize_marks_gambia(pp_study %>% filter(t >= TREATMENT_TIME, location_process == "treated"), treated_ss, lambda_im)
+  res_post_trtd <- normalize_marks_gambia(pp_study %>% filter(t >= TREATMENT_TIME, location_process == "treated"),  treated_ss, lambda_im)
   res_post_ctrl <- normalize_marks_gambia(pp_study %>% filter(t >= TREATMENT_TIME, location_process == "control"), control_ss, lambda_im)
 
-  # Vanilla fits
-  cat("  Vanilla fits...")
+  # --- Vanilla Hawkes ---
+  cat("  Vanilla fits...\n")
   vanilla_trtd <- run_full_fit(res_post_trtd$new_df, treated_ss, "Treated")
   vanilla_ctrl <- run_full_fit(res_post_ctrl$new_df, control_ss, "Control")
   if (is.null(vanilla_trtd) || is.null(vanilla_ctrl)) {
-    cat(sprintf(" FAILED (trt=%s ctrl=%s) - skipping radius\n",
-                if (is.null(vanilla_trtd)) "fail" else "ok",
-                if (is.null(vanilla_ctrl)) "fail" else "ok"))
+    cat(sprintf("  SKIP: vanilla fit failed (trt=%s ctrl=%s)\n",
+                if (is.null(vanilla_trtd)) "FAIL" else "ok",
+                if (is.null(vanilla_ctrl)) "FAIL" else "ok"))
+    skipped <- c(skipped, sprintf("%.1f km: vanilla fit failed", r_km))
     next
   }
-  cat(sprintf(" K_trt=%.3f K_ctrl=%.3f\n", vanilla_trtd[["K"]], vanilla_ctrl[["K"]]))
 
-  # SEM fit
-  cat("  SEM fit...")
-  pp_sem <- rbind(res_pre_trtd$new_df, res_pre_ctrl$new_df, res_post_trtd$new_df, res_post_ctrl$new_df)
+  # --- SEM ---
+  cat("  SEM fit...\n")
+  pp_sem <- rbind(res_pre_trtd$new_df, res_pre_ctrl$new_df,
+                  res_post_trtd$new_df, res_post_ctrl$new_df)
+
   cov_lookup <- function(x, y) {
     rv <- as.numeric(spatstat.geom::interp.im(lambda_im, list(x = x, y = y)))
     rv[is.na(rv)] <- 0
@@ -230,48 +267,61 @@ for (r_km in RADII_KM) {
     return(rv)
   }
 
-  sem_res <- adaptive_SEM(
-    pp_data = pp_sem,
-    partition = tess(tiles = list("control" = control_ss, "treated" = treated_ss)),
-    partition_processes = c("control", "treated"),
-    statespace = win_full,
-    time_window = c(0, STUDY_END),
-    treatment_time = TREATMENT_TIME,
-    hawkes_params_control = vanilla_ctrl,
-    hawkes_params_treated = vanilla_trtd,
-    N_labellings = SEM_N_LABELLINGS,
-    N_iter = SEM_N_ITER,
-    covariate_lookup = cov_lookup,
-    background_rate_var = "W",
-    t_trunc = T_TRUNC,
-    adaptive_control = list(
-      update_control_params    = TRUE,
-      param_update_cadence     = SEM_PARAM_UPDATE_CADENCE,
-      proposal_method          = "simulation",
-      fixed_params             = if (!is.null(FIXED_BETA)) list(beta = FIXED_BETA) else NULL,
-      state_spaces             = list(control_ss, treated_ss),
-      iter                     = SEM_INNER_ITER,
-      n_props                  = SEM_INNER_N_PROPS,
-      change_factor            = SEM_CHANGE_FACTOR,
-      include_starting_data    = SEM_INCLUDE_STARTING,
-      update_starting_data     = SEM_UPDATE_STARTING,
-      verbose                  = FALSE
-    )
+  sem_res <- tryCatch(
+    adaptive_SEM(
+      pp_data = pp_sem,
+      partition = tess(tiles = list("control" = control_ss, "treated" = treated_ss)),
+      partition_processes = c("control", "treated"),
+      statespace = win_full,
+      time_window = c(0, STUDY_END),
+      treatment_time = TREATMENT_TIME,
+      hawkes_params_control = vanilla_ctrl,
+      hawkes_params_treated = vanilla_trtd,
+      N_labellings = SEM_N_LABELLINGS,
+      N_iter = SEM_N_ITER,
+      covariate_lookup = cov_lookup,
+      background_rate_var = "W",
+      t_trunc = T_TRUNC,
+      adaptive_control = list(
+        update_control_params    = TRUE,
+        param_update_cadence     = SEM_PARAM_UPDATE_CADENCE,
+        proposal_method          = "simulation",
+        fixed_params             = if (!is.null(FIXED_BETA)) list(beta = FIXED_BETA) else NULL,
+        state_spaces             = list(control_ss, treated_ss),
+        iter                     = SEM_INNER_ITER,
+        n_props                  = SEM_INNER_N_PROPS,
+        change_factor            = SEM_CHANGE_FACTOR,
+        include_starting_data    = SEM_INCLUDE_STARTING,
+        update_starting_data     = SEM_UPDATE_STARTING,
+        verbose                  = FALSE
+      )
+    ),
+    error = function(e) { cat(sprintf("  SEM ERROR: %s\n", e$message)); NULL }
   )
+
+  if (is.null(sem_res)) {
+    cat("  SKIP: SEM failed\n")
+    skipped <- c(skipped, sprintf("%.1f km: SEM failed", r_km))
+    next
+  }
 
   sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
   sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
-  cat(sprintf(" K_trt=%.3f K_ctrl=%.3f\n", sem_trtd[["K"]], sem_ctrl[["K"]]))
+  sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl")
+  sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd")
+  cat(sprintf("  SEM done: K_trt=%.3f K_ctrl=%.3f%s\n", sem_trtd[["K"]], sem_ctrl[["K"]],
+      if (!sem_valid_ctrl || !sem_valid_trtd) " [DEGENERATE]" else ""))
 
-  # Savings
+  # --- Savings ---
   duration_post <- STUDY_END - TREATMENT_TIME
   total_m <- res_pre_trtd$mass + res_pre_ctrl$mass
   sav_vanilla <- estimate_savings_simple(vanilla_ctrl, vanilla_trtd, res_pre_ctrl$mass, res_pre_trtd$mass, total_m, duration_post)
   sav_sem     <- estimate_savings_simple(sem_ctrl, sem_trtd, res_pre_ctrl$mass, res_pre_trtd$mass, total_m, duration_post)
 
   elapsed_radius <- round((proc.time()[3] - t_radius_start) / 60, 1)
-  cat(sprintf("  Savings: vanilla=%.1f%% sem=%.1f%% (%.1f min)\n",
-              sav_vanilla$pct * 100, sav_sem$pct * 100, elapsed_radius))
+  v_pct_str <- if (is.na(sav_vanilla$pct)) "NA" else sprintf("%.1f%%", sav_vanilla$pct * 100)
+  s_pct_str <- if (is.na(sav_sem$pct))     "NA" else sprintf("%.1f%%", sav_sem$pct * 100)
+  cat(sprintf("  Savings: vanilla=%s sem=%s (%.1f min)\n", v_pct_str, s_pct_str, elapsed_radius))
 
   results_list[[as.character(r_km)]] <- data.frame(
     radius_km = r_km, n_post_trt = n_post_t, n_post_ctrl = n_post_c,
@@ -283,7 +333,8 @@ for (r_km in RADII_KM) {
     sem_mu_ctrl = sem_ctrl[["mu"]], sem_mu_trtd = sem_trtd[["mu"]],
     sem_alpha_ctrl = sem_ctrl[["alpha"]], sem_alpha_trtd = sem_trtd[["alpha"]],
     sem_beta_ctrl = sem_ctrl[["beta"]], sem_beta_trtd = sem_trtd[["beta"]],
-    vanilla_savings_pct = sav_vanilla$pct, sem_savings_pct = sav_sem$pct
+    vanilla_savings_pct = sav_vanilla$pct, sem_savings_pct = sav_sem$pct,
+    sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd
   )
 }
 
@@ -292,15 +343,29 @@ elapsed_total <- round((proc.time()[3] - t_study_start) / 60, 1)
 # =========================================================
 # Results
 # =========================================================
-final_results <- do.call(rbind, results_list)
-final_results$sem_minus_vanilla <- final_results$sem_savings_pct - final_results$vanilla_savings_pct
-
-cat(sprintf("\n=== RESULTS: %s | beta=%s | t_trunc=%s | %.1f min ===\n",
+cat(sprintf("\n=== RESULTS: %s | beta=%s | t_trunc=%s | %.1f min | %d/%d radii ===\n",
     TEMPORAL_MODE,
     if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
     if (is.null(T_TRUNC)) "none" else sprintf("%d", T_TRUNC),
-    elapsed_total))
-print(final_results, row.names = FALSE)
+    elapsed_total, length(results_list), length(RADII_KM)))
+
+if (length(skipped) > 0) {
+  cat("Skipped:\n")
+  for (s in skipped) cat(sprintf("  - %s\n", s))
+}
+
+if (length(results_list) == 0) {
+  cat("\nNo radii produced results.\n")
+  final_results <- data.frame()
+} else {
+  final_results <- do.call(rbind, results_list)
+  final_results$sem_minus_vanilla <- final_results$sem_savings_pct - final_results$vanilla_savings_pct
+  print(final_results[, c("radius_km", "n_post_trt", "n_post_ctrl",
+                           "vanilla_K_trtd", "vanilla_K_ctrl",
+                           "sem_K_trtd", "sem_K_ctrl",
+                           "vanilla_savings_pct", "sem_savings_pct", "sem_minus_vanilla")],
+        row.names = FALSE)
+}
 
 saveRDS(final_results, OUT_FILE)
 cat(sprintf("\nSaved to %s\n", OUT_FILE))
