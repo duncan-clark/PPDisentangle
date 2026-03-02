@@ -14,7 +14,6 @@ PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Parse command line arguments
 SIMS=100
-CPUS=100
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -24,33 +23,49 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [ "$SIMS" -le 16 ]; then
+# Cap cores to sims so we don't waste resources
+if [ "$SIMS" -le 100 ]; then
     CPUS="$SIMS"
+else
+    CPUS=100
 fi
 
-# Set up logging - all output goes to a timestamped log file
+# If not already inside a SLURM job, submit via sbatch and exit
+if [ -z "$SLURM_JOB_ID" ]; then
+    cd "$PKG_ROOT"
+    mkdir -p cluster_output_profiled/logs
+
+    # Pull latest code before submitting
+    echo "Pulling latest changes from git..."
+    git pull origin main
+
+    echo "Submitting SLURM job: $SIMS sims, $CPUS cores..."
+    JOB_ID=$(sbatch --parsable \
+        --cpus-per-task="$CPUS" \
+        --export=ALL \
+        "$SCRIPT_DIR/run_sim_study.sh" --sims "$SIMS")
+
+    echo "Submitted job $JOB_ID"
+    echo "  SLURM logs: cluster_output_profiled/logs/slurm_${JOB_ID}.out"
+    echo "  Worker logs: cluster_output_profiled/logs/"
+    echo "  Check status: squeue -j $JOB_ID"
+    echo "  Follow output: tail -f cluster_output_profiled/logs/slurm_${JOB_ID}.out"
+    exit 0
+fi
+
+# --- Everything below runs inside the SLURM job ---
+
 cd "$PKG_ROOT"
 mkdir -p cluster_output_profiled/logs
-LOGFILE="cluster_output_profiled/logs/run_$(date +%Y%m%d_%H%M%S)_sims${SIMS}.log"
-
-echo "All output will be logged to: $LOGFILE"
-echo "Monitor with: tail -f $LOGFILE"
-
-# Redirect everything (stdout + stderr) to the log file from here on
-exec > "$LOGFILE" 2>&1
 
 echo "=== PPDisentangle Simulation Study ==="
 echo "Started at: $(date)"
+echo "SLURM Job ID: $SLURM_JOB_ID"
 echo "Sims: $SIMS  Cores: $CPUS"
 echo "Package root: $PKG_ROOT"
 echo ""
 
-# 1. Update the code from the repository
-echo "--- Git pull ---"
-git pull origin main
-echo ""
-
-# 2. Load necessary modules
+# Load necessary modules
 echo "--- Loading modules ---"
 module load R 2>/dev/null || echo "Warning: 'module load R' failed. Attempting to continue..."
 module load UDUNITS 2>/dev/null || module load udunits2 2>/dev/null || module load udunits 2>/dev/null || echo "Warning: could not load UDUNITS module"
@@ -59,7 +74,7 @@ module load GEOS 2>/dev/null || true
 module load PROJ 2>/dev/null || true
 echo ""
 
-# 3. Verify Rscript is available
+# Verify Rscript is available
 if ! command -v Rscript &>/dev/null; then
     echo "ERROR: Rscript not found after module load. Check 'module avail R' on your cluster."
     exit 1
@@ -67,7 +82,7 @@ fi
 echo "Using Rscript: $(which Rscript)"
 echo ""
 
-# 4. Run the simulation study
+# Run the simulation study
 echo "--- Starting Rscript ---"
 Rscript "$SCRIPT_DIR/sim_study_profile.R" --cluster --sims "$SIMS"
 EXIT_CODE=$?
