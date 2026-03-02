@@ -28,18 +28,36 @@ if [ "$SIMS" -le 16 ]; then
     CPUS="$SIMS"
 fi
 
-# 1. Update the code from the repository
-echo "Pulling latest changes from git..."
+# Set up logging - all output goes to a timestamped log file
 cd "$PKG_ROOT"
+mkdir -p cluster_output_profiled/logs
+LOGFILE="cluster_output_profiled/logs/run_$(date +%Y%m%d_%H%M%S)_sims${SIMS}.log"
+
+echo "All output will be logged to: $LOGFILE"
+echo "Monitor with: tail -f $LOGFILE"
+
+# Redirect everything (stdout + stderr) to the log file from here on
+exec > "$LOGFILE" 2>&1
+
+echo "=== PPDisentangle Simulation Study ==="
+echo "Started at: $(date)"
+echo "Sims: $SIMS  Cores: $CPUS"
+echo "Package root: $PKG_ROOT"
+echo ""
+
+# 1. Update the code from the repository
+echo "--- Git pull ---"
 git pull origin main
+echo ""
 
 # 2. Load necessary modules
-echo "Loading modules..."
+echo "--- Loading modules ---"
 module load R 2>/dev/null || echo "Warning: 'module load R' failed. Attempting to continue..."
 module load UDUNITS 2>/dev/null || module load udunits2 2>/dev/null || module load udunits 2>/dev/null || echo "Warning: could not load UDUNITS module"
 module load GDAL 2>/dev/null || true
 module load GEOS 2>/dev/null || true
 module load PROJ 2>/dev/null || true
+echo ""
 
 # 3. Verify Rscript is available
 if ! command -v Rscript &>/dev/null; then
@@ -47,12 +65,12 @@ if ! command -v Rscript &>/dev/null; then
     exit 1
 fi
 echo "Using Rscript: $(which Rscript)"
+echo ""
 
-# 4. Create necessary directories
-mkdir -p cluster_output_profiled/logs
-
-# 5. Run the simulation study
-echo "Starting simulation study with $SIMS simulations on $CPUS cores..."
+# 4. Run the simulation study
+echo "--- Starting Rscript ---"
 Rscript "$SCRIPT_DIR/sim_study_profile.R" --cluster --sims "$SIMS"
+EXIT_CODE=$?
 
-echo "Job completed at $(date)"
+echo ""
+echo "=== Job completed at $(date) with exit code $EXIT_CODE ==="
