@@ -185,7 +185,7 @@ cat("  Estimated time for 100 sims on", N_CORES, "cores with full iterations:\n"
 if (SMALL) {
   actual_iter <- 50
 } else {
-  actual_iter <- 100
+  actual_iter <- 1000
 }
 target_iter <- 5000
 scale_factor <- target_iter / actual_iter
