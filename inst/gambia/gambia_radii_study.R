@@ -20,6 +20,11 @@ library(raster)
 #
 # Data: IPD cases for estimation, non-IPD cases for background rate.
 # Background: inhomogeneous KDE via bw.diggle on all non-IPD cases.
+#
+# QUICK_TEST: if TRUE, use tiny maxit/iters and first 3 radii only (local sanity check)
+
+QUICK_TEST     <- FALSE  # set TRUE for local sanity check (3 radii, tiny iters)
+MIN_POST_CASES <- 25     # skip radius if post-treatment trt or ctrl < this
 
 TEMPORAL_MODE   <- "fixed_beta"   # "fixed_beta" or "truncated"
 TREATMENT_DATE  <- as_datetime("2011-05-01")
@@ -35,10 +40,11 @@ if (TEMPORAL_MODE == "fixed_beta") {
   OUT_FILE   <- sprintf("gambia_radii_results_trunc%d.rds", TRUNC_DAYS)
 }
 
-RADII_KM <- c(seq(0.5, 3.0, by = 0.5), seq(4, 10, by = 1), seq(12, 20, by = 2))
+RADII_KM_FULL <- c(seq(0.5, 3.0, by = 0.5), seq(4, 10, by = 1), seq(12, 20, by = 2))
+RADII_KM      <- if (QUICK_TEST) RADII_KM_FULL[1:3] else RADII_KM_FULL
 
 # Vanilla Hawkes
-VANILLA_MAXIT  <- 5000
+VANILLA_MAXIT  <- if (QUICK_TEST) 50 else 5000
 VANILLA_STARTS <- list(
   list(mu = 0.0005, alpha = 1e-7, beta = 0.05, K = 0.3),
   list(mu = 0.001,  alpha = 1e-6, beta = 0.03, K = 0.2),
@@ -46,10 +52,10 @@ VANILLA_STARTS <- list(
 )
 
 # SEM
-SEM_N_LABELLINGS         <- 20
-SEM_N_ITER               <- 2
-SEM_INNER_ITER           <- 50
-SEM_INNER_N_PROPS        <- 20
+SEM_N_LABELLINGS         <- if (QUICK_TEST) 5 else 20
+SEM_N_ITER               <- if (QUICK_TEST) 1 else 2
+SEM_INNER_ITER           <- if (QUICK_TEST) 5 else 50
+SEM_INNER_N_PROPS        <- if (QUICK_TEST) 5 else 20
 SEM_PARAM_UPDATE_CADENCE <- 10
 SEM_CHANGE_FACTOR        <- 0.05
 SEM_INCLUDE_STARTING     <- TRUE
@@ -122,8 +128,13 @@ run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA,
                  t_trunc = t_trunc),
       error = function(e) NULL
     )
-    if (!is.null(fit) && fit$value > best_val) { best_val <- fit$value; best_fit <- fit }
+    if (!is.null(fit) && fit$value > best_val) {
+      par <- as.numeric(fit$par)
+      if (length(par) == 4L) { best_val <- fit$value; best_fit <- fit }
+    }
   }
+  if (is.null(best_fit) || length(as.numeric(best_fit$par)) != 4L)
+    return(NULL)
   pars <- as.numeric(best_fit$par)
   names(pars) <- c("mu", "alpha", "beta", "K")
   return(as.list(pars))
@@ -176,6 +187,11 @@ for (r_km in RADII_KM) {
   n_post_c <- sum(pp_study$t >= TREATMENT_TIME & pp_study$location_process == "control")
   cat(sprintf("  Post-treatment: trt=%d ctrl=%d\n", n_post_t, n_post_c))
 
+  if (n_post_t < MIN_POST_CASES || n_post_c < MIN_POST_CASES) {
+    cat(sprintf("  SKIP: too few post-treatment cases (min=%d)\n", MIN_POST_CASES))
+    next
+  }
+
   # Background from non-IPD
   non_ipd_study <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_full), ]
   X_bg <- ppp(x = non_ipd_study$easting, y = non_ipd_study$northing, window = win_full)
@@ -194,6 +210,12 @@ for (r_km in RADII_KM) {
   cat("  Vanilla fits...")
   vanilla_trtd <- run_full_fit(res_post_trtd$new_df, treated_ss, "Treated")
   vanilla_ctrl <- run_full_fit(res_post_ctrl$new_df, control_ss, "Control")
+  if (is.null(vanilla_trtd) || is.null(vanilla_ctrl)) {
+    cat(sprintf(" FAILED (trt=%s ctrl=%s) - skipping radius\n",
+                if (is.null(vanilla_trtd)) "fail" else "ok",
+                if (is.null(vanilla_ctrl)) "fail" else "ok"))
+    next
+  }
   cat(sprintf(" K_trt=%.3f K_ctrl=%.3f\n", vanilla_trtd[["K"]], vanilla_ctrl[["K"]]))
 
   # SEM fit

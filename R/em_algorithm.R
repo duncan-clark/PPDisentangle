@@ -48,6 +48,8 @@ adaptive_SEM <- function(pp_data,
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
+  dots_no_trunc <- dots
+  dots_no_trunc$t_trunc <- NULL
 
   if (partition$type != "mask") {
     if (verbose) message("Converting partition to raster mask for speed...")
@@ -209,12 +211,11 @@ adaptive_SEM <- function(pp_data,
       }
       adaptive_counter <- adaptive_counter + 1
     }
-    raw_weights <- calculate_weights(
-      labellings,
+    raw_weights <- do.call(calculate_weights, c(list(
+      labellings = labellings,
       treat_par = unlist(t_params[[length(t_params)]]),
-      control_par = unlist(c_params[[length(c_params)]]),
-      ...
-    )
+      control_par = unlist(c_params[[length(c_params)]])
+    ), dots_no_trunc))
     keepers <- which(raw_weights != 0 & !is.na(raw_weights) & is.finite(raw_weights))
     if (verbose) {
       cat(sprintf("\n[Outer iter %d] raw weights: %s\n", counter,
