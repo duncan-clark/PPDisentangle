@@ -39,3 +39,17 @@ With the same `iter=100` and `n_props=10`, **adaptive SEM** does **more work per
 - **Adaptive SEM:** an **outer** SEM loop (`N_iter` × `N_labellings`); inside it repeatedly calls the **same** `em_style_labelling` (with `adaptive_control$iter=100`, `n_props=10`) when weights are refreshed, plus it generates multiple labellings, computes importance weights, and runs parameter optimisation. So you get at least one full 100-iter labelling run per dataset, plus extra labelling generation, weight calculation, and `optim()` in the SEM loop.
 
 So SEM is expected to take roughly 2–3× longer than EM-style for the same inner iter/n_props; that’s due to the extra SEM structure (extra adaptive steps when weights change, labelling simulation, and M-step optimisation), not a bug.
+
+## OOM during ATE estimation
+
+If you see `oom_kill` or `error reading from connection` during "Estimating ATEs", the parallel workers may be running out of memory. Try:
+
+1. **Sequential ATE fallback** (lower memory, slower):
+   ```bash
+   ATE_SEQUENTIAL=1 ./run_sim_study.sh
+   # or: export ATE_SEQUENTIAL=1 before Rscript in your SLURM script
+   ```
+
+2. **Request more memory** in your SLURM job (e.g. `#SBATCH --mem=32G` or higher).
+
+3. **Reduce simulations** with `--sims 16` or `--sims 8` to lower memory use.

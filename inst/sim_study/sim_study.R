@@ -443,8 +443,23 @@ for (i in seq_along(EM_results)) {
   )
 }
 
+# Use minimal env for task_function to avoid serializing .GlobalEnv (obs_data,
+# EM_results, labellings, etc.) when sending to workers - that causes OOM.
+ATE_env <- new.env(parent = baseenv())
+ATE_env$ATE_estim_hawkes <- getFromNamespace("ATE_estim_hawkes", "PPDisentangle")
+ATE_env$withTimeout <- getFromNamespace("withTimeout", "R.utils")
+ATE_env$OMEGA <- OMEGA
+ATE_env$partition <- partition
+ATE_env$treated_partitions <- treated_partitions
+ATE_env$N_SIMS <- N_SIMS
+ATE_env$N_TAU_SIMS <- N_TAU_SIMS
+ATE_env$N_TAU_I <- N_TAU_I
+ATE_env$TREATMENT_TIME <- TREATMENT_TIME
+ATE_env$END_TIME <- END_TIME
+ATE_env$MAX_TIME <- MAX_TIME
+
 task_function <- function(task) {
-  tryCatch(
+  r <- tryCatch(
     withTimeout(
       ATE_estim_hawkes(
         statespace = OMEGA, partition = partition,
@@ -460,10 +475,24 @@ task_function <- function(task) {
     ),
     error = function(e) NULL
   )
+  if (!is.null(r)) r$all_nothing_sim <- NULL  # drop sims, keep theory (used in plots)
+  r
 }
+environment(task_function) <- ATE_env
 
-results_flat <- parLapply(cl, tasks, fun = task_function)
-stopCluster(cl)
+# Free memory before ATE phase; workers get fresh tasks
+if (N_CORES > 1 && !SMALL) gc(verbose = FALSE)
+
+# Sequential ATE fallback: set env ATE_SEQUENTIAL=1 to avoid worker OOM (slower but lower memory)
+ATE_SEQUENTIAL <- nzchar(Sys.getenv("ATE_SEQUENTIAL")) && tolower(Sys.getenv("ATE_SEQUENTIAL")) %in% c("1", "true", "yes")
+if (ATE_SEQUENTIAL) {
+  log_msg("ATE estimation: sequential (ATE_SEQUENTIAL=1)")
+  stopCluster(cl)
+  results_flat <- lapply(tasks, task_function)
+} else {
+  results_flat <- parLapply(cl, tasks, fun = task_function)
+  stopCluster(cl)
+}
 log_elapsed("ATE estimation", proc.time()[3] - t0, length(tasks), length(tasks))
 
 # ------------------------------------------------------------------

@@ -35,13 +35,17 @@ if [ -z "$SLURM_JOB_ID" ]; then
     git pull origin main
 
     export PP_SCRIPT_DIR PP_PKG_ROOT PP_SIMS="$PP_SIMS" PP_CPUS="$PP_CPUS"
+    # Pass ATE_SEQUENTIAL=1 to avoid OOM during ATE estimation (sequential, lower memory)
+    [ -n "$ATE_SEQUENTIAL" ] && export ATE_SEQUENTIAL
 
     echo "Submitting SLURM job: $PP_SIMS sims, $PP_CPUS cores"
+    SBATCH_EXPORT="PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS"
+    [ -n "$ATE_SEQUENTIAL" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$PP_CPUS" \
         --output="cluster_output/logs/slurm_%j.out" \
         --error="cluster_output/logs/slurm_%j.err" \
-        --export=PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS \
+        --export="$SBATCH_EXPORT" \
         "$PP_SCRIPT_DIR/run_sim_study.sh")
 
     echo "Job $JOB_ID submitted"
