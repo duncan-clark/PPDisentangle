@@ -15,6 +15,7 @@ NULL
 #' @param partition A spatstat tess object
 #' @param partition_processes Character vector of process names per tile
 #' @param background_rate_var Column name for inhomogeneous background (or NULL)
+#' @param ... Additional arguments passed to loglik_hawk_fast (e.g. t_trunc)
 #' @return Scalar log-likelihood value
 #' @export
 complete_data_loglik <- function(theta,
@@ -23,7 +24,8 @@ complete_data_loglik <- function(theta,
                                  statespace,
                                  partition,
                                  partition_processes,
-                                 background_rate_var = NULL) {
+                                 background_rate_var = NULL,
+                                 ...) {
   theta_c <- theta[1:4]
   theta_t <- theta[5:8]
 
@@ -39,31 +41,32 @@ complete_data_loglik <- function(theta,
 
   ll_c <- -Inf
   ll_t <- -Inf
+  dots <- list(...)
 
   if (nrow(control_data) > 1) {
     ll_c <- tryCatch(
-      loglik_hawk_fast(
+      do.call(loglik_hawk_fast, c(list(
         params = theta_c,
         realiz = control_data,
         windowT = windowT,
         windowS = statespace,
         zero_background_region = treated_state_space,
         background_rate_var = background_rate_var
-      ),
+      ), dots)),
       error = function(e) -Inf
     )
   }
 
   if (nrow(treated_data) > 1) {
     ll_t <- tryCatch(
-      loglik_hawk_fast(
+      do.call(loglik_hawk_fast, c(list(
         params = theta_t,
         realiz = treated_data,
         windowT = windowT,
         windowS = statespace,
         zero_background_region = control_state_space,
         background_rate_var = background_rate_var
-      ),
+      ), dots)),
       error = function(e) -Inf
     )
   }
@@ -108,7 +111,9 @@ louis_standard_errors <- function(sem_result,
                                   partition_processes,
                                   background_rate_var = NULL,
                                   alpha = 0.05,
-                                  verbose = TRUE) {
+                                  verbose = TRUE,
+                                  ...) {
+  dots <- list(...)
   if (!requireNamespace("numDeriv", quietly = TRUE)) {
     stop("Package 'numDeriv' is required for Louis's method. Install it with install.packages('numDeriv').")
   }
@@ -130,10 +135,12 @@ louis_standard_errors <- function(sem_result,
   control_state_space <- as.owin(partition[!treated_idx])
 
   log_weights <- sapply(labellings, function(lab) {
-    complete_data_loglik(
-      theta_hat, lab, treatment_time, statespace,
-      partition, partition_processes, background_rate_var
-    )
+    do.call(complete_data_loglik, c(list(
+      theta = theta_hat, labelling = lab, treatment_time = treatment_time,
+      statespace = statespace, partition = partition,
+      partition_processes = partition_processes,
+      background_rate_var = background_rate_var
+    ), dots))
   })
 
   log_weights <- log_weights - max(log_weights)
@@ -158,10 +165,12 @@ louis_standard_errors <- function(sem_result,
     lab_i <- labellings[[i]]
 
     ll_func <- function(th) {
-      complete_data_loglik(
-        th, lab_i, treatment_time, statespace,
-        partition, partition_processes, background_rate_var
-      )
+      do.call(complete_data_loglik, c(list(
+        theta = th, labelling = lab_i, treatment_time = treatment_time,
+        statespace = statespace, partition = partition,
+        partition_processes = partition_processes,
+        background_rate_var = background_rate_var
+      ), dots))
     }
 
     grads[[i]] <- tryCatch(

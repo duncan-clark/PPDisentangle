@@ -151,6 +151,7 @@ adaptive_SEM <- function(pp_data,
   em_iter <- 0
   counter <- 0
   adaptive_counter <- 0
+  adaptive_history <- list()
 
   pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
   post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
@@ -210,6 +211,10 @@ adaptive_SEM <- function(pp_data,
         counter <- 0
       }
       adaptive_counter <- adaptive_counter + 1
+      adaptive_history[[adaptive_counter]] <- list(
+        max_metric_flips = adapt$max_metric_flips,
+        average_flips = adapt$average_flips
+      )
     }
     raw_weights <- do.call(calculate_weights, c(list(
       labellings = labellings,
@@ -306,12 +311,20 @@ adaptive_SEM <- function(pp_data,
   t_main_sem_end <- proc.time()[3]
 
   print(paste0("Total time taken for SEM: ", signif(proc.time()[3] - t_global, 2)))
+  adaptive_summary <- list(
+    accuracies = adapt$accuracies,
+    average_flips = adapt$average_flips,
+    max_metric_flips = adapt$max_metric_flips,
+    metrics = adapt$metrics,
+    class_results = adapt$class_results
+  )
   return(list(
     hawkes_params_control = c_params[[length(c_params)]],
     hawkes_params_treated = t_params[[length(t_params)]],
     t_params = t_params,
     labellings = labellings,
-    adaptive = adapt,
+    adaptive = adaptive_summary,
+    adaptive_history = adaptive_history,
     time = proc.time()[3] - t_global,
     time_main_sem = t_main_sem_end - t_main_sem_start
   ))

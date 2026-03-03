@@ -22,6 +22,9 @@ library(raster)
 # Background: inhomogeneous KDE via bw.diggle on all non-IPD cases.
 #
 # QUICK_TEST: if TRUE, use tiny maxit/iters (all radii still run)
+#
+# Output: RDS with list(results=df, adaptive_by_radius=list, config=list).
+# Use res$results for the data.frame. Run gambia_radii_plots.R for visualizations.
 
 QUICK_TEST     <- FALSE  # set TRUE for fast local iteration
 MIN_POST_CASES <- 15     # skip radius if either partition has fewer cases
@@ -137,10 +140,14 @@ normalize_marks_gambia <- function(df_sub, win_sub, covariate_im, mark_name = "W
 
 run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA,
                          starts = VANILLA_STARTS, maxit = VANILLA_MAXIT,
-                         t_trunc = T_TRUNC) {
-  if (nrow(df) < 5) return(NULL)
+                         t_trunc = T_TRUNC, verbose_fail = TRUE) {
+  if (nrow(df) < 5) {
+    if (verbose_fail) cat(sprintf("    [%s] too few points: n=%d\n", label, nrow(df)))
+    return(NULL)
+  }
   fp <- if (!is.null(fixed_beta)) list(beta = fixed_beta) else NULL
   best_fit <- NULL; best_val <- -Inf
+  n_err <- 0L; n_bad_ll <- 0L; n_bad_par <- 0L; last_fit <- NULL
   for (i in seq_along(starts)) {
     fit <- tryCatch(
       suppressWarnings(fit_hawkes(
@@ -148,16 +155,33 @@ run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA,
         windowS = win, background_rate_var = "W", maxit = maxit,
         use_fast = TRUE, method = "Nelder-Mead", fixed_params = fp,
         t_trunc = t_trunc)),
-      error = function(e) { cat(sprintf("    [%s start %d] %s\n", label, i, e$message)); NULL }
+      error = function(e) { if (verbose_fail) cat(sprintf("    [%s start %d] error: %s\n", label, i, e$message)); NULL }
     )
-    if (is.null(fit) || !is.finite(fit$value) || fit$value <= -1e14) next
-    pars <- as.numeric(unlist(fit$par))
-    if (length(pars) == 4L && all(is.finite(pars)) && pars[4] >= 0 && pars[4] < 0.999 && fit$value > best_val) {
-      best_val <- fit$value
-      best_fit <- fit
+    if (is.null(fit)) { n_err <- n_err + 1L; next }
+    if (!is.finite(fit$value) || fit$value <= -1e14) {
+      n_bad_ll <- n_bad_ll + 1L
+      last_fit <- fit
+      next
     }
+    pars <- as.numeric(unlist(fit$par))
+    if (length(pars) != 4L || !all(is.finite(pars)) || pars[4] < 0 || pars[4] >= 0.999) {
+      n_bad_par <- n_bad_par + 1L
+      last_fit <- fit
+      next
+    }
+    if (fit$value > best_val) { best_val <- fit$value; best_fit <- fit }
   }
-  if (is.null(best_fit)) return(NULL)
+  if (is.null(best_fit)) {
+    if (verbose_fail)
+      cat(sprintf("    [%s] all %d starts failed: %d err, %d bad_ll, %d bad_par%s\n",
+          label, length(starts), n_err, n_bad_ll, n_bad_par,
+          if (!is.null(last_fit))
+            sprintf(" | last: ll=%.2g K=%.4f par_len=%d",
+                last_fit$value, as.numeric(unlist(last_fit$par))[4],
+                length(as.numeric(unlist(last_fit$par))))
+          else ""))
+    return(NULL)
+  }
   pars <- as.numeric(unlist(best_fit$par))
   names(pars) <- c("mu", "alpha", "beta", "K")
   cat(sprintf("    [%s] best ll=%.1f | %s\n", label,
@@ -198,6 +222,8 @@ estimate_savings_simple <- function(p_ctrl, p_trtd, m_ctrl, m_trtd, m_target, du
 # Radii Study
 # =========================================================
 results_list <- list()
+adaptive_by_radius <- list()
+louis_by_radius <- list()
 skipped <- character()
 t_study_start <- proc.time()[3]
 
@@ -312,6 +338,33 @@ for (r_km in RADII_KM) {
   cat(sprintf("  SEM done: K_trt=%.3f K_ctrl=%.3f%s\n", sem_trtd[["K"]], sem_ctrl[["K"]],
       if (!sem_valid_ctrl || !sem_valid_trtd) " [DEGENERATE]" else ""))
 
+  adaptive_by_radius[[as.character(r_km)]] <- list(
+    history = sem_res$adaptive_history,
+    n_post = n_post_t + n_post_c
+  )
+
+  # --- Louis SEs for SEM (for delta-method / sampling-based ATE CIs) ---
+  if (sem_valid_ctrl && sem_valid_trtd) {
+    louis_res <- tryCatch(
+      louis_standard_errors(
+        sem_res, TREATMENT_TIME, win_full,
+        tess(tiles = list("control" = control_ss, "treated" = treated_ss)),
+        c("control", "treated"),
+        background_rate_var = "W",
+        verbose = FALSE,
+        t_trunc = T_TRUNC
+      ),
+      error = function(e) { cat(sprintf("  Louis ERROR: %s\n", e$message)); NULL }
+    )
+    if (!is.null(louis_res) && !any(is.na(louis_res$se))) {
+      louis_by_radius[[as.character(r_km)]] <- list(
+        vcov = louis_res$vcov,
+        theta_hat = c(unlist(sem_ctrl), unlist(sem_trtd)),
+        se = louis_res$se
+      )
+    }
+  }
+
   # --- Savings ---
   duration_post <- STUDY_END - TREATMENT_TIME
   total_m <- res_pre_trtd$mass + res_pre_ctrl$mass
@@ -367,5 +420,11 @@ if (length(results_list) == 0) {
         row.names = FALSE)
 }
 
-saveRDS(final_results, OUT_FILE)
-cat(sprintf("\nSaved to %s\n", OUT_FILE))
+results_full <- list(
+  results = final_results,
+  adaptive_by_radius = adaptive_by_radius,
+  louis_by_radius = louis_by_radius,
+  config = list(TEMPORAL_MODE = TEMPORAL_MODE, FIXED_BETA = FIXED_BETA, T_TRUNC = T_TRUNC)
+)
+saveRDS(results_full, OUT_FILE)
+cat(sprintf("\nSaved to %s (results + adaptive_history)\n", OUT_FILE))
