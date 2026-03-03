@@ -975,6 +975,8 @@ generate_inhomogeneous_hawkes <- function(Omega,
   }
 
   dots <- list(...)
+  dots_no_trunc <- dots
+  dots_no_trunc$t_trunc <- NULL
   has_covariate <- !is.null(dots$covariate_lookup) && is.function(dots$covariate_lookup)
   filt_by_proc_precomputed <- dots$filt_by_proc
 
@@ -985,10 +987,10 @@ generate_inhomogeneous_hawkes <- function(Omega,
     hp <- hawkes_params[[p]]
     if (hp$mu < 1e-10) next
     tmp_hp <- hp; tmp_hp$K <- 0
-    ev <- sim_hawkes_fast(
+    ev <- do.call(sim_hawkes_fast, c(list(
       params = tmp_hp, windowT = time_window, windowS = state_spaces[[k]],
-      background_realization = NULL, filtration = NULL, t_trunc = t_trunc, ...
-    )
+      background_realization = NULL, filtration = NULL, t_trunc = t_trunc
+    ), dots_no_trunc))
     n_ev <- length(ev$x)
     if (n_ev == 0) next
     all_bg_x[[p]] <- ev$x
@@ -1028,11 +1030,11 @@ generate_inhomogeneous_hawkes <- function(Omega,
       bg_realization <- list(x = all_bg_x[[p]], y = all_bg_y[[p]], t = all_bg_t[[p]])
     }
 
-    new_events <- sim_hawkes_fast(
+    new_events <- do.call(sim_hawkes_fast, c(list(
       params = hawkes_params[[p]], windowT = time_window, windowS = Omega,
       background_realization = bg_realization,
-      filtration = f, t_trunc = t_trunc, ...
-    )
+      filtration = f, t_trunc = t_trunc
+    ), dots_no_trunc))
     n_new <- length(new_events$t)
     if (n_new == 0) next
 
