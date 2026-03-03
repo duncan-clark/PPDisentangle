@@ -14,20 +14,26 @@ library(raster)
 # Configuration
 # =========================================================
 #
+# Non-IPD placebo analysis: fit Hawkes to non-IPD (pneumococcal
+# surveillance) cases using IPD cases for the background rate.
+# We expect NO treatment effect on non-IPD cases, so this serves
+# as a negative control for the IPD radii study.
+#
+# To keep computation tractable we randomly sample N_SAMPLE cases
+# pre- and post-treatment from the full non-IPD pool.
+#
 # Two modes controlled by TEMPORAL_MODE:
 #   "fixed_beta" - fix beta=0.05, no truncation (default)
 #   "truncated"  - free beta, truncate kernel at TRUNC_DAYS
 #
-# Data: IPD cases for estimation, non-IPD cases for background rate.
-# Background: inhomogeneous KDE via bw.diggle on all non-IPD cases.
-#
-# QUICK_TEST: if TRUE, use tiny maxit/iters (all radii still run)
+# Background: inhomogeneous KDE via bw.diggle on all IPD cases.
 #
 # Output: RDS with list(results=df, adaptive_by_radius=list, config=list).
-# Use res$results for the data.frame. Run gambia_radii_plots.R for visualizations.
 
 QUICK_TEST     <- FALSE  # set TRUE for fast local iteration
 MIN_POST_CASES <- 15     # skip radius if either partition has fewer cases
+N_SAMPLE       <- 1000   # random sample size pre and post treatment
+SAMPLE_SEED    <- 2024
 
 TEMPORAL_MODE   <- "fixed_beta"   # "fixed_beta" or "truncated"
 TREATMENT_DATE  <- as_datetime("2011-05-01")
@@ -43,11 +49,11 @@ if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
 if (TEMPORAL_MODE == "fixed_beta") {
   FIXED_BETA <- 0.05
   T_TRUNC    <- NULL
-  OUT_FILE   <- file.path(OUT_DIR, "gambia_radii_results.rds")
+  OUT_FILE   <- file.path(OUT_DIR, "gambia_radii_results_nonIPD.rds")
 } else {
   FIXED_BETA <- NULL
   T_TRUNC    <- TRUNC_DAYS
-  OUT_FILE   <- file.path(OUT_DIR, sprintf("gambia_radii_results_trunc%d.rds", TRUNC_DAYS))
+  OUT_FILE   <- file.path(OUT_DIR, sprintf("gambia_radii_results_nonIPD_trunc%d.rds", TRUNC_DAYS))
 }
 
 RADII_KM <- c(seq(0.5, 3.0, by = 0.5), seq(4, 10, by = 1), seq(12, 20, by = 2))
@@ -74,10 +80,12 @@ SEM_UPDATE_STARTING      <- TRUE
 # Data Loading
 # =========================================================
 gambia_all <- dget(system.file("extdata/gambia/DISCLEAN.txt", package = "PPDisentangle"))
-gambia_data <- gambia_all %>% filter(IPDEvent == "Y")
+gambia_ipd <- gambia_all %>% filter(IPDEvent == "Y")
 
-TREATMENT_TIME <- as.numeric(as.Date(TREATMENT_DATE) - min(as.Date(gambia_data$date_IPD_Pne_Event)))
-STUDY_END <- as.numeric(max(as.Date(gambia_data$date_IPD_Pne_Event)) - min(as.Date(gambia_data$date_IPD_Pne_Event)))
+# Time origin and study window aligned with the IPD study
+TREATMENT_TIME <- as.numeric(as.Date(TREATMENT_DATE) - min(as.Date(gambia_ipd$date_IPD_Pne_Event)))
+STUDY_END <- as.numeric(max(as.Date(gambia_ipd$date_IPD_Pne_Event)) - min(as.Date(gambia_ipd$date_IPD_Pne_Event)))
+t0 <- min(as.Date(gambia_ipd$date_IPD_Pne_Event))
 
 win_orig <- dget(system.file("extdata/gambia/GAMWIN_PROJ.txt", package = "PPDisentangle"))
 S <- diag(c(1000, 1000)); t <- c(0, 0)
@@ -91,18 +99,35 @@ coords_all <- crds(v_all_utm)
 gambia_all$easting <- coords_all[,1]
 gambia_all$northing <- coords_all[,2]
 
-pp_data_full <- data.frame(
-  x = gambia_all$easting[gambia_all$IPDEvent == "Y"],
-  y = gambia_all$northing[gambia_all$IPDEvent == "Y"],
-  t = as.numeric(as.Date(gambia_all$date_IPD_Pne_Event[gambia_all$IPDEvent == "Y"])) -
-      min(as.numeric(as.Date(gambia_data$date_IPD_Pne_Event))),
-  IPD = TRUE
-)
-pp_data_full <- pp_data_full[inside.owin(pp_data_full$x, pp_data_full$y, win_full),]
-pp_data_full$t <- pp_data_full$t - min(pp_data_full$t)
-pp_data_full <- pp_data_full %>% filter(t <= STUDY_END)
+# =========================================================
+# Build non-IPD point pattern with random subsample
+# =========================================================
+non_ipd_all <- gambia_all %>% filter(IPDEvent == "N")
+non_ipd_all <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_full), ]
 
-# Jitter exact duplicates once upfront
+pp_nonipd_full <- data.frame(
+  x = non_ipd_all$easting,
+  y = non_ipd_all$northing,
+  t = as.numeric(as.Date(non_ipd_all$date_IPD_Pne_Event)) - as.numeric(t0),
+  IPD = FALSE
+)
+pp_nonipd_full <- pp_nonipd_full[inside.owin(pp_nonipd_full$x, pp_nonipd_full$y, win_full), ]
+pp_nonipd_full$t <- pp_nonipd_full$t - min(pp_nonipd_full$t)
+pp_nonipd_full <- pp_nonipd_full %>% filter(t <= STUDY_END)
+
+pre_idx  <- which(pp_nonipd_full$t <  TREATMENT_TIME)
+post_idx <- which(pp_nonipd_full$t >= TREATMENT_TIME)
+cat(sprintf("Non-IPD pool: %d pre-treatment, %d post-treatment\n", length(pre_idx), length(post_idx)))
+
+set.seed(SAMPLE_SEED)
+n_pre_sample  <- min(N_SAMPLE, length(pre_idx))
+n_post_sample <- min(N_SAMPLE, length(post_idx))
+sampled_pre  <- pre_idx[sample.int(length(pre_idx),   n_pre_sample)]
+sampled_post <- post_idx[sample.int(length(post_idx), n_post_sample)]
+pp_data_full <- pp_nonipd_full[sort(c(sampled_pre, sampled_post)), ]
+cat(sprintf("Sampled: %d pre + %d post = %d non-IPD cases\n", n_pre_sample, n_post_sample, nrow(pp_data_full)))
+
+# Jitter exact duplicates
 dups <- duplicated(pp_data_full[, c("x", "y", "t")])
 if (any(dups)) {
   set.seed(42)
@@ -111,21 +136,20 @@ if (any(dups)) {
   pp_data_full$x[dup_idx] <- pp_data_full$x[dup_idx] + runif(n_dup, -0.1, 0.1)
   pp_data_full$y[dup_idx] <- pp_data_full$y[dup_idx] + runif(n_dup, -0.1, 0.1)
   pp_data_full$t[dup_idx] <- pp_data_full$t[dup_idx] + runif(n_dup, -0.01, 0.01)
-  cat(sprintf("Jittered %d duplicate IPD points\n", n_dup))
+  cat(sprintf("Jittered %d duplicate non-IPD points\n", n_dup))
 }
 
-non_ipd_all <- gambia_all %>% filter(IPDEvent == "N")
-non_ipd_all <- non_ipd_all[inside.owin(non_ipd_all$easting, non_ipd_all$northing, win_full), ]
-
 # =========================================================
-# Background KDE (computed once -- same non-IPD window for all radii)
+# Background KDE (from IPD cases -- reversed role)
 # =========================================================
-X_bg <- ppp(x = non_ipd_all$easting, y = non_ipd_all$northing, window = win_full)
+ipd_all <- gambia_all %>% filter(IPDEvent == "Y")
+ipd_all <- ipd_all[inside.owin(ipd_all$easting, ipd_all$northing, win_full), ]
+X_bg <- ppp(x = ipd_all$easting, y = ipd_all$northing, window = win_full)
 bw_sigma <- suppressWarnings(bw.diggle(X_bg))
 lambda_im <- density(X_bg, sigma = bw_sigma, edge = TRUE, at = "pixels")
 min_nz <- min(lambda_im$v[lambda_im$v > 0], na.rm = TRUE)
 lambda_im$v[lambda_im$v <= 0] <- min_nz
-cat(sprintf("Background KDE: %d non-IPD points, bw=%.1f m\n", non_ipd_all %>% nrow(), as.numeric(bw_sigma)))
+cat(sprintf("Background KDE: %d IPD points, bw=%.1f m\n", nrow(ipd_all), as.numeric(bw_sigma)))
 
 # =========================================================
 # Helper Functions
@@ -234,11 +258,11 @@ louis_by_radius <- list()
 skipped <- character()
 t_study_start <- proc.time()[3]
 
-cat(sprintf("\nRadii study: %s | %d radii | beta=%s | t_trunc=%s | quick=%s\n",
+cat(sprintf("\nNon-IPD radii study: %s | %d radii | beta=%s | t_trunc=%s | quick=%s | N=%d per period\n",
     TEMPORAL_MODE, length(RADII_KM),
     if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
     if (is.null(T_TRUNC)) "none" else sprintf("%d days", T_TRUNC),
-    QUICK_TEST))
+    QUICK_TEST, N_SAMPLE))
 
 for (r_km in RADII_KM) {
   r_m <- r_km * 1000
@@ -350,7 +374,7 @@ for (r_km in RADII_KM) {
     n_post = n_post_t + n_post_c
   )
 
-  # --- Louis SEs for SEM (for delta-method / sampling-based ATE CIs) ---
+  # --- Louis SEs for SEM ---
   if (sem_valid_ctrl && sem_valid_trtd) {
     louis_res <- tryCatch(
       louis_standard_errors(
@@ -403,7 +427,7 @@ elapsed_total <- round((proc.time()[3] - t_study_start) / 60, 1)
 # =========================================================
 # Results
 # =========================================================
-cat(sprintf("\n=== RESULTS: %s | beta=%s | t_trunc=%s | %.1f min | %d/%d radii ===\n",
+cat(sprintf("\n=== NON-IPD RESULTS: %s | beta=%s | t_trunc=%s | %.1f min | %d/%d radii ===\n",
     TEMPORAL_MODE,
     if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
     if (is.null(T_TRUNC)) "none" else sprintf("%d", T_TRUNC),
@@ -431,7 +455,8 @@ results_full <- list(
   results = final_results,
   adaptive_by_radius = adaptive_by_radius,
   louis_by_radius = louis_by_radius,
-  config = list(TEMPORAL_MODE = TEMPORAL_MODE, FIXED_BETA = FIXED_BETA, T_TRUNC = T_TRUNC)
+  config = list(TEMPORAL_MODE = TEMPORAL_MODE, FIXED_BETA = FIXED_BETA, T_TRUNC = T_TRUNC,
+                N_SAMPLE = N_SAMPLE, SAMPLE_SEED = SAMPLE_SEED, data_type = "nonIPD")
 )
 saveRDS(results_full, OUT_FILE)
 cat(sprintf("\nSaved to %s (results + adaptive_history)\n", OUT_FILE))

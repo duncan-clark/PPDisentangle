@@ -11,3 +11,6 @@ cluster_output/
 inst/sim_study/worker_log.txt
 inst/sim_study/sim_*_progress.txt
 inst/sim_study/tmp_prof.out
+
+# Gambia study output
+inst/gambia/output/

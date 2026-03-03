@@ -20,7 +20,14 @@ library(lubridate)
 # =========================================================
 # Configuration
 # =========================================================
-RESULTS_FILE <- "gambia_radii_results.rds"
+SCRIPT_DIR <- tryCatch(
+  dirname(normalizePath(sys.frame(1)$ofile)),
+  error = function(e) getwd()
+)
+OUT_DIR <- file.path(SCRIPT_DIR, "output")
+if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
+
+RESULTS_FILE <- file.path(OUT_DIR, "gambia_radii_results.rds")
 BOOTSTRAP_B  <- 50   # set higher (e.g. 200) for production
 BOOTSTRAP_SEED <- 12345
 
@@ -117,24 +124,26 @@ estimate_savings_simple <- function(p_ctrl, p_trtd, m_ctrl, m_trtd, m_target, du
 }
 
 # =========================================================
-# Viz 1: % points changed over SEM iterations (all radii)
+# Viz 1: Cumulative points changed over SEM adaptive steps (per radius)
 # =========================================================
 build_flips_df <- function(adaptive_by_radius) {
   rows <- list()
   for (r_km in names(adaptive_by_radius)) {
     info <- adaptive_by_radius[[r_km]]
     n_post <- info$n_post
+    global_iter <- 0L
+    cum_flips <- 0
     for (a in seq_along(info$history)) {
       adapt <- info$history[[a]]
       if (is.null(adapt$max_metric_flips)) next
-      n_inner <- length(adapt$max_metric_flips)
-      for (i in seq_len(n_inner)) {
-        pct_changed <- 100 * adapt$max_metric_flips[i] / n_post
+      for (i in seq_along(adapt$max_metric_flips)) {
+        global_iter <- global_iter + 1L
+        cum_flips <- cum_flips + adapt$max_metric_flips[i]
         rows[[length(rows) + 1]] <- data.frame(
           radius_km = as.numeric(r_km),
-          adapt_step = a,
-          inner_iter = i,
-          pct_changed = pct_changed,
+          iteration = global_iter,
+          cum_changed = cum_flips,
+          cum_pct = 100 * cum_flips / n_post,
           n_post = n_post
         )
       }
@@ -146,19 +155,23 @@ build_flips_df <- function(adaptive_by_radius) {
 
 flips_df <- build_flips_df(adaptive_by_radius)
 if (!is.null(flips_df)) {
-  p1 <- ggplot(flips_df, aes(x = inner_iter, y = pct_changed, group = interaction(radius_km, adapt_step))) +
-    geom_line(alpha = 0.5, linewidth = 0.4) +
-    stat_summary(aes(group = 1), fun = mean, geom = "line", color = "black", linewidth = 1.2) +
-    facet_wrap(~radius_km, scales = "free_y", ncol = 4) +
+  flips_df$radius_label <- paste0(flips_df$radius_km, " km")
+  flips_df$radius_label <- factor(flips_df$radius_label,
+    levels = paste0(sort(unique(flips_df$radius_km)), " km"))
+
+  p1 <- ggplot(flips_df, aes(x = iteration, y = cum_pct)) +
+    geom_line(linewidth = 0.8, color = "#377EB8") +
+    geom_point(size = 1.2, color = "#377EB8") +
+    facet_wrap(~radius_label, scales = "free_y", ncol = 4) +
     labs(
-      title = "Percentage of post-treatment points with changed label over SEM inner iterations",
-      subtitle = "All radii combined; black line = mean across radii",
-      x = "Inner iteration", y = "% points changed"
+      title = "Cumulative label changes over SEM iterations",
+      subtitle = "Flattening indicates convergence of the labelling",
+      x = "Iteration", y = "Cumulative % points relabelled"
     ) +
     theme_minimal() +
-    theme(legend.position = "none")
-  ggsave("gambia_viz1_pct_changed.png", p1, width = 10, height = 8, dpi = 150)
-  cat("Saved gambia_viz1_pct_changed.png\n")
+    theme(strip.text = element_text(face = "bold"))
+  ggsave(file.path(OUT_DIR, "gambia_viz1_pct_changed.png"), p1, width = 10, height = 8, dpi = 150)
+  cat("Saved", file.path(OUT_DIR, "gambia_viz1_pct_changed.png"), "\n")
 } else {
   cat("No adaptive_history data for viz 1. Re-run radii study with updated package.\n")
 }
@@ -184,8 +197,8 @@ p2 <- ggplot(df_plot %>% filter(!is.na(savings_pct)), aes(x = radius_km, y = sav
   ) +
   theme_minimal() +
   theme(legend.position = "bottom")
-ggsave("gambia_viz2_radius_vs_ate.png", p2, width = 7, height = 5, dpi = 150)
-cat("Saved gambia_viz2_radius_vs_ate.png\n")
+ggsave(file.path(OUT_DIR, "gambia_viz2_radius_vs_ate.png"), p2, width = 7, height = 5, dpi = 150)
+cat("Saved", file.path(OUT_DIR, "gambia_viz2_radius_vs_ate.png"), "\n")
 
 # =========================================================
 # Viz 3: Parametric bootstrap for ATE + error bars
@@ -420,10 +433,10 @@ p3 <- ggplot(df_long, aes(x = x_dodge, y = savings_pct * 100, color = method)) +
   ) +
   theme_minimal() +
   theme(legend.position = "bottom")
-ggsave("gambia_viz3_radius_vs_ate_bootstrap.png", p3, width = 7, height = 5, dpi = 150)
-cat("Saved gambia_viz3_radius_vs_ate_bootstrap.png\n")
+ggsave(file.path(OUT_DIR, "gambia_viz3_radius_vs_ate_bootstrap.png"), p3, width = 7, height = 5, dpi = 150)
+cat("Saved", file.path(OUT_DIR, "gambia_viz3_radius_vs_ate_bootstrap.png"), "\n")
 
 saveRDS(list(boot_results = boot_results, boot_df = boot_df,
              louis_sem_results = louis_sem_results, louis_df = louis_df),
-        "gambia_bootstrap_results.rds")
-cat("Saved gambia_bootstrap_results.rds\n")
+        file.path(OUT_DIR, "gambia_bootstrap_results.rds"))
+cat("Saved", file.path(OUT_DIR, "gambia_bootstrap_results.rds"), "\n")
