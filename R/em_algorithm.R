@@ -316,7 +316,8 @@ adaptive_SEM <- function(pp_data,
     average_flips = adapt$average_flips,
     max_metric_flips = adapt$max_metric_flips,
     metrics = adapt$metrics,
-    class_results = adapt$class_results
+    class_results = adapt$class_results,
+    adaptive_labelling = adapt$adaptive_labelling
   )
   return(list(
     hawkes_params_control = c_params[[length(c_params)]],

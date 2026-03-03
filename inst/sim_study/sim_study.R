@@ -25,6 +25,11 @@ args <- commandArgs(trailingOnly = TRUE)
 SMALL <- "--small" %in% args
 FORCE_CLUSTER <- "--cluster" %in% args
 
+# Parse --sims N from command line (e.g. run_sim_study.sh --sims 100)
+sims_arg <- grep("^--sims$", args)
+N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
+  as.numeric(args[sims_arg + 1L]) else NULL
+
 # Cluster config: when running under SLURM or when --cluster is passed (e.g. interactive on login node)
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
@@ -81,7 +86,11 @@ if (ON_CLUSTER) {
   SAVE_DIR <- getwd()
 }
 
-# Environment overrides (for cluster or shell script)
+# Environment and CLI overrides (for cluster or shell script)
+if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
+  N_SIMS <- N_SIMS_ARG
+  SIM_SIZE <- N_SIMS_ARG
+}
 if (nzchar(Sys.getenv("CORES_OVERRIDE"))) {
   N_CORES <- as.numeric(Sys.getenv("CORES_OVERRIDE"))
 }
@@ -103,13 +112,38 @@ TREAT_PROP <- 0.5
 TIME_INT   <- END_TIME - TREATMENT_TIME
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 
+# ------------------------------------------------------------------
+# Logging: timestamped messages to console and log file
+# ------------------------------------------------------------------
+LOG_DIR <- file.path(SAVE_DIR, "logs")
+dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
+LOG_FILE <- file.path(LOG_DIR, sprintf("sim_study_%s.log", format(Sys.time(), "%Y%m%d_%H%M%S")))
+log_con <- file(LOG_FILE, open = "wt")
+on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
+log_msg <- function(...) {
+  msg <- paste0(...)
+  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  line <- sprintf("[%s] %s\n", ts, msg)
+  cat(line)
+  if (isOpen(log_con)) cat(line, file = log_con)
+}
+log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
+  if (is.null(n_done) || is.null(n_total) || n_total <= 0) {
+    log_msg(sprintf("%s: %.1f s", phase, elapsed_sec))
+  } else {
+    eta_sec <- if (n_done > 0) (elapsed_sec / n_done) * (n_total - n_done) else NA
+    log_msg(sprintf("%s: %.1f s (done %d/%d, ETA %.0f s)", phase, elapsed_sec, n_done, n_total, eta_sec))
+  }
+}
+
 cat("=== Simulation Study Config ===\n")
-cat("  Mode:", if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL", "\n")
-cat("  Cores:", N_CORES, " Sims:", SIM_SIZE, "\n")
-cat("  Omega:", OMEGA, " T:", END_TIME, " t*:", TREATMENT_TIME, "\n")
-cat("  Grid:", NX, "x", NY, "\n")
-cat("  Save:", SAVE_DIR, "\n")
-cat("  EM-style: iter=", EM_ITER, " n_props=10 | SEM adaptive: iter=", SEM_EM_ADAPTIVE_ITER, " n_props=10 | SEM full: N_iter=", SEM_N_ITER, " N_labellings=", SEM_N_LABELLINGS, "\n", sep = "")
+log_msg("Mode:", if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
+log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
+log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
+log_msg("Grid:", NX, "x", NY)
+log_msg("Save:", SAVE_DIR)
+log_msg("Log file:", LOG_FILE)
+log_msg("EM-style: iter=", EM_ITER, " n_props=10 | SEM adaptive: iter=", SEM_EM_ADAPTIVE_ITER, " n_props=10 | SEM full: N_iter=", SEM_N_ITER, " N_labellings=", SEM_N_LABELLINGS)
 cat("===============================\n")
 
 # ------------------------------------------------------------------
@@ -165,7 +199,7 @@ if (partition_processes[1] == "treated") {
   state_spaces <- list(control_state_space, treated_state_space)
 }
 
-cat("True all/nothing ATE:", round(all_nothing_ATE, 4), "\n")
+log_msg("True all/nothing ATE:", round(all_nothing_ATE, 4))
 
 # Create cluster now that all globals are defined
 cl <- make_cluster(N_CORES)
@@ -174,7 +208,7 @@ export_globals(cl)
 # ------------------------------------------------------------------
 # 2. Compute true average one-flip ATE
 # ------------------------------------------------------------------
-cat("Computing true tau_i ... ")
+log_msg("Computing true tau_i ...")
 t0 <- proc.time()[3]
 tau_i_estim <- parSapply(cl = cl, X = 1:partition$n, FUN = function(i) {
   tau_i(i,
@@ -185,13 +219,13 @@ tau_i_estim <- parSapply(cl = cl, X = 1:partition$n, FUN = function(i) {
   )
 })
 true_tau_1 <- mean(tau_i_estim)
-cat(round(proc.time()[3] - t0, 1), "s\n")
-cat("True one-flip ATE:", round(true_tau_1, 4), "\n")
+log_elapsed("True tau_i", proc.time()[3] - t0)
+log_msg("True one-flip ATE:", round(true_tau_1, 4))
 
 # ------------------------------------------------------------------
 # 3. Generate observed data
 # ------------------------------------------------------------------
-cat("Generating", SIM_SIZE, "observed datasets ... ")
+log_msg("Generating", SIM_SIZE, "observed datasets ...")
 t0 <- proc.time()[3]
 set.seed(123)
 obs_data <- lapply(1:SIM_SIZE, function(i) {
@@ -219,13 +253,13 @@ obs_data <- lapply(1:SIM_SIZE, function(i) {
   shared_cols <- intersect(names(pre_df), names(post_df))
   rbind(pre_df[, shared_cols], post_df[, shared_cols])
 })
-cat(round(proc.time()[3] - t0, 1), "s\n")
-cat("Points per sim:", paste(sapply(obs_data, nrow), collapse = ", "), "\n")
+log_elapsed("Data generation", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
+log_msg("Points per sim:", paste(sapply(obs_data, nrow), collapse = ", "))
 
 # ------------------------------------------------------------------
 # 4. Baseline labellings (oracle + naive)
 # ------------------------------------------------------------------
-cat("Computing oracle and naive labellings ...\n")
+log_msg("Computing oracle and naive labellings ...")
 pp_labeled_oracle <- lapply(obs_data, function(s) {
   pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME) %>%
     mutate(inferred_process = "control", location_process = "control")
@@ -243,7 +277,7 @@ pp_labeled_naive <- lapply(obs_data, function(s) {
 # ------------------------------------------------------------------
 # 5. Labelling proposals
 # ------------------------------------------------------------------
-cat("Generating", N_PROPOSALS, "labelling proposals per sim ... ")
+log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
 t0 <- proc.time()[3]
 labelling_proposals <- lapply(obs_data, function(s) {
   pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME)
@@ -266,7 +300,7 @@ labelling_proposals <- lapply(obs_data, function(s) {
     }, error = function(e) NULL)
   }))
 })
-cat(round(proc.time()[3] - t0, 1), "s\n")
+log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
 pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
   props <- labelling_proposals[[i]]
@@ -282,7 +316,7 @@ pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
 # ------------------------------------------------------------------
 # 6. EM-style labelling
 # ------------------------------------------------------------------
-cat("Running EM-style labelling ... ")
+log_msg("Running EM-style labelling ...")
 t0 <- proc.time()[3]
 run_em <- function(x) {
   total_points <- sum(x$location_process == "treated" & x$t >= TREATMENT_TIME)
@@ -309,14 +343,14 @@ if (N_CORES > 1 && !SMALL) {
 } else {
   EM_max_style <- lapply(obs_data, run_em)
 }
-cat(round(proc.time()[3] - t0, 1), "s\n")
+log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
 pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
 
 # ------------------------------------------------------------------
 # 7. Adaptive SEM
 # ------------------------------------------------------------------
-cat("Running adaptive SEM ... ")
+log_msg("Running adaptive SEM ...")
 t0 <- proc.time()[3]
 run_sem <- function(dat) {
   total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
@@ -352,7 +386,7 @@ if (N_CORES > 1 && !SMALL) {
 } else {
   EM_results <- lapply(obs_data, run_sem)
 }
-cat(round(proc.time()[3] - t0, 1), "s\n")
+log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
 # ------------------------------------------------------------------
 # 8. Assemble all labellings
@@ -368,7 +402,8 @@ labellings <- list(
 # ------------------------------------------------------------------
 # 9. Classification accuracy summary
 # ------------------------------------------------------------------
-cat("\n=== Classification Accuracy ===\n")
+log_msg("")
+log_msg("=== Classification Accuracy ===")
 class_metrics <- lapply(names(labellings), function(nm) {
   accs <- sapply(labellings[[nm]], function(y) {
     keep <- which(y$t > TREATMENT_TIME)
@@ -383,7 +418,7 @@ print(class_metrics)
 # ------------------------------------------------------------------
 # 10. ATE estimation
 # ------------------------------------------------------------------
-cat("Estimating ATEs ... ")
+log_msg("Estimating ATEs ...")
 t0 <- proc.time()[3]
 
 tasks <- list()
@@ -429,7 +464,7 @@ task_function <- function(task) {
 
 results_flat <- parLapply(cl, tasks, fun = task_function)
 stopCluster(cl)
-cat(round(proc.time()[3] - t0, 1), "s\n")
+log_elapsed("ATE estimation", proc.time()[3] - t0, length(tasks), length(tasks))
 
 # ------------------------------------------------------------------
 # 11. Collect and save results
@@ -449,7 +484,8 @@ results_df <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
   )
 }))
 
-cat("\n=== ATE Results ===\n")
+log_msg("")
+log_msg("=== ATE Results ===")
 if (!is.null(results_df) && nrow(results_df) > 0) {
   summary_df <- results_df %>%
     group_by(.data$labelling) %>%
@@ -462,16 +498,18 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
     )
   print(summary_df)
 } else {
-  cat("No valid ATE results (all tasks timed out or errored).\n")
+  log_msg("No valid ATE results (all tasks timed out or errored).")
 }
 
-cat("\nTrue all/nothing ATE:", round(all_nothing_ATE, 4), "\n")
-cat("True one-flip ATE:  ", round(true_tau_1, 4), "\n")
+log_msg("")
+log_msg("True all/nothing ATE:", round(all_nothing_ATE, 4))
+log_msg("True one-flip ATE:  ", round(true_tau_1, 4))
 
 # ------------------------------------------------------------------
 # 12. Create ggplots (as in old sim study) and save as elements of results
 # ------------------------------------------------------------------
-cat("\nBuilding plots ... ")
+log_msg("")
+log_msg("Building plots ...")
 sim_study_plots <- list()
 
 # Point pattern plots (first realization)
@@ -639,20 +677,24 @@ if (exists("EM_results") && length(EM_results) > 0) {
   # Extract accuracies from each simulation run
   # EM_results is a list of results from run_sem (adaptive_SEM)
   acc_list <- lapply(seq_along(EM_results), function(i) {
+    acc <- EM_results[[i]]$adaptive$accuracies
+    if (is.null(acc) || length(acc) == 0) return(NULL)
     data.frame(
-      iteration = 1:length(EM_results[[i]]$accuracies),
-      accuracy = EM_results[[i]]$accuracies,
+      iteration = seq_along(acc),
+      accuracy = acc,
       sim_id = i
     )
   })
-  acc_df <- do.call(rbind, acc_list)
-  
-  # Calculate mean accuracy per iteration
-  mean_acc_df <- acc_df %>%
-    group_by(iteration) %>%
-    summarize(mean_accuracy = mean(accuracy, na.rm = TRUE), .groups = "drop")
-  
-  sim_study_plots$plot_em_accuracy_iters <- ggplot() +
+  acc_list <- Filter(Negate(is.null), acc_list)
+  acc_df <- if (length(acc_list) > 0) do.call(rbind, acc_list) else NULL
+
+  if (!is.null(acc_df) && nrow(acc_df) > 0) {
+    # Calculate mean accuracy per iteration
+    mean_acc_df <- acc_df %>%
+      group_by(iteration) %>%
+      summarize(mean_accuracy = mean(accuracy, na.rm = TRUE), .groups = "drop")
+
+    sim_study_plots$plot_em_accuracy_iters <- ggplot() +
     # Individual runs in gray
     geom_line(data = acc_df, aes(x = iteration, y = accuracy, group = sim_id), 
               color = "gray80", alpha = 0.5) +
@@ -663,11 +705,12 @@ if (exists("EM_results") && length(EM_results) > 0) {
          subtitle = "Gray lines: individual runs; Red line: mean accuracy",
          x = "Iteration", y = "Accuracy") +
     theme_minimal()
+  }
 }
 
-cat("done.\n")
-cat("Plots stored in sim_study_plots:", paste(names(sim_study_plots), collapse = ", "), "\n")
-cat("  To print combined param plots after load: x <- readRDS(...); x$plots$draw_control_params_combined(); x$plots$draw_treated_params_combined()\n")
+log_msg("Plots done.")
+log_msg("Plots stored in sim_study_plots:", paste(names(sim_study_plots), collapse = ", "))
+log_msg("  To print combined param plots after load: x <- readRDS(...); x$plots$draw_control_params_combined(); x$plots$draw_treated_params_combined()")
 
 # ------------------------------------------------------------------
 # 13. Timing report and save results (including plots)
@@ -706,7 +749,7 @@ sim_study_results <- list(
 dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
 outfile <- file.path(SAVE_DIR, paste0("sim_study_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".rds"))
 saveRDS(sim_study_results, outfile)
-cat("Results saved to:", outfile, "\n")
+log_msg("Results saved to:", outfile)
 
 # Write timing report to a text file (for cluster logs and quick inspection)
 timing_txt <- file.path(SAVE_DIR, paste0("sim_study_timing_", if (ON_CLUSTER) Sys.getenv("SLURM_JOB_ID", "cluster") else "local", ".txt"))
@@ -719,4 +762,6 @@ writeLines(c(
   paste("Cores:    ", timing_report$n_cores),
   paste("Sim size: ", timing_report$sim_size)
 ), timing_txt)
-cat("Timing report written to:", timing_txt, "\n")
+log_msg("Timing report written to:", timing_txt)
+log_msg("=== TOTAL ELAPSED:", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), "min) ===")
+close(log_con)

@@ -29,7 +29,7 @@ PP_CPUS="$PP_SIMS"
 # ---- If on login node, submit via sbatch and exit ----
 if [ -z "$SLURM_JOB_ID" ]; then
     cd "$PP_PKG_ROOT"
-    mkdir -p cluster_output_profiled/logs
+    mkdir -p cluster_output/logs
 
     echo "Pulling latest code..."
     git pull origin main
@@ -39,19 +39,19 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Submitting SLURM job: $PP_SIMS sims, $PP_CPUS cores"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$PP_CPUS" \
-        --output="cluster_output_profiled/logs/slurm_%j.out" \
-        --error="cluster_output_profiled/logs/slurm_%j.err" \
+        --output="cluster_output/logs/slurm_%j.out" \
+        --error="cluster_output/logs/slurm_%j.err" \
         --export=PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS \
         "$PP_SCRIPT_DIR/run_sim_study.sh")
 
     echo "Job $JOB_ID submitted"
-    echo "  tail -f cluster_output_profiled/logs/slurm_${JOB_ID}.out"
+    echo "  tail -f cluster_output/logs/slurm_${JOB_ID}.out"
     exit 0
 fi
 
 # ---- Inside SLURM job ----
 cd "$PP_PKG_ROOT"
-mkdir -p cluster_output_profiled/logs
+mkdir -p cluster_output/logs
 
 echo "=== PPDisentangle Sim Study ==="
 echo "Job $SLURM_JOB_ID | $(date)"
@@ -69,6 +69,6 @@ module load PROJ 2>/dev/null || true
 echo "Rscript: $(which Rscript)"
 echo ""
 
-Rscript "$PP_SCRIPT_DIR/sim_study_profile.R" --cluster --sims "$PP_SIMS"
+Rscript "$PP_SCRIPT_DIR/sim_study.R" --cluster --sims "$PP_SIMS"
 
 echo "=== Done $(date) ==="

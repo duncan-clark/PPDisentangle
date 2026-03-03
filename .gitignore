@@ -5,3 +5,9 @@ src/*.dll
 .Rhistory
 .RData
 .Ruserdata
+
+# Sim study generated files
+cluster_output/
+inst/sim_study/worker_log.txt
+inst/sim_study/sim_*_progress.txt
+inst/sim_study/tmp_prof.out

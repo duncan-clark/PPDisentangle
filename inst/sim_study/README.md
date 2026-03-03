@@ -2,9 +2,9 @@
 
 ## Entry points (use these only)
 
-- **Unified R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags.
-- **Shell (local or login node):** `run_sim_study.sh` — pull, install, then runs `sim_study.R`; use `--cluster` on the cluster so config matches batch jobs.
-- **Batch (NeSI):** `run_PPDisentangle_sim.slurm` — submits a SLURM job that runs the study in cluster mode.
+- **Unified R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N` for number of simulations.
+- **Shell (local or login node):** `run_sim_study.sh` — when not in SLURM, submits itself via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--sims 100` (default) or `--sims 50` etc.
+- **Consistency study:** `consistency_study.R` — sanity check for Hawkes fit (run locally).
 
 ## Why "Mode: LOCAL" on the cluster?
 
@@ -20,11 +20,15 @@ Rscript inst/sim_study/sim_study.R --cluster
 
 Then you’ll see `Mode: CLUSTER` and the same settings as in the SLURM job.
 
-## Old files in this directory
+## Logging and output
 
-If you still see **`sim_study_cluster.R`**, **`sim_study_local.R`**, or **`sim_study.slurm`** in the main `inst/sim_study/` folder (not in `deprecated/`), your clone is out of date or the move into `deprecated/` wasn’t applied there. Do **not** run those scripts.
+- **Log file:** `cluster_output/logs/sim_study_YYYYMMDD_HHMMSS.log` — timestamped messages, phase timings, and ETA estimates.
+- **Results:** `cluster_output/sim_study_results_*.rds` — full results and plots.
+- **SLURM logs:** `cluster_output/logs/slurm_*.out` and `slurm_*.err` when run via sbatch.
 
-- **Correct layout:** only `sim_study.R`, `run_sim_study.sh`, and `run_PPDisentangle_sim.slurm` (and docs) at top level; legacy scripts live in `deprecated/`.
+## Old files in deprecated/
+
+Legacy and profiling scripts live in `deprecated/`. Do **not** run those. Use `sim_study.R` and `run_sim_study.sh` only.
 - **On the cluster:** after `git pull`, if the old files still appear at top level, remove or move them so you only use `sim_study.R` and the run scripts above.
 
 ## Why is adaptive SEM slower than EM-style (same iter/n_props)?
