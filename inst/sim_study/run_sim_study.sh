@@ -39,7 +39,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     cd "$PP_PKG_ROOT"
     
     # Generate a unique RUN_ID for this run
-    RUN_ID=$(date +"%Y%m%d_%H%M%S")
+    RUN_ID=$(date +"%Y-%m-%d_%H-%M-%S")
     RUN_DIR="$PP_PKG_ROOT/cluster_output/logs/$RUN_ID"
     mkdir -p "$RUN_DIR"
 

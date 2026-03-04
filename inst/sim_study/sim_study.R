@@ -132,7 +132,7 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 # ------------------------------------------------------------------
 # Use RUN_ID from environment (set by shell script) or generate new one
 RUN_ID <- Sys.getenv("PP_RUN_ID", "")
-if (RUN_ID == "") RUN_ID <- format(Sys.time(), "%Y%m%d_%H%M%S")
+if (RUN_ID == "") RUN_ID <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
 
 LOG_DIR <- file.path(SAVE_DIR, "logs", RUN_ID)
 dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
