@@ -37,41 +37,50 @@ PP_CPUS="$PP_SIMS"
 # ---- If on login node, submit via sbatch and exit ----
 if [ -z "$SLURM_JOB_ID" ]; then
     cd "$PP_PKG_ROOT"
-    LOG_DIR="$PP_PKG_ROOT/cluster_output/logs"
-    mkdir -p "$LOG_DIR"
+    
+    # Generate a unique RUN_ID for this run
+    RUN_ID=$(date +"%Y%m%d_%H%M%S")
+    RUN_DIR="$PP_PKG_ROOT/cluster_output/logs/$RUN_ID"
+    mkdir -p "$RUN_DIR"
 
     echo "Pulling latest code..."
     git pull origin main
 
-    export PP_SCRIPT_DIR PP_PKG_ROOT PP_SIMS="$PP_SIMS" PP_CPUS="$PP_CPUS" PP_TEST="$PP_TEST"
+    export PP_SCRIPT_DIR PP_PKG_ROOT PP_SIMS="$PP_SIMS" PP_CPUS="$PP_CPUS" PP_TEST="$PP_TEST" PP_RUN_ID="$RUN_ID"
     # Pass ATE_SEQUENTIAL=1 to avoid OOM during ATE estimation (sequential, lower memory)
     [ -n "$ATE_SEQUENTIAL" ] && export ATE_SEQUENTIAL
 
     echo "Submitting SLURM job: $PP_SIMS sims, $PP_CPUS cores${PP_TEST:+ (test mode)}"
-    echo "Logs: $LOG_DIR/sim_study_*.log and slurm_*.out"
-    SBATCH_EXPORT="PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS,PP_TEST"
+    echo "Run ID: $RUN_ID"
+    echo "Logs: $RUN_DIR"
+    
+    SBATCH_EXPORT="PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS,PP_TEST,PP_RUN_ID"
     [ -n "$ATE_SEQUENTIAL" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL"
+    
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$PP_CPUS" \
-        --output="$LOG_DIR/slurm_%j.out" \
-        --error="$LOG_DIR/slurm_%j.err" \
+        --output="$RUN_DIR/slurm_%j.out" \
+        --error="$RUN_DIR/slurm_%j.err" \
         --export="$SBATCH_EXPORT" \
         "$PP_SCRIPT_DIR/run_sim_study.sh")
 
     echo "Job $JOB_ID submitted"
-    echo "  tail -f $LOG_DIR/slurm_${JOB_ID}.out"
+    echo "  tail -f $RUN_DIR/slurm_${JOB_ID}.out"
     exit 0
 fi
 
 # ---- Inside SLURM job ----
 cd "$PP_PKG_ROOT"
-LOG_DIR="$PP_PKG_ROOT/cluster_output/logs"
+# Use provided RUN_ID or fallback to timestamp
+RUN_ID="${PP_RUN_ID:-$(date +"%Y%m%d_%H%M%S")}"
+LOG_DIR="$PP_PKG_ROOT/cluster_output/logs/$RUN_ID"
 mkdir -p "$LOG_DIR"
 
 echo "=== PPDisentangle Sim Study ==="
 echo "Job $SLURM_JOB_ID | $(date)"
+echo "Run ID: $RUN_ID"
 echo "Sims: $PP_SIMS | Cores: $PP_CPUS"
-echo "Logs: $LOG_DIR (sim_study_*.log, slurm_*.out)"
+echo "Logs: $LOG_DIR"
 echo "Pkg root: $PP_PKG_ROOT"
 echo ""
 

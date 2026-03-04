@@ -130,9 +130,13 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 # ------------------------------------------------------------------
 # Logging: timestamped messages to console and log file
 # ------------------------------------------------------------------
-LOG_DIR <- file.path(SAVE_DIR, "logs")
+# Use RUN_ID from environment (set by shell script) or generate new one
+RUN_ID <- Sys.getenv("PP_RUN_ID", "")
+if (RUN_ID == "") RUN_ID <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+LOG_DIR <- file.path(SAVE_DIR, "logs", RUN_ID)
 dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
-LOG_FILE <- file.path(LOG_DIR, sprintf("sim_study_%s.log", format(Sys.time(), "%Y%m%d_%H%M%S")))
+LOG_FILE <- file.path(LOG_DIR, "sim_study.log")
 log_con <- file(LOG_FILE, open = "wt")
 on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
 log_msg <- function(...) {
@@ -811,12 +815,12 @@ sim_study_results <- list(
 )
 
 dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
-outfile <- file.path(SAVE_DIR, paste0("sim_study_results_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".rds"))
+outfile <- file.path(LOG_DIR, "results.rds")
 saveRDS(sim_study_results, outfile)
 log_msg("Results saved to:", outfile)
 
 # Write timing report to a text file (for cluster logs and quick inspection)
-timing_txt <- file.path(SAVE_DIR, paste0("sim_study_timing_", if (ON_CLUSTER) Sys.getenv("SLURM_JOB_ID", "cluster") else "local", ".txt"))
+timing_txt <- file.path(LOG_DIR, "timing.txt")
 writeLines(c(
   "PPDisentangle simulation study timing",
   paste("Start:    ", timing_report$start_iso),
