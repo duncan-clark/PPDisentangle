@@ -140,18 +140,12 @@ adaptive_SEM <- function(pp_data,
     ))
   }
 
-  check_weights <- function(w) {
-    w <- w / sum(w)
-    w <- sort(w)
-    top_5_perc <- sum(w[floor(length(w) * 0.95):length(w)])
-    return(top_5_perc > 0.95)
-  }
-
   weights <- rep(1, N_labellings)
   em_iter <- 0
   counter <- 0
   adaptive_counter <- 0
   adaptive_history <- list()
+  baseline_adaptive_labelling <- NULL
 
   pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
   post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
@@ -185,30 +179,30 @@ adaptive_SEM <- function(pp_data,
     if (verbose) {
       cat(sprintf("\n--- SEM Outer Iteration %d / %d ---\n", counter + 1, N_iter))
     }
-    if (check_weights(weights) == TRUE | adaptive_counter == 0) {
-      if (verbose) {
-        if (adaptive_counter == 0) {
-          cat("[SEM] Initial adaptive step starting...\n")
-        } else {
-          cat("[SEM] Weight concentration detected, running adaptive step...\n")
-        }
-      }
+    if (adaptive_counter == 0) {
+      if (verbose) cat("[SEM] Initial adaptive step (runs once)...\n")
       t_adapt_start <- proc.time()[3]
-      if (adaptive_counter != 0) {
-        adapt <- adaptive_step(starting_data = labellings[[which.max(weights)]])
-      } else {
-        adapt <- adaptive_step(starting_data = starting_data)
-      }
+      adapt <- adaptive_step(starting_data = starting_data)
       if (verbose) cat(sprintf("[SEM] Adaptive step complete (took %.1fs)\n", proc.time()[3] - t_adapt_start))
-      
+      baseline_adaptive_labelling <- adapt$adaptive_labelling
       c_params <- adapt$control_par
       t_params <- adapt$treated_par
-      
-      if (verbose) cat(sprintf("[SEM] Generating %d new labellings...\n", N_labellings))
+      adaptive_counter <- 1
+      adaptive_history[[1]] <- list(
+        max_metric_flips = adapt$max_metric_flips,
+        average_flips = adapt$average_flips
+      )
+    }
+    if (reset && adaptive_counter > 0) {
+      if (verbose) cat("[SEM] Resetting outer counter to 0\n")
+      counter <- 0
+    }
+    if (!is.null(baseline_adaptive_labelling)) {
+      if (verbose) cat(sprintf("[SEM] Generating %d labellings from baseline...\n", N_labellings))
       t_gen_start <- proc.time()[3]
       labellings <- lapply(1:N_labellings, function(i) {
         simulation_labeling_hawkes_hawkes_fast(
-          adapt$adaptive_labelling,
+          baseline_adaptive_labelling,
           partition = partition, partition_process = partition_processes,
           statespace = statespace,
           state_spaces = adaptive_control$state_spaces,
@@ -220,16 +214,6 @@ adaptive_SEM <- function(pp_data,
         )
       })
       if (verbose) cat(sprintf("[SEM] Labelling generation complete (took %.1fs)\n", proc.time()[3] - t_gen_start))
-      
-      if (reset) {
-        if (verbose) cat("[SEM] Resetting outer counter to 0\n")
-        counter <- 0
-      }
-      adaptive_counter <- adaptive_counter + 1
-      adaptive_history[[adaptive_counter]] <- list(
-        max_metric_flips = adapt$max_metric_flips,
-        average_flips = adapt$average_flips
-      )
     }
     
     if (verbose) cat("[SEM] Calculating importance weights...\n")
@@ -337,7 +321,7 @@ adaptive_SEM <- function(pp_data,
     max_metric_flips = adapt$max_metric_flips,
     metrics = adapt$metrics,
     class_results = adapt$class_results,
-    adaptive_labelling = adapt$adaptive_labelling
+    adaptive_labelling = if (!is.null(baseline_adaptive_labelling)) baseline_adaptive_labelling else adapt$adaptive_labelling
   )
   return(list(
     hawkes_params_control = c_params[[length(c_params)]],
