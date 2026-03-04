@@ -182,18 +182,30 @@ adaptive_SEM <- function(pp_data,
 
   t_main_sem_start <- proc.time()[3]
   while (counter < N_iter) {
-    if (verbose) print(paste0("doing iteration ", counter))
+    if (verbose) {
+      cat(sprintf("\n--- SEM Outer Iteration %d / %d ---\n", counter + 1, N_iter))
+    }
     if (check_weights(weights) == TRUE | adaptive_counter == 0) {
-      print("running adaptive step")
+      if (verbose) {
+        if (adaptive_counter == 0) {
+          cat("[SEM] Initial adaptive step starting...\n")
+        } else {
+          cat("[SEM] Weight concentration detected, running adaptive step...\n")
+        }
+      }
+      t_adapt_start <- proc.time()[3]
       if (adaptive_counter != 0) {
         adapt <- adaptive_step(starting_data = labellings[[which.max(weights)]])
       } else {
         adapt <- adaptive_step(starting_data = starting_data)
       }
-      print("adaptive step complete!")
+      if (verbose) cat(sprintf("[SEM] Adaptive step complete (took %.1fs)\n", proc.time()[3] - t_adapt_start))
+      
       c_params <- adapt$control_par
       t_params <- adapt$treated_par
-      print("generating labellings")
+      
+      if (verbose) cat(sprintf("[SEM] Generating %d new labellings...\n", N_labellings))
+      t_gen_start <- proc.time()[3]
       labellings <- lapply(1:N_labellings, function(i) {
         simulation_labeling_hawkes_hawkes_fast(
           adapt$adaptive_labelling,
@@ -207,7 +219,10 @@ adaptive_SEM <- function(pp_data,
           filtration = pre, proximity_weight = 0, verbose = FALSE, ...
         )
       })
+      if (verbose) cat(sprintf("[SEM] Labelling generation complete (took %.1fs)\n", proc.time()[3] - t_gen_start))
+      
       if (reset) {
+        if (verbose) cat("[SEM] Resetting outer counter to 0\n")
         counter <- 0
       }
       adaptive_counter <- adaptive_counter + 1
@@ -216,6 +231,9 @@ adaptive_SEM <- function(pp_data,
         average_flips = adapt$average_flips
       )
     }
+    
+    if (verbose) cat("[SEM] Calculating importance weights...\n")
+    t_weights_start <- proc.time()[3]
     raw_weights <- do.call(calculate_weights, c(list(
       labellings = labellings,
       treat_par = unlist(t_params[[length(t_params)]]),
@@ -223,8 +241,10 @@ adaptive_SEM <- function(pp_data,
     ), dots_no_trunc))
     keepers <- which(raw_weights != 0 & !is.na(raw_weights) & is.finite(raw_weights))
     if (verbose) {
-      cat(sprintf("\n[Outer iter %d] raw weights: %s\n", counter,
-                  paste(signif(raw_weights, 4), collapse = ", ")))
+      cat(sprintf("[SEM] Weight calculation complete (took %.1fs)\n", proc.time()[3] - t_weights_start))
+      cat(sprintf("  raw weights range: [%.2g, %.2g]\n", 
+                  if(length(raw_weights)>0) min(raw_weights, na.rm=T) else NA, 
+                  if(length(raw_weights)>0) max(raw_weights, na.rm=T) else NA))
       cat(sprintf("  keepers: %d / %d labellings\n", length(keepers), length(labellings)))
     }
     if (length(keepers) == 0) {
