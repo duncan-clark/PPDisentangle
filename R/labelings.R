@@ -739,6 +739,9 @@ em_style_labelling <- function(pp_data,
 
   fits <- list()
   labelling_proposals <- list()
+  total_sampling <- 0
+  total_likelihood <- 0
+  total_param_update <- 0
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
@@ -791,6 +794,7 @@ em_style_labelling <- function(pp_data,
       class_func(d_post)
     }))
     t_samp <- proc.time()[3] - t_samp
+    total_sampling <- total_sampling + t_samp
 
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
@@ -869,13 +873,12 @@ em_style_labelling <- function(pp_data,
       max_metric_labelling <- labelling_proposals[[which.max(metric)]]
     }
     t_lik <- proc.time()[3] - t_lik
+    total_likelihood <- total_likelihood + t_lik
 
     if (!is.null(param_update_cadence)) {
       if ((i %% param_update_cadence) == 0 | i == iter) {
-        if (verbose) {
-          print("Updating Hawkes Parameters")
-          t_hawkes <- proc.time()[3]
-        }
+        t_param_start <- proc.time()[3]
+        if (verbose) print("Updating Hawkes Parameters")
 
         mml_post <- max_metric_labelling[is_post, ]
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
@@ -940,11 +943,12 @@ em_style_labelling <- function(pp_data,
           fits[[i]] <- res_t$fit
           treated_par[[length(treated_par) + 1]] <- res_t$par_list
         }
+        total_param_update <- total_param_update + (proc.time()[3] - t_param_start)
         if (verbose) {
           print("Estimated Hawkes Params")
           print("treated:"); print(unlist(treated_par[[length(treated_par)]]))
           print("control:"); print(unlist(control_par[[length(control_par)]]))
-          print(paste0("Updating hawkes params on iteration ", i, " took ", signif(proc.time()[3] - t_hawkes, 2)))
+          print(paste0("Updating hawkes params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
         }
       }
     }
@@ -996,7 +1000,13 @@ em_style_labelling <- function(pp_data,
     accuracies = accuracies, average_flips = average_flips,
     max_metric_flips = max_metric_flips, metrics = metric_vec,
     all_accuracies = all_accuracies, all_metrics = all_metrics,
-    class_results = class_results, fits = fits
+    class_results = class_results, fits = fits,
+    timing = list(
+      n_iter = iter,
+      sampling_s = total_sampling,
+      likelihood_s = total_likelihood,
+      param_update_s = total_param_update
+    )
   ))
 }
 

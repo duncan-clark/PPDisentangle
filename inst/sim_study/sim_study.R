@@ -147,6 +147,12 @@ log_msg <- function(...) {
   cat(line)
   if (isOpen(log_con)) cat(line, file = log_con)
 }
+log_file_only <- function(...) {
+  msg <- paste0(...)
+  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  line <- sprintf("[%s] %s\n", ts, msg)
+  if (isOpen(log_con)) cat(line, file = log_con)
+}
 log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
   if (is.null(n_done) || is.null(n_total) || n_total <= 0) {
     log_msg(sprintf("%s: %.1f s", phase, elapsed_sec))
@@ -360,6 +366,16 @@ if (N_CORES > 1 && !SMALL) {
   EM_max_style <- lapply(obs_data, run_em)
 }
 log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
+
+# Log EM-style summary per sim: accuracy, n_iters, timing (log file only)
+log_file_only("EM-style per-sim: accuracy | n_iter | sampling_s | likelihood_s | param_update_s")
+for (k in seq_along(EM_max_style)) {
+  r <- EM_max_style[[k]]
+  acc <- if (length(r$accuracies) > 0) r$accuracies[length(r$accuracies)] else NA_real_
+  t <- r$timing
+  log_file_only(sprintf("  sim %d: %.3f | %d | %.1f | %.1f | %.1f",
+    k, acc, t$n_iter, t$sampling_s, t$likelihood_s, t$param_update_s))
+}
 
 pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
 
