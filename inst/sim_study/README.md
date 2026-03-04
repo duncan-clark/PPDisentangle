@@ -2,8 +2,8 @@
 
 ## Entry points (use these only)
 
-- **Unified R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N` for number of simulations.
-- **Shell (local or login node):** `run_sim_study.sh` — when not in SLURM, submits itself via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--sims 100` (default) or `--sims 50` etc.
+- **Unified R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N` for number of simulations, `--test` for quick-test mode.
+- **Shell (local or login node):** `run_sim_study.sh` — when not in SLURM, submits itself via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--sims 100` (default), `--sims 50`, or `--test --sims 2` for a quick machinery check (10 iters, 2 sims/cores).
 - **Consistency study:** `consistency_study.R` — sanity check for Hawkes fit (run locally).
 
 ## Why "Mode: LOCAL" on the cluster?

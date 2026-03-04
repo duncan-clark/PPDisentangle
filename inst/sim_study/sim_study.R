@@ -5,6 +5,7 @@
 #   Local:   Rscript sim_study.R [--small]
 #   Cluster (batch): sbatch run_PPDisentangle_sim.slurm
 #   Cluster (interactive): Rscript sim_study.R --cluster   (or run_sim_study.sh --cluster)
+#   Quick-test: Rscript sim_study.R --test [--sims N]   (10 iters, 2 sims/cores default; verifies machinery)
 
 library(PPDisentangle)
 library(spatstat)
@@ -14,7 +15,6 @@ library(data.table)
 library(parallel)
 library(doParallel)
 library(R.utils)
-library(caret)
 library(reshape2)
 library(gridExtra)
 library(scales)
@@ -24,6 +24,7 @@ time_start_global <- proc.time()[3]
 args <- commandArgs(trailingOnly = TRUE)
 SMALL <- "--small" %in% args
 FORCE_CLUSTER <- "--cluster" %in% args
+TEST <- "--test" %in% args
 
 # Parse --sims N from command line (e.g. run_sim_study.sh --sims 100)
 sims_arg <- grep("^--sims$", args)
@@ -33,7 +34,26 @@ N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
 # Cluster config: when running under SLURM or when --cluster is passed (e.g. interactive on login node)
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
-if (ON_CLUSTER) {
+if (TEST) {
+  # Quick-test mode: 10 iters for everything, minimal sims to verify machinery (logging, parallel, etc.)
+  n_test <- if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) N_SIMS_ARG else 2L
+  N_CORES      <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
+  SIM_SIZE     <- n_test
+  N_SIMS       <- n_test
+  N_TAU_SIMS   <- 10
+  N_TAU_I      <- 10
+  N_TAU_I_TRUE <- 10
+  N_PROPOSALS  <- 10
+  EM_ITER      <- 10
+  SEM_EM_ADAPTIVE_ITER <- 10
+  SEM_N_ITER   <- 10
+  SEM_N_LABELLINGS <- 10
+  OMEGA        <- c(0, 100, 0, 100)
+  END_TIME     <- 110
+  TREATMENT_TIME <- 10
+  NX <- 10; NY <- 10
+  SAVE_DIR     <- file.path(getwd(), "cluster_output")
+} else if (ON_CLUSTER) {
   N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "16"))
   SIM_SIZE     <- N_CORES
   N_SIMS       <- 100
@@ -137,7 +157,7 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
 }
 
 cat("=== Simulation Study Config ===\n")
-log_msg("Mode:", if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
+log_msg("Mode:", if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
 log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
 log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
 log_msg("Grid:", NX, "x", NY)
@@ -154,11 +174,7 @@ make_cluster <- function(n_cores) {
   registerDoParallel(cl)
   clusterEvalQ(cl, {
     library(PPDisentangle)
-    library(spatstat)
-    library(data.table)
-    library(dplyr)
     library(R.utils)
-    library(caret)
   })
   return(cl)
 }

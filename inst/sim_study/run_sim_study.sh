@@ -16,14 +16,20 @@ fi
 if [ -z "$PP_PKG_ROOT" ]; then
     PP_PKG_ROOT="$(cd "$PP_SCRIPT_DIR/../.." && pwd)"
 fi
-# Parse --sims from command line (overrides env var)
+# Parse --sims and --test from command line (overrides env var)
+PP_TEST=""
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --sims) PP_SIMS="$2"; shift ;;
+        --sims) PP_SIMS="$2"; shift 2 ;;
+        --test) PP_TEST="--test"; shift ;;
+        *) shift ;;
     esac
-    shift
 done
-PP_SIMS="${PP_SIMS:-100}"
+if [ -n "$PP_TEST" ]; then
+    PP_SIMS="${PP_SIMS:-2}"
+else
+    PP_SIMS="${PP_SIMS:-100}"
+fi
 PP_CPUS="$PP_SIMS"
 
 # ---- If on login node, submit via sbatch and exit ----
@@ -34,12 +40,12 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Pulling latest code..."
     git pull origin main
 
-    export PP_SCRIPT_DIR PP_PKG_ROOT PP_SIMS="$PP_SIMS" PP_CPUS="$PP_CPUS"
+    export PP_SCRIPT_DIR PP_PKG_ROOT PP_SIMS="$PP_SIMS" PP_CPUS="$PP_CPUS" PP_TEST="$PP_TEST"
     # Pass ATE_SEQUENTIAL=1 to avoid OOM during ATE estimation (sequential, lower memory)
     [ -n "$ATE_SEQUENTIAL" ] && export ATE_SEQUENTIAL
 
-    echo "Submitting SLURM job: $PP_SIMS sims, $PP_CPUS cores"
-    SBATCH_EXPORT="PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS"
+    echo "Submitting SLURM job: $PP_SIMS sims, $PP_CPUS cores${PP_TEST:+ (test mode)}"
+    SBATCH_EXPORT="PP_SCRIPT_DIR,PP_PKG_ROOT,PP_SIMS,PP_CPUS,PP_TEST"
     [ -n "$ATE_SEQUENTIAL" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$PP_CPUS" \
@@ -73,6 +79,6 @@ module load PROJ 2>/dev/null || true
 echo "Rscript: $(which Rscript)"
 echo ""
 
-Rscript "$PP_SCRIPT_DIR/sim_study.R" --cluster --sims "$PP_SIMS"
+Rscript "$PP_SCRIPT_DIR/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST
 
 echo "=== Done $(date) ==="

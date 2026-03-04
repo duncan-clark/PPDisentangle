@@ -1,5 +1,4 @@
 #' @importFrom dplyr filter arrange pull group_by summarize bind_rows
-#' @importFrom caret confusionMatrix
 NULL
 
 #' Oracle labeling: use the true process labels
