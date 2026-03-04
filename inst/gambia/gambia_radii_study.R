@@ -70,6 +70,10 @@ SEM_CHANGE_FACTOR        <- 0.05
 SEM_INCLUDE_STARTING     <- TRUE
 SEM_UPDATE_STARTING      <- TRUE
 
+# Parallelization: use SLURM_CPUS_PER_TASK or GAMBIA_CORES when set
+N_CORES <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", Sys.getenv("GAMBIA_CORES", "1")))
+N_CORES <- max(1L, min(N_CORES, length(RADII_KM), parallel::detectCores()))
+
 # =========================================================
 # Data Loading
 # =========================================================
@@ -191,7 +195,7 @@ run_full_fit <- function(df, win, label, fixed_beta = FIXED_BETA,
   }
   pars <- as.numeric(unlist(best_fit$par))
   names(pars) <- c("mu", "alpha", "beta", "K")
-  cat(sprintf("    [%s] best ll=%.1f | %s\n", label,
+  if (verbose_fail) cat(sprintf("    [%s] best ll=%.1f | %s\n", label,
       best_val, paste(names(pars), signif(pars, 4), sep="=", collapse=" ")))
   return(as.list(pars))
 }
@@ -200,10 +204,10 @@ as_parlist <- function(p) {
   v <- as.numeric(p); names(v) <- c("mu", "alpha", "beta", "K"); as.list(v)
 }
 
-params_valid <- function(p, label = "") {
+params_valid <- function(p, label = "", quiet = FALSE) {
   K <- p[["K"]]; mu <- p[["mu"]]
   ok <- is.finite(K) && is.finite(mu) && K >= 0 && K < 0.999 && mu > 1e-12
-  if (!ok) cat(sprintf("    [%s] degenerate: mu=%.2e K=%.4f\n", label, mu, K))
+  if (!ok && !quiet) cat(sprintf("    [%s] degenerate: mu=%.2e K=%.4f\n", label, mu, K))
   ok
 }
 
@@ -228,23 +232,11 @@ estimate_savings_simple <- function(p_ctrl, p_trtd, m_ctrl, m_trtd, m_target, du
 # =========================================================
 # Radii Study
 # =========================================================
-results_list <- list()
-adaptive_by_radius <- list()
-louis_by_radius <- list()
-skipped <- character()
-t_study_start <- proc.time()[3]
+run_radius <- function(r_km) {
+  quiet <- (N_CORES > 1)
+  log <- function(...) if (!quiet) cat(..., "\n", sep = "")
 
-cat(sprintf("\nRadii study: %s | %d radii | beta=%s | t_trunc=%s | quick=%s\n",
-    TEMPORAL_MODE, length(RADII_KM),
-    if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
-    if (is.null(T_TRUNC)) "none" else sprintf("%d days", T_TRUNC),
-    QUICK_TEST))
-
-for (r_km in RADII_KM) {
   r_m <- r_km * 1000
-  t_radius_start <- proc.time()[3]
-  cat(sprintf("\n=== Radius: %.1f km ===\n", r_km))
-
   discs <- lapply(seq_len(npoints(hc)), function(i)
     disc(radius = r_m, centre = c(hc$x[i], hc$y[i]), npoly = 128))
   treated_ss <- Reduce(union.owin, discs)
@@ -260,44 +252,31 @@ for (r_km in RADII_KM) {
   n_pre_c  <- sum(pp_study$t <  TREATMENT_TIME & pp_study$location_process == "control")
   n_post_t <- sum(pp_study$t >= TREATMENT_TIME & pp_study$location_process == "treated")
   n_post_c <- sum(pp_study$t >= TREATMENT_TIME & pp_study$location_process == "control")
-  cat(sprintf("  Pre: trt=%d ctrl=%d | Post: trt=%d ctrl=%d\n", n_pre_t, n_pre_c, n_post_t, n_post_c))
 
   if (n_post_t < MIN_POST_CASES || n_post_c < MIN_POST_CASES) {
-    cat(sprintf("  SKIP: too few post-treatment cases (min=%d)\n", MIN_POST_CASES))
-    skipped <- c(skipped, sprintf("%.1f km: too few cases (trt=%d ctrl=%d)", r_km, n_post_t, n_post_c))
-    next
+    return(list(skipped = sprintf("%.1f km: too few cases (trt=%d ctrl=%d)", r_km, n_post_t, n_post_c)))
   }
 
-  # Normalize marks per partition
   res_pre_trtd  <- normalize_marks_gambia(pp_study %>% filter(t <  TREATMENT_TIME, location_process == "treated"),  treated_ss, lambda_im)
   res_pre_ctrl  <- normalize_marks_gambia(pp_study %>% filter(t <  TREATMENT_TIME, location_process == "control"), control_ss, lambda_im)
   res_post_trtd <- normalize_marks_gambia(pp_study %>% filter(t >= TREATMENT_TIME, location_process == "treated"),  treated_ss, lambda_im)
   res_post_ctrl <- normalize_marks_gambia(pp_study %>% filter(t >= TREATMENT_TIME, location_process == "control"), control_ss, lambda_im)
 
-  # --- Vanilla Hawkes ---
-  cat("  Vanilla fits...\n")
-  vanilla_trtd <- run_full_fit(res_post_trtd$new_df, treated_ss, "Treated")
-  vanilla_ctrl <- run_full_fit(res_post_ctrl$new_df, control_ss, "Control")
+  vanilla_trtd <- run_full_fit(res_post_trtd$new_df, treated_ss, "Treated", verbose_fail = !quiet)
+  vanilla_ctrl <- run_full_fit(res_post_ctrl$new_df, control_ss, "Control", verbose_fail = !quiet)
   if (is.null(vanilla_trtd) || is.null(vanilla_ctrl)) {
-    cat(sprintf("  SKIP: vanilla fit failed (trt=%s ctrl=%s)\n",
-                if (is.null(vanilla_trtd)) "FAIL" else "ok",
-                if (is.null(vanilla_ctrl)) "FAIL" else "ok"))
-    skipped <- c(skipped, sprintf("%.1f km: vanilla fit failed", r_km))
-    next
+    return(list(skipped = sprintf("%.1f km: vanilla fit failed", r_km)))
   }
 
-  # --- SEM ---
-  cat("  SEM fit...\n")
   pp_sem <- rbind(res_pre_trtd$new_df, res_pre_ctrl$new_df,
                   res_post_trtd$new_df, res_post_ctrl$new_df)
-
   cov_lookup <- function(x, y) {
     rv <- as.numeric(spatstat.geom::interp.im(lambda_im, list(x = x, y = y)))
     rv[is.na(rv)] <- 0
     is_t <- inside.owin(x, y, treated_ss)
     rv[is_t]  <- rv[is_t]  * res_pre_trtd$norm
     rv[!is_t] <- rv[!is_t] * res_pre_ctrl$norm
-    return(rv)
+    rv
   }
 
   sem_res <- tryCatch(
@@ -329,28 +308,19 @@ for (r_km in RADII_KM) {
         verbose                  = FALSE
       )
     ),
-    error = function(e) { cat(sprintf("  SEM ERROR: %s\n", e$message)); NULL }
+    error = function(e) { if (!quiet) cat("  SEM ERROR:", e$message, "\n"); NULL }
   )
 
   if (is.null(sem_res)) {
-    cat("  SKIP: SEM failed\n")
-    skipped <- c(skipped, sprintf("%.1f km: SEM failed", r_km))
-    next
+    return(list(skipped = sprintf("%.1f km: SEM failed", r_km)))
   }
 
   sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
   sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
-  sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl")
-  sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd")
-  cat(sprintf("  SEM done: K_trt=%.3f K_ctrl=%.3f%s\n", sem_trtd[["K"]], sem_ctrl[["K"]],
-      if (!sem_valid_ctrl || !sem_valid_trtd) " [DEGENERATE]" else ""))
+  sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl", quiet = quiet)
+  sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd", quiet = quiet)
 
-  adaptive_by_radius[[as.character(r_km)]] <- list(
-    history = sem_res$adaptive_history,
-    n_post = n_post_t + n_post_c
-  )
-
-  # --- Louis SEs for SEM (for delta-method / sampling-based ATE CIs) ---
+  louis_entry <- NULL
   if (sem_valid_ctrl && sem_valid_trtd) {
     louis_res <- tryCatch(
       louis_standard_errors(
@@ -361,10 +331,10 @@ for (r_km in RADII_KM) {
         verbose = FALSE,
         t_trunc = T_TRUNC
       ),
-      error = function(e) { cat(sprintf("  Louis ERROR: %s\n", e$message)); NULL }
+      error = function(e) NULL
     )
     if (!is.null(louis_res) && !any(is.na(louis_res$se))) {
-      louis_by_radius[[as.character(r_km)]] <- list(
+      louis_entry <- list(
         vcov = louis_res$vcov,
         theta_hat = c(unlist(sem_ctrl), unlist(sem_trtd)),
         se = louis_res$se
@@ -372,18 +342,12 @@ for (r_km in RADII_KM) {
     }
   }
 
-  # --- Savings ---
   duration_post <- STUDY_END - TREATMENT_TIME
   total_m <- res_pre_trtd$mass + res_pre_ctrl$mass
   sav_vanilla <- estimate_savings_simple(vanilla_ctrl, vanilla_trtd, res_pre_ctrl$mass, res_pre_trtd$mass, total_m, duration_post)
   sav_sem     <- estimate_savings_simple(sem_ctrl, sem_trtd, res_pre_ctrl$mass, res_pre_trtd$mass, total_m, duration_post)
 
-  elapsed_radius <- round((proc.time()[3] - t_radius_start) / 60, 1)
-  v_pct_str <- if (is.na(sav_vanilla$pct)) "NA" else sprintf("%.1f%%", sav_vanilla$pct * 100)
-  s_pct_str <- if (is.na(sav_sem$pct))     "NA" else sprintf("%.1f%%", sav_sem$pct * 100)
-  cat(sprintf("  Savings: vanilla=%s sem=%s (%.1f min)\n", v_pct_str, s_pct_str, elapsed_radius))
-
-  results_list[[as.character(r_km)]] <- data.frame(
+  result_row <- data.frame(
     radius_km = r_km, n_post_trt = n_post_t, n_post_ctrl = n_post_c,
     vanilla_K_ctrl = vanilla_ctrl[["K"]], vanilla_K_trtd = vanilla_trtd[["K"]],
     vanilla_mu_ctrl = vanilla_ctrl[["mu"]], vanilla_mu_trtd = vanilla_trtd[["mu"]],
@@ -396,6 +360,44 @@ for (r_km in RADII_KM) {
     vanilla_savings_pct = sav_vanilla$pct, sem_savings_pct = sav_sem$pct,
     sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd
   )
+
+  list(
+    result_row = result_row,
+    adaptive_entry = list(history = sem_res$adaptive_history, n_post = n_post_t + n_post_c),
+    louis_entry = louis_entry
+  )
+}
+
+results_list <- list()
+adaptive_by_radius <- list()
+louis_by_radius <- list()
+skipped <- character()
+t_study_start <- proc.time()[3]
+
+cat(sprintf("\nRadii study: %s | %d radii | beta=%s | t_trunc=%s | quick=%s | cores=%d\n",
+    TEMPORAL_MODE, length(RADII_KM),
+    if (is.null(FIXED_BETA)) "free" else sprintf("%.3f", FIXED_BETA),
+    if (is.null(T_TRUNC)) "none" else sprintf("%d days", T_TRUNC),
+    QUICK_TEST, N_CORES))
+
+if (N_CORES > 1) {
+  radius_results <- parallel::mclapply(RADII_KM, run_radius, mc.cores = N_CORES)
+} else {
+  radius_results <- lapply(RADII_KM, run_radius)
+}
+
+for (k in seq_along(radius_results)) {
+  r_km <- RADII_KM[k]
+  res <- radius_results[[k]]
+  if (!is.null(res$skipped)) {
+    skipped <- c(skipped, res$skipped)
+  } else {
+    results_list[[as.character(r_km)]] <- res$result_row
+    adaptive_by_radius[[as.character(r_km)]] <- res$adaptive_entry
+    if (!is.null(res$louis_entry)) {
+      louis_by_radius[[as.character(r_km)]] <- res$louis_entry
+    }
+  }
 }
 
 elapsed_total <- round((proc.time()[3] - t_study_start) / 60, 1)
