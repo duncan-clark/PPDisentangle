@@ -52,7 +52,7 @@ if (TEST) {
   END_TIME     <- 110
   TREATMENT_TIME <- 10
   NX <- 10; NY <- 10
-  SAVE_DIR     <- file.path(getwd(), "cluster_output")
+  SAVE_DIR     <- file.path(if (nzchar(Sys.getenv("SLURM_JOB_ID"))) Sys.getenv("SLURM_SUBMIT_DIR", getwd()) else getwd(), "cluster_output")
 } else if (ON_CLUSTER) {
   N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "16"))
   SIM_SIZE     <- N_CORES
@@ -86,7 +86,7 @@ if (TEST) {
   END_TIME     <- 110
   TREATMENT_TIME <- 10
   NX <- 10; NY <- 10
-  SAVE_DIR <- getwd()
+  SAVE_DIR     <- file.path(getwd(), "cluster_output")
 } else {
   N_CORES      <- max(1, parallel::detectCores() - 1)
   SIM_SIZE     <- N_CORES
@@ -103,7 +103,7 @@ if (TEST) {
   END_TIME     <- 110
   TREATMENT_TIME <- 10
   NX <- 10; NY <- 10
-  SAVE_DIR <- getwd()
+  SAVE_DIR     <- file.path(getwd(), "cluster_output")
 }
 
 # Environment and CLI overrides (for cluster or shell script)
@@ -122,11 +122,6 @@ if (nzchar(Sys.getenv("N_SIMS_OVERRIDE"))) {
 if (nzchar(Sys.getenv("SIM_SIZE_OVERRIDE"))) {
   SIM_SIZE <- as.numeric(Sys.getenv("SIM_SIZE_OVERRIDE"))
 }
-# When running via run_sim_study.sh (local), save to cluster_output as well
-if (!ON_CLUSTER && nzchar(Sys.getenv("SAVE_TO_CLUSTER_OUTPUT")) &&
-    tolower(Sys.getenv("SAVE_TO_CLUSTER_OUTPUT")) %in% c("1", "true", "yes")) {
-  SAVE_DIR <- file.path(getwd(), "cluster_output")
-}
 
 TREAT_PROP <- 0.5
 TIME_INT   <- END_TIME - TREATMENT_TIME
@@ -144,7 +139,7 @@ log_msg <- function(...) {
   msg <- paste0(...)
   ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   line <- sprintf("[%s] %s\n", ts, msg)
-  cat(line)
+  if (!ON_CLUSTER) cat(line)
   if (isOpen(log_con)) cat(line, file = log_con)
 }
 log_file_only <- function(...) {
@@ -162,7 +157,7 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
   }
 }
 
-cat("=== Simulation Study Config ===\n")
+log_msg("=== Simulation Study Config ===")
 log_msg("Mode:", if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
 log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
 log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
@@ -170,7 +165,7 @@ log_msg("Grid:", NX, "x", NY)
 log_msg("Save:", SAVE_DIR)
 log_msg("Log file:", LOG_FILE)
 log_msg("EM-style: iter=", EM_ITER, " n_props=10 | SEM adaptive: iter=", SEM_EM_ADAPTIVE_ITER, " n_props=10 | SEM full: N_iter=", SEM_N_ITER, " N_labellings=", SEM_N_LABELLINGS)
-cat("===============================\n")
+log_msg("===============================")
 
 # ------------------------------------------------------------------
 # Helper: create a parallel cluster with PPDisentangle loaded
@@ -301,7 +296,7 @@ pp_labeled_naive <- lapply(obs_data, function(s) {
 # ------------------------------------------------------------------
 log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
 t0 <- proc.time()[3]
-labelling_proposals <- lapply(obs_data, function(s) {
+gen_proposals <- function(s) {
   pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME)
   post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
   pre$location_process <- "control"
@@ -321,7 +316,12 @@ labelling_proposals <- lapply(obs_data, function(s) {
       rbind(pre, tmp)
     }, error = function(e) NULL)
   }))
-})
+}
+if (N_CORES > 1 && !SMALL) {
+  labelling_proposals <- parLapply(cl = cl, X = obs_data, fun = gen_proposals)
+} else {
+  labelling_proposals <- lapply(obs_data, gen_proposals)
+}
 log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
 pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
@@ -445,7 +445,9 @@ class_metrics <- lapply(names(labellings), function(nm) {
   data.frame(method = nm, mean_accuracy = mean(accs, na.rm = TRUE))
 })
 class_metrics <- do.call(rbind, class_metrics)
-print(class_metrics)
+cm_out <- capture.output(print(class_metrics))
+for (line in cm_out) log_file_only(line)
+if (!ON_CLUSTER) print(class_metrics)
 
 # ------------------------------------------------------------------
 # 10. ATE estimation
