@@ -64,6 +64,13 @@ if [ -z "$SLURM_JOB_ID" ]; then
         --export="$SBATCH_EXPORT" \
         "$PP_SCRIPT_DIR/run_sim_study.sh")
 
+    # Create a symlink so the run can be found by Job ID
+    ln -sfn "$RUN_ID" "$PP_PKG_ROOT/cluster_output/logs/$JOB_ID"
+    # Create a symlink for the latest run
+    ln -sfn "$RUN_ID" "$PP_PKG_ROOT/cluster_output/logs/latest"
+    # Create a marker file with the Job ID inside the folder
+    echo "$JOB_ID" > "$RUN_DIR/slurm_id.txt"
+
     echo "Job $JOB_ID submitted"
     echo "  tail -f $RUN_DIR/slurm_${JOB_ID}.out"
     exit 0
