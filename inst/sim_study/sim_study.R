@@ -297,8 +297,9 @@ pp_labeled_naive <- lapply(obs_data, function(s) {
 log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
 t0 <- proc.time()[3]
 gen_proposals <- function(s) {
-  pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME)
-  post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
+  df <- as.data.frame(s)
+  pre  <- df[df$t < TREATMENT_TIME, , drop = FALSE]
+  post <- df[df$t >= TREATMENT_TIME, , drop = FALSE]
   pre$location_process <- "control"
   pre$inferred_process <- NULL
   Filter(Negate(is.null), lapply(1:N_PROPOSALS, function(i) {
