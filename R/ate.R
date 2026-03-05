@@ -33,44 +33,37 @@ tau_i <- function(i, partition, treated_partitions, statespace,
   minus_treated_state_space <- as.owin(partition[z_minus])
 
   if (partition_plus[1] == "treated") {
-    state_spaces <- list(plus_treated_state_space, plus_control_state_space)
+    state_spaces_plus <- list(plus_treated_state_space, plus_control_state_space)
   } else {
-    state_spaces <- list(plus_control_state_space, plus_treated_state_space)
+    state_spaces_plus <- list(plus_control_state_space, plus_treated_state_space)
   }
 
-  plus_sims <- lapply(1:n_sim, function(j) {
-    generate_inhomogeneous_hawkes(
+  if (partition_minus[1] == "treated") {
+    state_spaces_minus <- list(minus_treated_state_space, minus_control_state_space)
+  } else {
+    state_spaces_minus <- list(minus_control_state_space, minus_treated_state_space)
+  }
+
+  plus_total <- 0
+  minus_total <- 0
+  for (j in seq_len(n_sim)) {
+    pp <- generate_inhomogeneous_hawkes(
       Omega = statespace, partition = partition, time_window = windowT,
       partition_processes = partition_plus,
       hawkes_params = list(control = control_pp, treated = treated_pp),
-      state_spaces = state_spaces, space_triggering = FALSE
+      state_spaces = state_spaces_plus, space_triggering = FALSE
     )
-  })
+    plus_total <- plus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
 
-  if (partition_minus[1] == "treated") {
-    state_spaces <- list(plus_treated_state_space, plus_control_state_space)
-  } else {
-    state_spaces <- list(plus_control_state_space, plus_treated_state_space)
-  }
-
-  minus_sims <- lapply(1:n_sim, function(j) {
-    generate_inhomogeneous_hawkes(
+    pp <- generate_inhomogeneous_hawkes(
       Omega = statespace, partition = partition, time_window = windowT,
       partition_processes = partition_minus,
       hawkes_params = list(control = control_pp, treated = treated_pp),
-      state_spaces = state_spaces, space_triggering = FALSE
+      state_spaces = state_spaces_minus, space_triggering = FALSE
     )
-  })
-
-  plus_counts <- sapply(plus_sims, function(pp) {
-    inds <- as.numeric(tileindex(pp$x, pp$y, partition))
-    sum(inds == i)
-  })
-  minus_counts <- sapply(minus_sims, function(pp) {
-    inds <- as.numeric(tileindex(pp$x, pp$y, partition))
-    sum(inds == i)
-  })
-  return(mean(plus_counts) - mean(minus_counts))
+    minus_total <- minus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+  }
+  return(plus_total / n_sim - minus_total / n_sim)
 }
 
 #' Non-parametric ATE estimation from labeled data
@@ -161,24 +154,27 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
   partition_process <- rep("control", partition$n)
   partition_process[treated_idx] <- "treated"
 
-  tau_i_estim <- sapply(1:n_tau_i, function(j) {
+  tau_i_estim <- vapply(seq_len(n_tau_i), function(j) {
     tau_i(
       sample(length(partition_process), 1),
       partition = partition, treated_partitions = treated_partitions,
       statespace = statespace, windowT = windowT,
       control_pp = control_pp, treated_pp = treated_pp, n_sim = n_tau_sims
     )
-  })
+  }, numeric(1))
   tau_1_estim <- mean(tau_i_estim)
 
-  all_nothing_sim <- lapply(1:n_sims, function(n) {
-    control_sim <- sim_hawkes(control_pp, windowT, windowS = statespace)
-    treated_sim <- sim_hawkes(treated_pp, windowT, windowS = statespace)
-    c_mean <- control_sim$n[1] / partition$n
-    t_mean <- treated_sim$n[1] / partition$n
-    data.frame(c_mean = c_mean, t_mean = t_mean, ATE = t_mean - c_mean)
-  })
-  all_nothing_sim <- do.call(rbind, all_nothing_sim)
+  c_counts <- numeric(n_sims)
+  t_counts <- numeric(n_sims)
+  for (s in seq_len(n_sims)) {
+    c_counts[s] <- sim_hawkes(control_pp, windowT, windowS = statespace)$n[1]
+    t_counts[s] <- sim_hawkes(treated_pp, windowT, windowS = statespace)$n[1]
+  }
+  all_nothing_sim <- data.frame(
+    c_mean = c_counts / partition$n,
+    t_mean = t_counts / partition$n,
+    ATE = (t_counts - c_counts) / partition$n
+  )
 
   all_nothing_theory <- data.frame(
     c_mean = control_pp$mu * (windowT[2] - windowT[1]) * (1 / (1 - control_pp$K)) / partition$n,

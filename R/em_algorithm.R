@@ -213,7 +213,10 @@ adaptive_SEM <- function(pp_data,
           filtration = pre, proximity_weight = 0, verbose = FALSE, ...
         )
       })
-      if (verbose) cat(sprintf("[SEM] Labelling generation complete (took %.1fs)\n", proc.time()[3] - t_gen_start))
+      baseline_with_pre <- rbind(pre, baseline_adaptive_labelling)
+      labellings[[length(labellings) + 1]] <- baseline_with_pre
+      if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d + baseline, took %.1fs)\n",
+                               N_labellings, proc.time()[3] - t_gen_start))
     }
     
     if (verbose) cat("[SEM] Calculating importance weights...\n")
