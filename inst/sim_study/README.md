@@ -60,3 +60,30 @@ If you see `oom_kill` or `error reading from connection` during "Estimating ATEs
 2. **Request more memory** in your SLURM job (e.g. `#SBATCH --mem=32G` or higher).
 
 3. **Reduce simulations** with `--sims 16` or `--sims 8` to lower memory use.
+
+4. **Skip crazy-param tasks** — when SEM estimates K≥0.95 or mu>1e5, Hawkes simulations can explode. Skip those tasks:
+   ```bash
+   PP_SKIP_CRAZY_PARAMS=1 ./run_sim_study.sh --test
+   ```
+
+## Debugging memory and crazy params
+
+Use **test mode** for fast iteration on the cluster:
+
+```bash
+./run_sim_study.sh --test --sims 2
+```
+
+Test mode uses reduced iters (5 EM, 5 SEM adaptive, 3 SEM outer), sequential ATE, and fewer tau sims.
+
+**Memory logging** (log R heap at each phase):
+```bash
+PP_LOG_MEMORY=1 ./run_sim_study.sh --test
+```
+
+**Skip tasks with explosive params** (K≥0.95, mu>1e5) to avoid OOM:
+```bash
+PP_SKIP_CRAZY_PARAMS=1 ./run_sim_study.sh --test
+```
+
+Check `cluster_output/logs/<JOB_ID>/sim.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.

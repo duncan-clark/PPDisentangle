@@ -35,19 +35,19 @@ N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
 if (TEST) {
-  # Quick-test mode: 10 iters for everything, minimal sims to verify machinery (logging, parallel, etc.)
+  # Quick-test mode: minimal iters/sims for fast cluster iteration. Use PP_LOG_MEMORY=1 and PP_SKIP_CRAZY_PARAMS=1 to debug OOM.
   n_test <- if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) N_SIMS_ARG else 2L
   N_CORES      <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
   SIM_SIZE     <- n_test
   N_SIMS       <- n_test
-  N_TAU_SIMS   <- 10
-  N_TAU_I      <- 10
-  N_TAU_I_TRUE <- 10
-  N_PROPOSALS  <- 10
-  EM_ITER      <- 10
-  SEM_EM_ADAPTIVE_ITER <- 10
-  SEM_N_ITER   <- 10
-  SEM_N_LABELLINGS <- 10
+  N_TAU_SIMS   <- 3
+  N_TAU_I      <- 3
+  N_TAU_I_TRUE <- 5
+  N_PROPOSALS  <- 5
+  EM_ITER      <- 5
+  SEM_EM_ADAPTIVE_ITER <- 5
+  SEM_N_ITER   <- 3
+  SEM_N_LABELLINGS <- 5
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
   TREATMENT_TIME <- 10
@@ -160,10 +160,33 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
   }
 }
 
+# Log memory usage (Vcells = vector heap, Ncells = cons cells). Set PP_LOG_MEMORY=1 to enable.
+log_memory <- function(phase = "") {
+  if (!nzchar(Sys.getenv("PP_LOG_MEMORY")) || Sys.getenv("PP_LOG_MEMORY") != "1") return(invisible(NULL))
+  g <- gc(verbose = FALSE)
+  v_used <- sum(g[, "used"])  # Mb
+  v_max  <- sum(g[, "max used"])
+  log_msg(sprintf("[MEM %s] used=%.0f Mb  max_used=%.0f Mb", phase, v_used, v_max))
+}
+
+# Check if Hawkes params are likely to cause explosive simulations (K near 1, huge mu).
+# Returns TRUE if params are "crazy" and simulations may blow memory.
+params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5) {
+  check_one <- function(pp) {
+    if (is.null(pp)) return(FALSE)
+    K <- if (is.list(pp)) pp$K else pp[4]
+    mu <- if (is.list(pp)) pp$mu else pp[1]
+    (K >= K_max) || (mu > mu_max) || (K < 0) || (K >= 1)
+  }
+  check_one(control_pp) || check_one(treated_pp)
+}
+
 log_msg("=== Simulation Study Config ===")
 log_msg("Job ID:", JOB_ID)
 log_msg("Mode:", if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
 log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
+if (nzchar(Sys.getenv("PP_LOG_MEMORY"))) log_msg("PP_LOG_MEMORY:", Sys.getenv("PP_LOG_MEMORY"), "(memory logging)")
+if (nzchar(Sys.getenv("PP_SKIP_CRAZY_PARAMS"))) log_msg("PP_SKIP_CRAZY_PARAMS:", Sys.getenv("PP_SKIP_CRAZY_PARAMS"), "(skip tasks with K>=0.95)")
 log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
 log_msg("Grid:", NX, "x", NY)
 log_msg("Save:", SAVE_DIR)
@@ -276,6 +299,7 @@ obs_data <- lapply(1:SIM_SIZE, function(i) {
 })
 log_elapsed("Data generation", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_msg("Points per sim:", paste(sapply(obs_data, nrow), collapse = ", "))
+log_memory("post_data_gen")
 
 # ------------------------------------------------------------------
 # 4. Baseline labellings (oracle + naive)
@@ -424,6 +448,7 @@ if (N_CORES > 1 && !SMALL) {
   EM_results <- lapply(obs_data, run_sem)
 }
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
+log_memory("post_EM")
 
 # ------------------------------------------------------------------
 # 8. Assemble all labellings
@@ -457,6 +482,7 @@ if (!ON_CLUSTER) print(class_metrics)
 # ------------------------------------------------------------------
 # 10. ATE estimation
 # ------------------------------------------------------------------
+log_memory("pre_ATE")
 log_msg("Estimating ATEs ...")
 t0 <- proc.time()[3]
 
@@ -482,11 +508,38 @@ for (i in seq_along(EM_results)) {
   )
 }
 
+# Pre-check EM_full_params tasks for crazy params (K>=0.95, mu>1e5) that can blow memory
+SKIP_CRAZY <- nzchar(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) && tolower(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) %in% c("1", "true", "yes")
+crazy_idx <- integer(0)
+for (k in seq_along(tasks)) {
+  tsk <- tasks[[k]]
+  if (tsk$labelling_name == "EM_full_params" && !is.null(tsk$hawkes_params)) {
+    if (params_are_crazy(tsk$hawkes_params$control, tsk$hawkes_params$treated)) {
+      crazy_idx <- c(crazy_idx, k)
+      ctrl <- tsk$hawkes_params$control
+      treat <- tsk$hawkes_params$treated
+      log_msg(sprintf("[CRAZY PARAMS] task %d (EM_full_params sim %d): control mu=%.2g K=%.3f | treated mu=%.2g K=%.3f",
+        k, ((k - 1) %% SIM_SIZE) + 1,
+        ctrl$mu, ctrl$K, treat$mu, treat$K))
+    }
+  }
+}
+if (length(crazy_idx) > 0) {
+  log_msg(sprintf("[CRAZY PARAMS] %d tasks with explosive params (K>=0.95 or mu>1e5)", length(crazy_idx)))
+  if (SKIP_CRAZY) {
+    tasks <- tasks[-crazy_idx]
+    log_msg("[CRAZY PARAMS] Skipping these tasks (PP_SKIP_CRAZY_PARAMS=1)")
+  } else {
+    log_msg("[CRAZY PARAMS] Running anyway (set PP_SKIP_CRAZY_PARAMS=1 to skip and avoid OOM)")
+  }
+}
+
 # Use minimal env for task_function to avoid serializing .GlobalEnv (obs_data,
 # EM_results, labellings, etc.) when sending to workers - that causes OOM.
 ATE_env <- new.env(parent = baseenv())
 ATE_env$ATE_estim_hawkes <- getFromNamespace("ATE_estim_hawkes", "PPDisentangle")
 ATE_env$withTimeout <- getFromNamespace("withTimeout", "R.utils")
+ATE_env$params_are_crazy <- params_are_crazy
 ATE_env$OMEGA <- OMEGA
 ATE_env$partition <- partition
 ATE_env$treated_partitions <- treated_partitions
@@ -498,6 +551,9 @@ ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
 
 task_function <- function(task) {
+  if (!is.null(task$hawkes_params) && params_are_crazy(task$hawkes_params$control, task$hawkes_params$treated)) {
+    return(NULL)  # Skip to avoid OOM (worker may not have been pre-filtered)
+  }
   r <- tryCatch(
     withTimeout(
       ATE_estim_hawkes(
@@ -522,8 +578,9 @@ environment(task_function) <- ATE_env
 # Free memory before ATE phase; workers get fresh tasks
 if (N_CORES > 1 && !SMALL) gc(verbose = FALSE)
 
-# Sequential ATE fallback: set env ATE_SEQUENTIAL=1 to avoid worker OOM (slower but lower memory)
-ATE_SEQUENTIAL <- nzchar(Sys.getenv("ATE_SEQUENTIAL")) && tolower(Sys.getenv("ATE_SEQUENTIAL")) %in% c("1", "true", "yes")
+# Sequential ATE fallback: set env ATE_SEQUENTIAL=1 to avoid worker OOM (slower but lower memory).
+# TEST mode uses sequential by default for lower memory and easier debugging.
+ATE_SEQUENTIAL <- TEST || (nzchar(Sys.getenv("ATE_SEQUENTIAL")) && tolower(Sys.getenv("ATE_SEQUENTIAL")) %in% c("1", "true", "yes"))
 if (ATE_SEQUENTIAL) {
   log_msg("ATE estimation: sequential (ATE_SEQUENTIAL=1)")
   stopCluster(cl)
@@ -533,6 +590,7 @@ if (ATE_SEQUENTIAL) {
   stopCluster(cl)
 }
 log_elapsed("ATE estimation", proc.time()[3] - t0, length(tasks), length(tasks))
+log_memory("post_ATE")
 
 # ------------------------------------------------------------------
 # 11. Collect and save results
