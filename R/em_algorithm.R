@@ -306,9 +306,11 @@ adaptive_SEM <- function(pp_data,
     fit_t <- run_outer_optim("treated", control_state_space, t_params[[length(t_params)]])
     t_params[[length(t_params) + 1]] <- fit_t
 
-    if (verbose) cat("\n--- Outer optim: control ---\n")
-    fit_c <- run_outer_optim("control", treated_state_space, c_params[[length(c_params)]])
-    c_params[[length(c_params) + 1]] <- fit_c
+    if (isTRUE(adaptive_control$update_control_params)) {
+      if (verbose) cat("\n--- Outer optim: control ---\n")
+      fit_c <- run_outer_optim("control", treated_state_space, c_params[[length(c_params)]])
+      c_params[[length(c_params) + 1]] <- fit_c
+    }
 
     counter <- counter + 1
   }
