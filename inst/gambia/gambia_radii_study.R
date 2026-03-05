@@ -37,7 +37,7 @@ SCRIPT_DIR <- tryCatch(
   dirname(normalizePath(sys.frame(1)$ofile)),
   error = function(e) getwd()
 )
-OUT_DIR <- file.path(SCRIPT_DIR, "output")
+OUT_DIR <- Sys.getenv("PP_OUT_DIR", file.path(SCRIPT_DIR, "output"))
 if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
 
 if (TEMPORAL_MODE == "fixed_beta") {
@@ -308,17 +308,22 @@ run_radius <- function(r_km) {
         verbose                  = FALSE
       )
     ),
-    error = function(e) { if (!quiet) cat("  SEM ERROR:", e$message, "\n"); NULL }
+    error = function(e) { if (!quiet) cat(sprintf("  SEM ERROR (%.1f km): %s\n", r_km, e$message)); NULL }
   )
 
-  if (is.null(sem_res)) {
-    return(list(skipped = sprintf("%.1f km: SEM failed", r_km)))
+  sem_failed <- is.null(sem_res)
+  if (sem_failed) {
+    sem_ctrl <- vanilla_ctrl
+    sem_trtd <- vanilla_trtd
+    sem_valid_ctrl <- FALSE
+    sem_valid_trtd <- FALSE
+    if (!quiet) cat(sprintf("  %.1f km: SEM failed, using vanilla params\n", r_km))
+  } else {
+    sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
+    sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
+    sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl", quiet = quiet)
+    sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd", quiet = quiet)
   }
-
-  sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
-  sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
-  sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl", quiet = quiet)
-  sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd", quiet = quiet)
 
   louis_entry <- NULL
   if (sem_valid_ctrl && sem_valid_trtd) {
@@ -358,12 +363,13 @@ run_radius <- function(r_km) {
     sem_alpha_ctrl = sem_ctrl[["alpha"]], sem_alpha_trtd = sem_trtd[["alpha"]],
     sem_beta_ctrl = sem_ctrl[["beta"]], sem_beta_trtd = sem_trtd[["beta"]],
     vanilla_savings_pct = sav_vanilla$pct, sem_savings_pct = sav_sem$pct,
-    sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd
+    sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd,
+    sem_failed = sem_failed
   )
 
   list(
     result_row = result_row,
-    adaptive_entry = list(history = sem_res$adaptive_history, n_post = n_post_t + n_post_c),
+    adaptive_entry = if (!sem_failed) list(history = sem_res$adaptive_history, n_post = n_post_t + n_post_c) else NULL,
     louis_entry = louis_entry
   )
 }

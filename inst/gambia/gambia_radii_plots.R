@@ -31,11 +31,16 @@ SCRIPT_DIR <- tryCatch(
   dirname(normalizePath(sys.frame(1)$ofile)),
   error = function(e) getwd()
 )
-OUT_DIR <- file.path(SCRIPT_DIR, "output")
+
+# Where to read results from and write plots to.
+# Set PP_RESULTS_DIR to point at cluster_output/results/ when rehydrating
+# from a cluster run; otherwise defaults to inst/gambia/output/.
+RESULTS_DIR <- Sys.getenv("PP_RESULTS_DIR", file.path(SCRIPT_DIR, "output"))
+OUT_DIR <- Sys.getenv("PP_PLOT_DIR", file.path(SCRIPT_DIR, "output"))
 if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
 
-RESULTS_FILE_IPD    <- file.path(OUT_DIR, "gambia_radii_results.rds")
-RESULTS_FILE_NONIPD <- file.path(OUT_DIR, "gambia_radii_results_nonIPD.rds")
+RESULTS_FILE_IPD    <- file.path(RESULTS_DIR, "gambia_radii_results.rds")
+RESULTS_FILE_NONIPD <- file.path(RESULTS_DIR, "gambia_radii_results_nonIPD.rds")
 BOOTSTRAP_B  <- 50   # set higher (e.g. 200) for production
 BOOTSTRAP_SEED <- 12345
 

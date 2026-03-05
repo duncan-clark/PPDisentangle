@@ -20,11 +20,18 @@ Rscript inst/sim_study/sim_study.R --cluster
 
 Then you’ll see `Mode: CLUSTER` and the same settings as in the SLURM job.
 
-## Logging and output
+## Output layout
 
-- **Log file:** `cluster_output/logs/sim_study_YYYYMMDD_HHMMSS.log` — timestamped messages, phase timings, and ETA estimates.
-- **Results:** `cluster_output/sim_study_results_*.rds` — full results and plots.
-- **SLURM logs:** `cluster_output/logs/slurm_*.out` and `slurm_*.err` when run via sbatch.
+Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs):
+
+```
+cluster_output/
+  logs/<JOB_ID>/
+    slurm.out        # SLURM stdout
+    slurm.err        # SLURM stderr
+    sim.log          # R log (timestamped messages, phase timings, ETA)
+  results/<JOB_ID>.rds   # full results and plots
+```
 
 ## Old files in deprecated/
 

@@ -43,7 +43,7 @@ SCRIPT_DIR <- tryCatch(
   dirname(normalizePath(sys.frame(1)$ofile)),
   error = function(e) getwd()
 )
-OUT_DIR <- file.path(SCRIPT_DIR, "output")
+OUT_DIR <- Sys.getenv("PP_OUT_DIR", file.path(SCRIPT_DIR, "output"))
 if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
 
 if (TEMPORAL_MODE == "fixed_beta") {
@@ -67,12 +67,12 @@ VANILLA_STARTS <- list(
   list(mu = 0.0003, alpha = 1e-9,  beta = 0.05, K = 0.5)
 )
 
-SEM_N_LABELLINGS         <- if (QUICK_TEST) 5 else 20
-SEM_N_ITER               <- if (QUICK_TEST) 1 else 2
-SEM_INNER_ITER           <- if (QUICK_TEST) 5 else 50
-SEM_INNER_N_PROPS        <- if (QUICK_TEST) 5 else 20
+SEM_N_LABELLINGS         <- if (QUICK_TEST) 5 else 50
+SEM_N_ITER               <- if (QUICK_TEST) 1 else 5
+SEM_INNER_ITER           <- if (QUICK_TEST) 5 else 100
+SEM_INNER_N_PROPS        <- if (QUICK_TEST) 5 else 10
 SEM_PARAM_UPDATE_CADENCE <- 10
-SEM_CHANGE_FACTOR        <- 0.05
+SEM_CHANGE_FACTOR        <- 0.02
 SEM_INCLUDE_STARTING     <- TRUE
 SEM_UPDATE_STARTING      <- TRUE
 
@@ -331,17 +331,22 @@ run_radius <- function(r_km) {
         verbose                  = FALSE
       )
     ),
-    error = function(e) { if (!quiet) cat(sprintf("  SEM ERROR: %s\n", e$message)); NULL }
+    error = function(e) { if (!quiet) cat(sprintf("  SEM ERROR (%.1f km): %s\n", r_km, e$message)); NULL }
   )
 
-  if (is.null(sem_res)) {
-    return(list(skipped = sprintf("%.1f km: SEM failed", r_km)))
+  sem_failed <- is.null(sem_res)
+  if (sem_failed) {
+    sem_ctrl <- vanilla_ctrl
+    sem_trtd <- vanilla_trtd
+    sem_valid_ctrl <- FALSE
+    sem_valid_trtd <- FALSE
+    if (!quiet) cat(sprintf("  %.1f km: SEM failed, using vanilla params\n", r_km))
+  } else {
+    sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
+    sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
+    sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl", quiet = quiet)
+    sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd", quiet = quiet)
   }
-
-  sem_ctrl <- as_parlist(sem_res$hawkes_params_control)
-  sem_trtd <- as_parlist(sem_res$hawkes_params_treated)
-  sem_valid_ctrl <- params_valid(sem_ctrl, "SEM ctrl", quiet = quiet)
-  sem_valid_trtd <- params_valid(sem_trtd, "SEM trtd", quiet = quiet)
 
   louis_entry <- NULL
   if (sem_valid_ctrl && sem_valid_trtd) {
@@ -381,12 +386,13 @@ run_radius <- function(r_km) {
     sem_alpha_ctrl = sem_ctrl[["alpha"]], sem_alpha_trtd = sem_trtd[["alpha"]],
     sem_beta_ctrl = sem_ctrl[["beta"]], sem_beta_trtd = sem_trtd[["beta"]],
     vanilla_savings_pct = sav_vanilla$pct, sem_savings_pct = sav_sem$pct,
-    sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd
+    sem_degenerate = !sem_valid_ctrl || !sem_valid_trtd,
+    sem_failed = sem_failed
   )
 
   list(
     result_row = result_row,
-    adaptive_entry = list(history = sem_res$adaptive_history, n_post = n_post_t + n_post_c),
+    adaptive_entry = if (!sem_failed) list(history = sem_res$adaptive_history, n_post = n_post_t + n_post_c) else NULL,
     louis_entry = louis_entry
   )
 }

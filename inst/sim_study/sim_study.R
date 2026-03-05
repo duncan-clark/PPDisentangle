@@ -130,13 +130,12 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 # ------------------------------------------------------------------
 # Logging: timestamped messages to console and log file
 # ------------------------------------------------------------------
-# Use RUN_ID from environment (set by shell script) or generate new one
-RUN_ID <- Sys.getenv("PP_RUN_ID", "")
-if (RUN_ID == "") RUN_ID <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
+JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
+if (JOB_ID == "") JOB_ID <- paste0("local_", format(Sys.time(), "%Y%m%d_%H%M%S"))
 
-LOG_DIR <- file.path(SAVE_DIR, "logs", RUN_ID)
+LOG_DIR <- file.path(SAVE_DIR, "logs", JOB_ID)
 dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
-LOG_FILE <- file.path(LOG_DIR, "sim_study.log")
+LOG_FILE <- file.path(LOG_DIR, "sim.log")
 log_con <- file(LOG_FILE, open = "wt")
 on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
 log_msg <- function(...) {
@@ -162,6 +161,7 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
 }
 
 log_msg("=== Simulation Study Config ===")
+log_msg("Job ID:", JOB_ID)
 log_msg("Mode:", if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
 log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
 log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
@@ -814,22 +814,10 @@ sim_study_results <- list(
   plots = sim_study_plots
 )
 
-dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
-outfile <- file.path(LOG_DIR, "results.rds")
+RESULTS_DIR <- file.path(SAVE_DIR, "results")
+dir.create(RESULTS_DIR, showWarnings = FALSE, recursive = TRUE)
+outfile <- file.path(RESULTS_DIR, paste0(JOB_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
 log_msg("Results saved to:", outfile)
-
-# Write timing report to a text file (for cluster logs and quick inspection)
-timing_txt <- file.path(LOG_DIR, "timing.txt")
-writeLines(c(
-  "PPDisentangle simulation study timing",
-  paste("Start:    ", timing_report$start_iso),
-  paste("End:      ", timing_report$end_iso),
-  paste("Elapsed:  ", round(timing_report$elapsed_sec, 1), "sec (", timing_report$elapsed_min, "min)"),
-  paste("Job ID:   ", timing_report$job_id),
-  paste("Cores:    ", timing_report$n_cores),
-  paste("Sim size: ", timing_report$sim_size)
-), timing_txt)
-log_msg("Timing report written to:", timing_txt)
 log_msg("=== TOTAL ELAPSED:", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), "min) ===")
 close(log_con)
