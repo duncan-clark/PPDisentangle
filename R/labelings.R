@@ -479,6 +479,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    partition_mask = NULL,
                                                    proximity_weight = 0.9,
                                                    points_tile_index = NULL,
+                                                   model_type = "hawkes",
                                                    ...) {
   dat <- pp_data
   if (is.null(dat$inferred_process)) {
@@ -497,24 +498,74 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   control_inds <- inds[dat$inferred_process == "control"]
   treated_inds <- inds[dat$inferred_process == "treated"]
 
-  no_points_hawkes <- list(mu = 0, alpha = 0, beta = 0, K = 0)
+  dots <- list(...)
+  is_etas <- identical(model_type, "etas")
+  is_biv_etas <- identical(model_type, "etas_bivariate")
+
+  # For bivariate ETAS, simulate jointly and compare per-process counts
+  if (is_biv_etas) {
+    biv_params <- dots$etas_bivariate_params
+    if (is.null(biv_params)) {
+      biv_params <- init_bivariate_from_independent(
+        hawkes_params_control, hawkes_params_treated)
+    }
+    sim_data <- generate_inhomogeneous_etas_bivariate(
+      Omega = statespace, partition = partition, time_window = windowT,
+      partition_processes = partition_process,
+      etas_bivariate_params = biv_params,
+      m0 = dots$m0, beta_gr = dots$beta_gr, mag_pool = dots$mag_pool,
+      state_spaces = state_spaces, filtration = filtration,
+      t_trunc = dots$t_trunc
+    )
+    sim_data <- sim_data[sim_data$t > windowT[1], ]
+    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_proc <- if ("process" %in% names(sim_data)) sim_data$process else
+                  ifelse(sim_data$process_id == 0, "control", "treated")
+    sim_ctrl_inds <- sim_inds[sim_proc == "control"]
+    sim_treat_inds <- sim_inds[sim_proc == "treated"]
+
+    where_to_thin <- tabulate(control_inds, nbins = partition$n) -
+                     tabulate(sim_ctrl_inds, nbins = partition$n)
+    thin_control <- length(control_inds) - length(sim_ctrl_inds)
+  } else {
+
+  if (is_etas) {
+    no_points <- list(mu = 0, A = 0, alpha_m = 0, c = 0.1, p = 1.2,
+                      D = 1, gamma = 0, q = 1.5)
+    gen_fn <- function(...) generate_inhomogeneous_etas(...)
+  } else {
+    no_points <- list(mu = 0, alpha = 0, beta = 0, K = 0)
+    gen_fn <- function(...) generate_inhomogeneous_hawkes(...)
+  }
+  params_key <- if (is_etas) "etas_params" else "hawkes_params"
 
   if (is.null(hawkes_params_control)) {
     thin_control <- 0
     sim_inds <- numeric(0)
   } else {
-    sim_data <- generate_inhomogeneous_hawkes(
+    gen_args <- list(
       Omega = statespace, partition = partition, time_window = windowT,
       partition_processes = partition_process,
-      hawkes_params = list(control = hawkes_params_control, treated = no_points_hawkes),
-      filtration = filtration, state_spaces = state_spaces,
-      space_triggering = FALSE, ...
+      filtration = filtration, state_spaces = state_spaces
     )
+    gen_args[[params_key]] <- list(control = hawkes_params_control,
+                                   treated = no_points)
+    if (!is_etas) gen_args$space_triggering <- FALSE
+    if (is_etas) {
+      gen_args$m0 <- dots$m0
+      gen_args$beta_gr <- dots$beta_gr
+      gen_args$mag_pool <- dots$mag_pool
+    }
+    extra <- dots[!names(dots) %in% c("m0", "beta_gr", "mag_pool")]
+    gen_args <- c(gen_args, extra)
+    sim_data <- do.call(gen_fn, gen_args)
     sim_data <- sim_data[sim_data$t > windowT[1], ]
     sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_inds)
   }
+
+  } # end non-bivariate branch
 
   thin_control <- thin_control * change_factor
 
@@ -585,20 +636,36 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     }
   }
 
-  if (is.null(hawkes_params_treated)) return(dat)
+  if (is.null(hawkes_params_treated) && !is_biv_etas) return(dat)
 
   treated_inds <- inds[dat$inferred_process == "treated"]
   control_tiles <- which(partition_process == "control")
-  sim_data_t <- generate_inhomogeneous_hawkes(
+
+  if (is_biv_etas) {
+    sim_inds_t <- sim_treat_inds
+    where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) -
+                       tabulate(sim_inds_t, nbins = partition$n)
+  } else {
+  gen_args_t <- list(
     Omega = statespace, partition = partition, time_window = windowT,
     partition_processes = partition_process,
-    hawkes_params = list(control = no_points_hawkes, treated = hawkes_params_treated),
-    filtration = filtration, state_spaces = state_spaces,
-    space_triggering = FALSE, ...
+    filtration = filtration, state_spaces = state_spaces
   )
+  gen_args_t[[params_key]] <- list(control = no_points,
+                                    treated = hawkes_params_treated)
+  if (!is_etas) gen_args_t$space_triggering <- FALSE
+  if (is_etas) {
+    gen_args_t$m0 <- dots$m0
+    gen_args_t$beta_gr <- dots$beta_gr
+    gen_args_t$mag_pool <- dots$mag_pool
+  }
+  extra_t <- dots[!names(dots) %in% c("m0", "beta_gr", "mag_pool")]
+  gen_args_t <- c(gen_args_t, extra_t)
+  sim_data_t <- do.call(gen_fn, gen_args_t)
   sim_data_t <- sim_data_t[sim_data_t$t > windowT[1], ]
   sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition))
   where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
+  } # end non-bivariate branch
   thin_treated <- (length(treated_inds) - length(sim_inds_t)) * change_factor
   if (thin_treated < 0) {
     n_total_t <- rpois(1, max(-thin_treated, 1))
@@ -691,14 +758,27 @@ em_style_labelling <- function(pp_data,
                                proposal_method = "simulation",
                                fixed_params = NULL,
                                verbose = FALSE,
+                               model_type = "hawkes",
                                ...) {
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
+  is_etas <- identical(model_type, "etas")
+  is_biv_etas <- identical(model_type, "etas_bivariate")
+  biv_etas_params <- dots$etas_bivariate_params
 
-  all_names <- c("mu", "alpha", "beta", "K")
-  fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
+  all_names <- if (is_biv_etas) .etas_bivariate_par_names
+               else if (is_etas) .etas_par_names
+               else c("mu", "alpha", "beta", "K")
+  fixed_idx <- if (!is.null(fixed_params)) {
+    idx <- match(names(fixed_params), all_names)
+    idx[!is.na(idx)]
+  } else integer(0)
   free_idx  <- setdiff(seq_along(all_names), fixed_idx)
+
+  loglik_fn <- if (is_biv_etas) loglik_etas_bivariate
+               else if (is_etas) loglik_etas
+               else loglik_hawk_fast
 
   class_func <- function(labelling) {
     if (is.null(labelling$process)) {
@@ -770,7 +850,8 @@ em_style_labelling <- function(pp_data,
             hawkes_params_control = control_par[[length(control_par)]],
             hawkes_params_treated = treated_par[[length(treated_par)]],
             change_factor = change_factor, filtration = pre, verbose = FALSE,
-            points_tile_index = post_inds, filt_by_proc = filt_by_proc, ...
+            points_tile_index = post_inds, filt_by_proc = filt_by_proc,
+            model_type = model_type, ...
           )
         })
         pre$inferred_process <- "control"
@@ -799,10 +880,29 @@ em_style_labelling <- function(pp_data,
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
       ref_post <- post
-      pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
-      pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
       ctrl_params_vec <- unlist(hawkes_params_control)
       treat_params_vec <- unlist(treated_par[[length(treated_par)]])
+
+      if (is_biv_etas) {
+        biv_par <- if (!is.null(biv_etas_params)) {
+          biv_etas_params
+        } else {
+          init_bivariate_from_independent(ctrl_params_vec, treat_params_vec)
+        }
+        metric <- vapply(seq_along(labelling_proposals), function(j) {
+          y <- labelling_proposals[[j]]
+          realiz <- y[is_post, ]
+          loglik_etas_bivariate(
+            params = biv_par, realiz = realiz,
+            windowT = time_window, windowS = statespace,
+            control_state_space = control_state_space,
+            treated_state_space = treated_state_space,
+            t_trunc = t_trunc
+          )
+        }, numeric(1))
+      } else {
+      pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
+      pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
 
       metric <- vapply(seq_along(labelling_proposals), function(j) {
         y <- labelling_proposals[[j]]
@@ -810,7 +910,7 @@ em_style_labelling <- function(pp_data,
 
         ctrl_rows <- realiz$inferred_process == "control"
         if (!any(ctrl_rows)) return(-Inf)
-        control_lik <- loglik_hawk_fast(
+        control_lik <- loglik_fn(
           params = ctrl_params_vec, realiz = realiz[ctrl_rows, ],
           windowT = time_window, windowS = statespace,
           precomp = list(active_area = pc_ctrl_all$active_area,
@@ -819,7 +919,7 @@ em_style_labelling <- function(pp_data,
 
         treat_rows <- !ctrl_rows
         if (!any(treat_rows)) return(-Inf)
-        treat_lik <- loglik_hawk_fast(
+        treat_lik <- loglik_fn(
           params = treat_params_vec, realiz = realiz[treat_rows, ],
           windowT = time_window, windowS = statespace,
           precomp = list(active_area = pc_treat_all$active_area,
@@ -843,6 +943,7 @@ em_style_labelling <- function(pp_data,
         }
         control_lik + treat_lik
       }, numeric(1))
+      } # end non-bivariate metric
     }
     if (metric_name == "post_likelihood_control") {
       metric <- vapply(labelling_proposals, function(y) {
@@ -878,12 +979,65 @@ em_style_labelling <- function(pp_data,
     if (!is.null(param_update_cadence)) {
       if ((i %% param_update_cadence) == 0 | i == iter) {
         t_param_start <- proc.time()[3]
-        if (verbose) print("Updating Hawkes Parameters")
+        if (verbose) print("Updating Parameters")
 
         mml_post <- max_metric_labelling[is_post, ]
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
+        if (is_biv_etas) {
+          # Joint bivariate ETAS parameter update
+          biv_par <- if (!is.null(biv_etas_params)) {
+            unlist(biv_etas_params)
+          } else {
+            init_bivariate_from_independent(
+              control_par[[length(control_par)]],
+              treated_par[[length(treated_par)]])
+          }
+          if (is.null(names(biv_par))) names(biv_par) <- .etas_bivariate_par_names
+          biv_obj <- function(par15) {
+            loglik_etas_bivariate(
+              params = par15, realiz = mml_post,
+              windowT = time_window, windowS = statespace,
+              control_state_space = control_state_space,
+              treated_state_space = treated_state_space,
+              t_trunc = t_trunc
+            )
+          }
+          if (length(fixed_idx) > 0) {
+            biv_free <- biv_par[free_idx]
+            biv_wrap <- function(fp) {
+              p15 <- biv_par; p15[free_idx] <- fp; biv_obj(p15)
+            }
+            biv_res <- tryCatch(
+              optim(par = biv_free, fn = biv_wrap, method = "Nelder-Mead",
+                    control = list(fnscale = -1, trace = 0, maxit = 1000)),
+              error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_free) }
+            )
+            biv_par[free_idx] <- biv_res$par
+          } else {
+            biv_res <- tryCatch(
+              optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
+                    control = list(fnscale = -1, trace = 0, maxit = 1000)),
+              error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_par) }
+            )
+            biv_par <- biv_res$par
+          }
+          names(biv_par) <- .etas_bivariate_par_names
+          biv_etas_params <<- biv_par
+          fits[[i]] <- biv_res
+          # Extract marginal params
+          treated_par[[length(treated_par) + 1]] <- as.list(c(
+            mu = biv_par[["mu_1"]], A = biv_par[["A_11"]],
+            alpha_m = biv_par[["alpha_m_11"]],
+            c = biv_par[["c"]], p = biv_par[["p"]],
+            D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
+          control_par[[length(control_par) + 1]] <- as.list(c(
+            mu = biv_par[["mu_0"]], A = biv_par[["A_00"]],
+            alpha_m = biv_par[["alpha_m_00"]],
+            c = biv_par[["c"]], p = biv_par[["p"]],
+            D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
+        } else {
         profile_optim <- function(full_par, obj_fn, label) {
           full_vec <- unlist(full_par)
           if (length(fixed_idx) > 0) {
@@ -907,19 +1061,21 @@ em_style_labelling <- function(pp_data,
             )
           }
           pv <- as.numeric(res$par)
-          list(fit = res, par_list = list(mu = pv[1], alpha = pv[2], beta = pv[3], K = pv[4]))
+          par_list <- as.list(pv)
+          names(par_list) <- all_names
+          list(fit = res, par_list = par_list)
         }
 
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
-            loglik_hawk_fast(
+            loglik_fn(
               params = params, realiz = mml_post_treated,
               windowT = time_window, windowS = statespace,
               zero_background_region = control_state_space, ...
             )
           }
           optim_func_control <- function(params, ...) {
-            loglik_hawk_fast(
+            loglik_fn(
               params = params, realiz = mml_post_control,
               windowT = time_window, windowS = statespace,
               zero_background_region = treated_state_space, ...
@@ -933,7 +1089,7 @@ em_style_labelling <- function(pp_data,
           control_par[[length(control_par) + 1]] <- res_c$par_list
         } else {
           optim_func <- function(params, ...) {
-            loglik_hawk_fast(
+            loglik_fn(
               params = params, realiz = mml_post_treated,
               windowT = time_window, windowS = statespace,
               zero_background_region = control_state_space, ...
@@ -943,6 +1099,7 @@ em_style_labelling <- function(pp_data,
           fits[[i]] <- res_t$fit
           treated_par[[length(treated_par) + 1]] <- res_t$par_list
         }
+        } # end non-bivariate param update
         total_param_update <- total_param_update + (proc.time()[3] - t_param_start)
         if (verbose) {
           print("Estimated Hawkes Params")

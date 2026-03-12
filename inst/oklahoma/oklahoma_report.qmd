@@ -1,0 +1,591 @@
+---
+title: "Oklahoma Induced Seismicity: Causal ETAS Analysis"
+subtitle: "Four-Way Comparison Using County-Level Tessellation"
+author: "PPDisentangle"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    theme: cosmo
+    fig-width: 10
+    fig-height: 7
+    fig-dpi: 150
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| label: setup
+#| include: false
+library(PPDisentangle)
+library(spatstat)
+library(sf)
+library(tigris)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+
+knitr::opts_chunk$set(fig.align = "center", out.width = "100%")
+
+SCRIPT_DIR <- getwd()
+DATA_DIR <- file.path(SCRIPT_DIR,
+                       "oklahoma_induced_seismicity_data_regional20150318")
+OUT_DIR  <- file.path(SCRIPT_DIR, "output")
+if (!file.exists(file.path(OUT_DIR, "oklahoma_results.rds")))
+  OUT_DIR <- file.path(dirname(dirname(SCRIPT_DIR)), "output")
+
+results <- readRDS(file.path(OUT_DIR, "oklahoma_results.rds"))
+cfg <- results$config
+cty <- results$counties
+```
+
+# Introduction
+
+On 18 March 2015 the Oklahoma Corporation Commission (OCC) issued
+directive **AOI_20150318**, requiring operators within a defined Area of
+Interest (AOI) in central Oklahoma to reduce wastewater disposal volumes.
+This report quantifies the causal effect of the directive on earthquake
+rates and clustering using the **PPDisentangle** framework.
+
+The analysis uses **Oklahoma county boundaries** as the spatial
+tessellation (`r cty$n_counties` counties, `r cty$n_treated` treated)
+and fits four progressively richer models:
+
+| Label | Model | Labels | Cross-excitation |
+|:---:|:---|:---|:---|
+| **A** | Naive independent ETAS | Location-based | None |
+| **B** | Naive bivariate ETAS | Location-based | Estimated |
+| **C** | SEM independent ETAS | SEM-corrected | None |
+| **D** | SEM bivariate ETAS | SEM-corrected | Estimated |
+
+Each model produces an **Average Treatment Effect (ATE)** — the expected
+per-county change in earthquake counts from applying the directive.
+
+# Study Design
+
+```{r design}
+#| label: design
+meta <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
+```
+
+**Treatment.** OCC directive AOI_20150318: mandatory reduction in
+wastewater disposal volumes within the AOI.
+
+**Tessellation.** The 77 Oklahoma counties (US Census Bureau via
+`tigris`). Counties whose centroid falls inside the AOI are treated.
+
+**Treated counties** (`r cty$n_treated`):
+`r paste(cty$treated_names, collapse = ", ")`.
+
+**Temporal windows.**
+
+- Pre-treatment: `r meta$design$pre_start_utc` to `r meta$design$t_star_utc`
+- Post-treatment: `r meta$design$t_star_utc` to `r meta$design$post_end_utc`
+  (ends before next directive AOI_20150624)
+
+**Magnitude threshold.** $m_0 =$ `r cfg$ETAS_M0`.
+
+**Event counts.** `r cfg$n_pre` pre-treatment,
+`r cfg$n_post` post-treatment
+(`r cfg$n_pre + cfg$n_post` total within Oklahoma).
+
+
+# Data
+
+```{r load-data}
+#| label: load-data
+ev_all <- fread(file.path(DATA_DIR, "events_all.csv"))
+t_star_utc <- as.POSIXct(meta$design$t_star_utc, tz = "UTC")
+ev_all[, time_utc := as.POSIXct(time_utc, tz = "UTC")]
+ev_all[, t_days := as.numeric(difftime(time_utc, t_star_utc, units = "days"))]
+ev_all <- ev_all[mag >= cfg$ETAS_M0]
+pp_pre  <- results$pp_data$pp_pre
+pp_post <- results$pp_data$pp_post
+```
+
+## Magnitude Distribution
+
+```{r fig-mag}
+#| label: fig-mag
+#| fig-cap: "Magnitude distribution of events above the completeness threshold."
+ggplot(ev_all, aes(x = mag)) +
+  geom_histogram(binwidth = 0.1, fill = "#4292c6", color = "white",
+                 boundary = cfg$ETAS_M0) +
+  geom_vline(xintercept = cfg$ETAS_M0, linetype = "dashed", color = "red") +
+  annotate("text", x = cfg$ETAS_M0 + 0.15, y = Inf, vjust = 2,
+           label = paste0("m0 = ", cfg$ETAS_M0), color = "red", size = 4) +
+  labs(x = "Magnitude", y = "Count") +
+  theme_minimal(base_size = 13)
+```
+
+## Temporal Profile
+
+```{r fig-temporal}
+#| label: fig-temporal
+#| fig-cap: "Cumulative event count; dashed line marks the OCC directive."
+ev_all[, cum_n := seq_len(.N)]
+ggplot(ev_all, aes(x = t_days, y = cum_n)) +
+  geom_step(color = "#2171b5", linewidth = 0.6) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", linewidth = 0.8) +
+  annotate("text", x = 5, y = max(ev_all$cum_n) * 0.1,
+           label = "OCC directive\n(18 Mar 2015)", color = "red", hjust = 0, size = 3.5) +
+  labs(x = "Days since treatment", y = "Cumulative events") +
+  theme_minimal(base_size = 13)
+```
+
+## County Partition
+
+```{r fig-partition}
+#| label: fig-partition
+#| fig-cap: "Oklahoma county-level partition. Red counties are treated (centroid inside AOI)."
+options(tigris_use_cache = TRUE)
+counties_sf <- counties(state = "OK", cb = TRUE, year = 2022)
+counties_sf <- st_transform(counties_sf, 5070)
+counties_sf <- st_make_valid(counties_sf)
+
+aoi_sf <- st_read(file.path(DATA_DIR, "occ_aoi_layer_2.geojson"), quiet = TRUE)
+aoi_sf <- st_transform(aoi_sf, 5070) |> st_make_valid()
+aoi_union <- st_union(aoi_sf)
+
+county_centroids <- st_centroid(counties_sf)
+inside_aoi <- lengths(st_within(county_centroids, aoi_union)) > 0
+counties_sf$treatment <- ifelse(inside_aoi, "treated", "control")
+
+ggplot() +
+  geom_sf(data = counties_sf, aes(fill = treatment),
+          color = "grey40", linewidth = 0.4) +
+  scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                    name = "Assignment") +
+  geom_sf(data = aoi_sf, fill = NA, color = "red", linewidth = 1, linetype = "dashed") +
+  labs(title = "Oklahoma County Partition",
+       subtitle = paste0("Treated: ", paste(cty$treated_names, collapse = ", "))) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 9))
+```
+
+## Point Patterns
+
+```{r fig-pp}
+#| label: fig-pp
+#| fig-cap: "Pre-treatment (left) and post-treatment events coloured by location label (right)."
+#| fig-height: 5
+p1 <- ggplot(pp_pre, aes(x = x, y = y, alpha = t)) +
+  geom_point(color = "#377eb8", fill = "#377eb8", size = 1.2, shape = 21) +
+  scale_alpha_continuous(range = c(0.15, 0.8), guide = "none") +
+  labs(title = "Pre-treatment", x = "X (km)", y = "Y (km)") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+pp_post_plot <- pp_post
+pp_post_plot$Process <- factor(pp_post_plot$location_process, levels = c("control","treated"))
+p2 <- ggplot(pp_post_plot, aes(x = x, y = y, fill = Process, alpha = t)) +
+  geom_point(size = 1.2, shape = 21, stroke = 0.2) +
+  scale_fill_manual(values = c(control = "#377eb8", treated = "#e41a1c")) +
+  scale_alpha_continuous(range = c(0.3, 1), guide = "none") +
+  labs(title = "Post-treatment", x = "X (km)", y = "Y (km)") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+# Model
+
+## ETAS Conditional Intensity
+
+$$
+\lambda(t,x,y) = \frac{\mu}{|S|} + \sum_{j:\,t_j<t} A\,e^{\alpha_m(m_j-m_0)}\,g(t-t_j)\,f(x-x_j,y-y_j\mid m_j)
+$$
+
+with Omori–Utsu temporal kernel $g$ and power-law spatial kernel $f$.
+
+## Bivariate Extension
+
+$$
+\lambda_k(t,x,y) = \frac{\mu_k}{|S_k|} + \sum_{l\in\{0,1\}}\sum_{\substack{j:\,t_j<t\\Z_j=l}} A_{kl}\,e^{\alpha_{m,kl}(m_j-m_0)}\,g(t-t_j)\,f(x-x_j,y-y_j\mid m_j)
+$$
+
+Off-diagonal terms $A_{01}$ (treated→control) and $A_{10}$
+(control→treated) capture cross-excitation.
+
+## Fixed Parameters
+
+```{r tbl-fixed}
+#| label: tbl-fixed
+fixed_df <- data.frame(
+  Parameter = c("c", "p", "D", "γ", "q"),
+  Value = c(0.05, 1.2, 5.0, 0.5, 1.5),
+  Role = c("Omori onset delay", "Omori decay exponent",
+           "Spatial scale", "Mag-spatial scaling", "Spatial decay exponent"))
+kable(fixed_df, align = "lcl",
+      caption = "Fixed structural parameters.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+## SEM Configuration
+
+- **Outer iterations:** `r cfg$SEM_N_ITER`
+- **Inner iterations:** `r cfg$SEM_INNER_ITER`
+- **Labelling proposals:** `r cfg$SEM_N_LABELLINGS`
+- **Change factor:** `r cfg$SEM_CHANGE_FACTOR`
+
+# Results
+
+```{r extract}
+#| label: extract
+A_ctrl  <- unlist(results$fitA$ctrl);  A_treat <- unlist(results$fitA$treat)
+B_par   <- results$fitB$params
+C_ctrl  <- unlist(results$fitC$ctrl);  C_treat <- unlist(results$fitC$treat)
+D_par   <- results$fitD$params
+
+bc <- function(par, p) if (p=="mu") par[["mu_0"]] else par[[paste0(p,"_00")]]
+bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
+```
+
+## Marginal Parameters
+
+```{r tbl-params}
+#| label: tbl-params
+pr <- c("mu","A","alpha_m")
+pl <- c("$\\mu$","$A$","$\\alpha_m$")
+tbl <- data.frame(
+  Parameter = pl,
+  A_c = sapply(pr, \(p) A_ctrl[[p]]),  A_t = sapply(pr, \(p) A_treat[[p]]),
+  B_c = sapply(pr, \(p) bc(B_par,p)),  B_t = sapply(pr, \(p) bt(B_par,p)),
+  C_c = sapply(pr, \(p) C_ctrl[[p]]),  C_t = sapply(pr, \(p) C_treat[[p]]),
+  D_c = sapply(pr, \(p) bc(D_par,p)),  D_t = sapply(pr, \(p) bt(D_par,p)))
+rownames(tbl) <- NULL
+kable(tbl, digits = 4, escape = FALSE, align = "lcccccccc",
+      col.names = c("","A:ctrl","A:treat","B:ctrl","B:treat",
+                     "C:ctrl","C:treat","D:ctrl","D:treat"),
+      caption = "Marginal ETAS parameters across four fits.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE) |>
+  add_header_above(c(" "=1,"Naive Indep"=2,"Naive Biv"=2,"SEM Indep"=2,"SEM Biv"=2))
+```
+
+## Cross-excitation
+
+```{r tbl-cross}
+#| label: tbl-cross
+cn <- c("A_01","alpha_m_01","A_10","alpha_m_10")
+cl <- c("$A_{01}$ (treat$\\to$ctrl)","$\\alpha_{m,01}$",
+        "$A_{10}$ (ctrl$\\to$treat)","$\\alpha_{m,10}$")
+cross_tbl <- data.frame(Parameter = cl,
+  B = sapply(cn, \(nm) B_par[[nm]]),
+  D = sapply(cn, \(nm) D_par[[nm]]))
+rownames(cross_tbl) <- NULL
+kable(cross_tbl, digits = 4, escape = FALSE, align = "lcc",
+      col.names = c("","B: Naive Biv","D: SEM Biv"),
+      caption = "Cross-excitation parameters.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+## Parameter Comparison
+
+```{r fig-params}
+#| label: fig-params
+#| fig-cap: "Marginal parameter estimates across all four fits."
+#| fig-height: 5
+param_long <- rbind(
+  data.frame(Fit="A: Naive Indep",Process="Control",mu=A_ctrl[["mu"]],A=A_ctrl[["A"]],alpha_m=A_ctrl[["alpha_m"]]),
+  data.frame(Fit="A: Naive Indep",Process="Treated",mu=A_treat[["mu"]],A=A_treat[["A"]],alpha_m=A_treat[["alpha_m"]]),
+  data.frame(Fit="B: Naive Biv",Process="Control",mu=bc(B_par,"mu"),A=bc(B_par,"A"),alpha_m=bc(B_par,"alpha_m")),
+  data.frame(Fit="B: Naive Biv",Process="Treated",mu=bt(B_par,"mu"),A=bt(B_par,"A"),alpha_m=bt(B_par,"alpha_m")),
+  data.frame(Fit="C: SEM Indep",Process="Control",mu=C_ctrl[["mu"]],A=C_ctrl[["A"]],alpha_m=C_ctrl[["alpha_m"]]),
+  data.frame(Fit="C: SEM Indep",Process="Treated",mu=C_treat[["mu"]],A=C_treat[["A"]],alpha_m=C_treat[["alpha_m"]]),
+  data.frame(Fit="D: SEM Biv",Process="Control",mu=bc(D_par,"mu"),A=bc(D_par,"A"),alpha_m=bc(D_par,"alpha_m")),
+  data.frame(Fit="D: SEM Biv",Process="Treated",mu=bt(D_par,"mu"),A=bt(D_par,"A"),alpha_m=bt(D_par,"alpha_m")))
+pm <- pivot_longer(param_long, cols=c(mu,A,alpha_m), names_to="Parameter", values_to="Value")
+pm$Parameter <- factor(pm$Parameter, levels=c("mu","A","alpha_m"), labels=c("mu","A","alpha[m]"))
+pm$Fit <- factor(pm$Fit, levels=c("A: Naive Indep","B: Naive Biv","C: SEM Indep","D: SEM Biv"))
+ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
+  geom_point(size=3, position=position_dodge(0.4)) +
+  facet_wrap(~Parameter, scales="free_y", labeller=label_parsed) +
+  scale_colour_manual(values=c(Control="#377eb8",Treated="#e41a1c")) +
+  labs(y="Estimate", x=NULL) +
+  theme_minimal(base_size=13) +
+  theme(axis.text.x=element_text(angle=30,hjust=1), strip.text=element_text(face="bold"), legend.position="top")
+```
+
+## SEM Convergence
+
+```{r fig-flips}
+#| label: fig-flips
+#| fig-cap: "Label flips per SEM iteration."
+#| fig-height: 4
+plots <- list()
+for (nm in list(list(res=results$fitC$sem,lab="C: SEM Indep"),
+                list(res=results$fitD$sem,lab="D: SEM Biv"))) {
+  if (!is.null(nm$res)) plots[[length(plots)+1]] <- plot_flips(nm$res) + ggtitle(nm$lab)
+}
+if (length(plots)==2) {
+  gridExtra::grid.arrange(plots[[1]],plots[[2]],ncol=2)
+} else if (length(plots)==1) {
+  print(plots[[1]])
+}
+```
+
+## SEM Relabelling: Confusion Matrices
+
+The SEM corrects the naive location-based labels by relabelling events
+whose clustering signature is more consistent with the other process.
+The tables below compare the **location-based label** (which county the
+event physically occurred in) against the **SEM-inferred label** (the
+process the SEM assigned). Off-diagonal entries represent events the SEM
+believes were triggered by parents in the other region — i.e. spatial
+spillover.
+
+```{r tbl-confusion}
+#| label: tbl-confusion
+build_cm <- function(sem_obj, label) {
+  if (is.null(sem_obj)) return(NULL)
+  lab <- sem_obj$adaptive$adaptive_labelling
+  post <- lab[lab$t >= 0, ]
+  if (is.null(post$location_process) || is.null(post$inferred_process)) return(NULL)
+  tab <- table(Location = post$location_process, Inferred = post$inferred_process)
+  as.data.frame.matrix(tab)
+}
+
+cm_C <- build_cm(results$fitC$sem, "C")
+cm_D <- build_cm(results$fitD$sem, "D")
+```
+
+### Fit C — SEM Independent ETAS
+
+The independent model can only relabel events from one process to the
+other; it has no cross-excitation terms, so relabelling corrects for
+events that the model thinks are background from the wrong region.
+
+```{r tbl-cm-C}
+#| label: tbl-cm-C
+if (!is.null(cm_C)) {
+  n_post_C <- sum(cm_C)
+  cm_C_pct <- round(cm_C / n_post_C * 100, 1)
+  cm_display <- cm_C
+  for (rn in rownames(cm_C)) for (cn in colnames(cm_C)) {
+    cm_display[rn, cn] <- paste0(cm_C[rn, cn], "  (", cm_C_pct[rn, cn], "%)")
+  }
+  kable(cm_display,
+        caption = paste0("Fit C: Location vs SEM-inferred label (n = ", n_post_C,
+                         " post-treatment events). Counts (% of total)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_C)))
+}
+```
+
+```{r fig-cm-C}
+#| label: fig-cm-C
+#| fig-cap: "Fit C — Post-treatment events coloured by SEM-inferred label."
+#| fig-height: 5
+if (!is.null(results$fitC$sem)) {
+  lab_C <- results$fitC$sem$adaptive$adaptive_labelling
+  post_C <- lab_C[lab_C$t >= 0, ]
+  post_C$Relabelled <- post_C$location_process != post_C$inferred_process
+  post_C$Label <- paste0(post_C$location_process, " \u2192 ", post_C$inferred_process)
+  post_C$Label <- factor(post_C$Label)
+  ggplot(post_C, aes(x = x, y = y, colour = inferred_process, shape = Relabelled)) +
+    geom_point(size = 1.5, alpha = 0.7) +
+    scale_colour_manual(values = c(control = "#377eb8", treated = "#e41a1c"),
+                        name = "SEM label") +
+    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 4),
+                       name = "Relabelled?") +
+    labs(title = "Fit C: SEM Independent — Inferred Labels",
+         x = "X (km)", y = "Y (km)") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "right")
+}
+```
+
+### Fit D — SEM Bivariate ETAS
+
+The bivariate model has cross-excitation, so its relabelling accounts
+for the branching structure: an event in a control county that was
+likely triggered by a parent in a treated county is relabelled as
+"treated."
+
+```{r tbl-cm-D}
+#| label: tbl-cm-D
+if (!is.null(cm_D)) {
+  n_post_D <- sum(cm_D)
+  cm_D_pct <- round(cm_D / n_post_D * 100, 1)
+  cm_display_D <- cm_D
+  for (rn in rownames(cm_D)) for (cn in colnames(cm_D)) {
+    cm_display_D[rn, cn] <- paste0(cm_D[rn, cn], "  (", cm_D_pct[rn, cn], "%)")
+  }
+  kable(cm_display_D,
+        caption = paste0("Fit D: Location vs SEM-inferred label (n = ", n_post_D,
+                         " post-treatment events). Counts (% of total)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_D)))
+}
+```
+
+```{r fig-cm-D}
+#| label: fig-cm-D
+#| fig-cap: "Fit D — Post-treatment events coloured by SEM-inferred label. Crosses mark relabelled events."
+#| fig-height: 5
+if (!is.null(results$fitD$sem)) {
+  lab_D <- results$fitD$sem$adaptive$adaptive_labelling
+  post_D <- lab_D[lab_D$t >= 0, ]
+  post_D$Relabelled <- post_D$location_process != post_D$inferred_process
+  ggplot(post_D, aes(x = x, y = y, colour = inferred_process, shape = Relabelled)) +
+    geom_point(size = 1.5, alpha = 0.7) +
+    scale_colour_manual(values = c(control = "#377eb8", treated = "#e41a1c"),
+                        name = "SEM label") +
+    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 4),
+                       name = "Relabelled?") +
+    labs(title = "Fit D: SEM Bivariate — Inferred Labels",
+         x = "X (km)", y = "Y (km)") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "right")
+}
+```
+
+### Comparison
+
+```{r tbl-cm-summary}
+#| label: tbl-cm-summary
+sum_rows <- list()
+for (info in list(list(cm = cm_C, lab = "C: SEM Independent"),
+                  list(cm = cm_D, lab = "D: SEM Bivariate"))) {
+  cm <- info$cm
+  if (is.null(cm)) next
+  n_total <- sum(cm)
+  ctrl_to_treat <- if ("treated" %in% colnames(cm) && "control" %in% rownames(cm)) cm["control","treated"] else 0
+  treat_to_ctrl <- if ("control" %in% colnames(cm) && "treated" %in% rownames(cm)) cm["treated","control"] else 0
+  n_flipped <- ctrl_to_treat + treat_to_ctrl
+  sum_rows[[length(sum_rows)+1]] <- data.frame(
+    Model = info$lab,
+    `Post events` = n_total,
+    `Ctrl to Treat` = ctrl_to_treat,
+    `Treat to Ctrl` = treat_to_ctrl,
+    `Total relabelled` = n_flipped,
+    `Pct relabelled` = paste0(round(n_flipped / n_total * 100, 1), "%"),
+    check.names = FALSE)
+}
+if (length(sum_rows) > 0) {
+  kable(do.call(rbind, sum_rows),
+        caption = "Summary of SEM relabelling across models.",
+        align = "lccccc") |>
+    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+}
+```
+
+# Average Treatment Effect
+
+The ATE measures the expected per-county change in earthquake counts if
+all counties were switched from control to treated:
+
+$$
+\text{ATE} = \frac{1}{n}\bigl(\mathbb{E}[N_{\text{all treated}}] - \mathbb{E}[N_{\text{all control}}]\bigr)
+$$
+
+estimated via Monte Carlo simulation under the fitted ETAS parameters.
+
+```{r tbl-ate}
+#| label: tbl-ate
+ate_rows <- list(
+  list(lab = "A: Naive Independent", ate = results$fitA$ate),
+  list(lab = "B: Naive Bivariate",   ate = results$fitB$ate),
+  list(lab = "C: SEM Independent",   ate = results$fitC$ate),
+  list(lab = "D: SEM Bivariate",     ate = results$fitD$ate))
+
+ate_df <- do.call(rbind, lapply(ate_rows, function(r) {
+  if (is.null(r$ate)) return(data.frame(Model=r$lab, `All-Nothing`=NA, `ATE naive`=NA, Spillover=NA))
+  data.frame(
+    Model = r$lab,
+    `All-Nothing` = round(mean(r$ate$all_nothing_sim$ATE, na.rm=TRUE), 2),
+    `ATE naive` = round(r$ate$ATE_naive, 2),
+    Spillover = round(r$ate$ATE_spillover, 2))
+}))
+kable(ate_df, col.names = c("Model","All-Nothing ATE","Naive ATE","Spillover"),
+      caption = "ATE estimates across four models (events per county per post-treatment window).") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+```{r fig-ate}
+#| label: fig-ate
+#| fig-cap: "All-or-nothing ATE distribution from simulation."
+#| fig-height: 4
+ate_sim <- do.call(rbind, lapply(ate_rows, function(r) {
+  if (is.null(r$ate)) return(NULL)
+  data.frame(Model = r$lab, ATE = r$ate$all_nothing_sim$ATE)
+}))
+if (!is.null(ate_sim) && nrow(ate_sim) > 0) {
+  ggplot(ate_sim, aes(x = ATE, fill = Model)) +
+    geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    scale_fill_brewer(palette = "Set1") +
+    labs(x = "Per-county ATE (events)", y = "Simulation count") +
+    theme_minimal(base_size = 13) +
+    theme(legend.position = "top")
+}
+```
+
+# Interpretation
+
+```{r summaries, include=FALSE}
+mu_ratio_D <- bt(D_par,"mu") / bc(D_par,"mu")
+ate_D_val <- if (!is.null(results$fitD$ate)) round(mean(results$fitD$ate$all_nothing_sim$ATE, na.rm=TRUE), 2) else NA
+```
+
+**Background rate.** The treated-region background rate is
+~`r round(mu_ratio_D)`$\times$ higher than control, reflecting
+injection-driven seismicity. The bivariate models attribute even less
+background to the control region by explaining some events as
+cross-excitation from treated-region parents.
+
+**Cross-excitation.** Both bivariate models find $A_{01} >
+A_{10}$: treated-region earthquakes trigger aftershocks in control
+counties more than vice versa. The SEM increases the estimated
+cross-excitation ($A_{01}$: `r round(B_par[["A_01"]],4)` →
+`r round(D_par[["A_01"]],4)`), suggesting naive labelling
+underestimates spillover.
+
+**ATE.** The all-or-nothing ATE from the SEM bivariate model is
+**`r ate_D_val`** events per county. This accounts for both direct
+effects and cross-regional spillover, providing a more complete picture
+than the naive or independent estimates.
+
+# Configuration
+
+```{r tbl-config}
+#| label: tbl-config
+cdf <- data.frame(
+  Setting = c("Magnitude threshold","GR β","Counties (total / treated)",
+              "SEM outer iters","SEM inner iters","SEM proposals",
+              "SEM change factor","Post window (days)","Test mode"),
+  Value = c(cfg$ETAS_M0, cfg$BETA_GR,
+            paste0(cfg$n_counties," / ",cfg$n_treated),
+            cfg$SEM_N_ITER, cfg$SEM_INNER_ITER, cfg$SEM_N_LABELLINGS,
+            cfg$SEM_CHANGE_FACTOR,
+            paste(cfg$windowT_post, collapse=" – "), cfg$TEST_MODE))
+kable(cdf, align="lc", caption="Analysis configuration.") |>
+  kable_styling(bootstrap_options="striped", full_width=FALSE)
+```
+
+# References
+
+- Ogata, Y. (1988). Statistical models for earthquake occurrences.
+  *JASA*, 83(401), 9–27.
+- Zhuang, J., Ogata, Y. & Vere-Jones, D. (2002). Stochastic
+  declustering of space-time earthquake occurrences. *JASA*, 97(458),
+  369–380.
+- Langenbruch, C. & Zoback, M. D. (2016). How will induced seismicity
+  in Oklahoma respond to decreased saltwater injection rates? *Science
+  Advances*, 2(11), e1601542.
+
+---
+*Report generated by PPDisentangle.*

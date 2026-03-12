@@ -10,6 +10,139 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// etas_bivariate_loglik_cpp
+double etas_bivariate_loglik_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector mag, IntegerVector process_id, NumericVector W_val_0, NumericVector W_val_1, double mu_0, double mu_1, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double areaS_0, double areaS_1, double t_max, double t_trunc);
+RcppExport SEXP _PPDisentangle_etas_bivariate_loglik_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP magSEXP, SEXP process_idSEXP, SEXP W_val_0SEXP, SEXP W_val_1SEXP, SEXP mu_0SEXP, SEXP mu_1SEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP areaS_0SEXP, SEXP areaS_1SEXP, SEXP t_maxSEXP, SEXP t_truncSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mag(magSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type process_id(process_idSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val_0(W_val_0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val_1(W_val_1SEXP);
+    Rcpp::traits::input_parameter< double >::type mu_0(mu_0SEXP);
+    Rcpp::traits::input_parameter< double >::type mu_1(mu_1SEXP);
+    Rcpp::traits::input_parameter< double >::type A_00(A_00SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_00(alpha_m_00SEXP);
+    Rcpp::traits::input_parameter< double >::type A_11(A_11SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_11(alpha_m_11SEXP);
+    Rcpp::traits::input_parameter< double >::type A_01(A_01SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_01(alpha_m_01SEXP);
+    Rcpp::traits::input_parameter< double >::type A_10(A_10SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_10(alpha_m_10SEXP);
+    Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type D(DSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma_par(gamma_parSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< double >::type areaS_0(areaS_0SEXP);
+    Rcpp::traits::input_parameter< double >::type areaS_1(areaS_1SEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    rcpp_result_gen = Rcpp::wrap(etas_bivariate_loglik_cpp(t, x, y, mag, process_id, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_max, t_trunc));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sim_etas_bivariate_children_cpp
+List sim_etas_bivariate_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, IntegerVector parent_process, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool);
+RcppExport SEXP _PPDisentangle_sim_etas_bivariate_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP parent_processSEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type parent_x(parent_xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_y(parent_ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_t(parent_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_mag(parent_magSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type parent_process(parent_processSEXP);
+    Rcpp::traits::input_parameter< double >::type A_00(A_00SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_00(alpha_m_00SEXP);
+    Rcpp::traits::input_parameter< double >::type A_11(A_11SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_11(alpha_m_11SEXP);
+    Rcpp::traits::input_parameter< double >::type A_01(A_01SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_01(alpha_m_01SEXP);
+    Rcpp::traits::input_parameter< double >::type A_10(A_10SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_10(alpha_m_10SEXP);
+    Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type D(DSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma_par(gamma_parSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta_gr(beta_grSEXP);
+    Rcpp::traits::input_parameter< double >::type t_min(t_minSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type x_min(x_minSEXP);
+    Rcpp::traits::input_parameter< double >::type x_max(x_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type y_min(y_minSEXP);
+    Rcpp::traits::input_parameter< double >::type y_max(y_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mag_pool(mag_poolSEXP);
+    rcpp_result_gen = Rcpp::wrap(sim_etas_bivariate_children_cpp(parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool));
+    return rcpp_result_gen;
+END_RCPP
+}
+// etas_loglik_inhom_cpp
+double etas_loglik_inhom_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector mag, NumericVector W_val, double mu, double A, double alpha_m, double cc, double p, double D, double gamma_par, double q, double m0, double areaS, double t_max, double t_trunc);
+RcppExport SEXP _PPDisentangle_etas_loglik_inhom_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP magSEXP, SEXP W_valSEXP, SEXP muSEXP, SEXP ASEXP, SEXP alpha_mSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP areaSSEXP, SEXP t_maxSEXP, SEXP t_truncSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mag(magSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val(W_valSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m(alpha_mSEXP);
+    Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type D(DSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma_par(gamma_parSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< double >::type areaS(areaSSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    rcpp_result_gen = Rcpp::wrap(etas_loglik_inhom_cpp(t, x, y, mag, W_val, mu, A, alpha_m, cc, p, D, gamma_par, q, m0, areaS, t_max, t_trunc));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sim_etas_children_cpp
+DataFrame sim_etas_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, double A, double alpha_m, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool);
+RcppExport SEXP _PPDisentangle_sim_etas_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP ASEXP, SEXP alpha_mSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type parent_x(parent_xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_y(parent_ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_t(parent_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_mag(parent_magSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m(alpha_mSEXP);
+    Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type D(DSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma_par(gamma_parSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< double >::type beta_gr(beta_grSEXP);
+    Rcpp::traits::input_parameter< double >::type t_min(t_minSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type x_min(x_minSEXP);
+    Rcpp::traits::input_parameter< double >::type x_max(x_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type y_min(y_minSEXP);
+    Rcpp::traits::input_parameter< double >::type y_max(y_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mag_pool(mag_poolSEXP);
+    rcpp_result_gen = Rcpp::wrap(sim_etas_children_cpp(parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool));
+    return rcpp_result_gen;
+END_RCPP
+}
 // hawkes_loglik_inhom_cpp
 double hawkes_loglik_inhom_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector W_val, double mu, double alpha, double beta, double K, double areaS, double t_max, double t_trunc);
 RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP W_valSEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_maxSEXP, SEXP t_truncSEXP) {
@@ -56,6 +189,10 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_PPDisentangle_etas_bivariate_loglik_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_cpp, 27},
+    {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 28},
+    {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
+    {"_PPDisentangle_sim_etas_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_children_cpp, 21},
     {"_PPDisentangle_hawkes_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_cpp, 11},
     {"_PPDisentangle_sim_hawkes_children_cpp", (DL_FUNC) &_PPDisentangle_sim_hawkes_children_cpp, 13},
     {NULL, NULL, 0}

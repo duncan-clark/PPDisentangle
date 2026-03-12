@@ -192,3 +192,174 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
     treated_pp = treated_pp, control_pp = control_pp
   ))
 }
+
+
+#' Estimate one-flip treatment effect for cell i (ETAS model)
+#'
+#' Analogue of \code{tau_i} for the ETAS model.
+#'
+#' @inheritParams tau_i
+#' @param control_pp  Control ETAS parameter list.
+#' @param treated_pp  Treated ETAS parameter list.
+#' @param m0  Reference magnitude.
+#' @param beta_gr  Gutenberg-Richter beta (or NULL for resampling).
+#' @param mag_pool  Magnitude pool for resampling.
+#' @return Scalar estimate of tau_i.
+#' @export
+tau_i_etas <- function(i, partition, treated_partitions, statespace,
+                       windowT, control_pp, treated_pp, n_sim,
+                       m0, beta_gr = NULL, mag_pool = NULL) {
+  treated_idx <- tilenames(partition) %in% treated_partitions
+
+  z_plus <- treated_idx;  z_plus[i]  <- TRUE
+  z_minus <- treated_idx; z_minus[i] <- FALSE
+
+  partition_plus  <- ifelse(z_plus, "treated", "control")
+  partition_minus <- ifelse(z_minus, "treated", "control")
+
+  make_ss <- function(z) {
+    pr <- unique(ifelse(z, "treated", "control"))
+    ss <- list()
+    for (p in pr) ss[[p]] <- as.owin(partition[ifelse(z, "treated", "control") == p])
+    ss
+  }
+
+  plus_total <- 0; minus_total <- 0
+  for (j in seq_len(n_sim)) {
+    pp <- generate_inhomogeneous_etas(
+      Omega = statespace, partition = partition, time_window = windowT,
+      partition_processes = partition_plus,
+      etas_params = list(control = control_pp, treated = treated_pp),
+      m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool
+    )
+    plus_total <- plus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+
+    pp <- generate_inhomogeneous_etas(
+      Omega = statespace, partition = partition, time_window = windowT,
+      partition_processes = partition_minus,
+      etas_params = list(control = control_pp, treated = treated_pp),
+      m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool
+    )
+    minus_total <- minus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+  }
+  return(plus_total / n_sim - minus_total / n_sim)
+}
+
+
+#' Parametric ATE estimation using fitted ETAS processes
+#'
+#' ETAS analogue of \code{ATE_estim_hawkes}.  Fits ETAS models to
+#' control/treated subsets, then estimates ATE via simulation.
+#'
+#' @inheritParams ATE_estim_hawkes
+#' @param etas_params  Optional pre-fitted ETAS params
+#'   (list with control, treated).
+#' @param m0  Reference magnitude.
+#' @param beta_gr  Gutenberg-Richter beta (or NULL for resampling).
+#' @param mag_pool  Numeric vector of magnitudes for resampling.
+#' @param fixed_params  Named list of ETAS params to hold fixed.
+#' @return List with all-or-nothing sims, tau estimates, decomposed ATEs,
+#'   and fitted parameter lists.
+#' @export
+ATE_estim_etas <- function(statespace, partition, observed_data,
+                           treated_partitions,
+                           etas_params = NULL,
+                           n_tau_sims = 10, n_tau_i = 10,
+                           n_sims = 100,
+                           windowT = c(0, 1),
+                           windowS = NULL,
+                           maxit = 3000,
+                           m0 = NULL,
+                           beta_gr = NULL,
+                           mag_pool = NULL,
+                           fixed_params = NULL) {
+  if (is.null(windowS)) windowS <- statespace
+  treated_idx <- tilenames(partition) %in% treated_partitions
+  control_state_space <- as.owin(partition[!treated_idx])
+  treated_state_space <- as.owin(partition[treated_idx])
+
+  if (is.null(m0)) m0 <- min(observed_data$mag, na.rm = TRUE)
+
+  control_mean <- sum(observed_data$location_process == "control") / sum(!treated_idx)
+  treated_mean <- sum(observed_data$location_process == "treated") / sum(treated_idx)
+  control_in_ctrl <- sum(observed_data$inferred_process == "control" &
+                         observed_data$location_process == "control") / sum(!treated_idx)
+  treated_in_treat <- sum(observed_data$inferred_process == "treated" &
+                          observed_data$location_process == "treated") / sum(treated_idx)
+
+  ATE_total     <- treated_mean - control_in_ctrl
+  ATE_treatment <- treated_mean - control_mean
+  ATE_spillover <- control_mean - control_in_ctrl
+  ATE_naive     <- ATE_treatment
+
+  if (is.null(etas_params)) {
+    dt <- windowT[2] - windowT[1]
+    init_ctrl <- list(mu = sum(observed_data$inferred_process == "control") / dt,
+                      A = 0.1, alpha_m = 0.5, c = 0.05, p = 1.2,
+                      D = 1.0, gamma = 0.3, q = 1.5)
+    init_treat <- list(mu = sum(observed_data$inferred_process == "treated") / dt,
+                       A = 0.1, alpha_m = 0.5, c = 0.05, p = 1.2,
+                       D = 1.0, gamma = 0.3, q = 1.5)
+
+    ctrl_fit <- fit_etas(
+      params_init = init_ctrl,
+      realiz = observed_data[observed_data$inferred_process == "control", ],
+      windowT = windowT, windowS = windowS, m0 = m0,
+      maxit = maxit, fixed_params = fixed_params,
+      zero_background_region = treated_state_space
+    )
+    control_pp <- as.list(ctrl_fit$par)
+    names(control_pp) <- .etas_par_names
+
+    treat_fit <- fit_etas(
+      params_init = init_treat,
+      realiz = observed_data[observed_data$inferred_process == "treated", ],
+      windowT = windowT, windowS = windowS, m0 = m0,
+      maxit = maxit, fixed_params = fixed_params,
+      zero_background_region = control_state_space
+    )
+    treated_pp <- as.list(treat_fit$par)
+    names(treated_pp) <- .etas_par_names
+  } else {
+    control_pp <- etas_params$control
+    treated_pp <- etas_params$treated
+  }
+
+  partition_process <- rep("control", partition$n)
+  partition_process[treated_idx] <- "treated"
+
+  tau_i_estim <- vapply(seq_len(n_tau_i), function(j) {
+    tau_i_etas(
+      sample(length(partition_process), 1),
+      partition = partition, treated_partitions = treated_partitions,
+      statespace = statespace, windowT = windowT,
+      control_pp = control_pp, treated_pp = treated_pp, n_sim = n_tau_sims,
+      m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool
+    )
+  }, numeric(1))
+  tau_1_estim <- mean(tau_i_estim)
+
+  c_counts <- numeric(n_sims)
+  t_counts <- numeric(n_sims)
+  for (s in seq_len(n_sims)) {
+    c_sim <- sim_etas(control_pp, windowT, windowS = statespace,
+                      m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool)
+    t_sim <- sim_etas(treated_pp, windowT, windowS = statespace,
+                      m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool)
+    c_counts[s] <- length(c_sim$t)
+    t_counts[s] <- length(t_sim$t)
+  }
+  all_nothing_sim <- data.frame(
+    c_mean = c_counts / partition$n,
+    t_mean = t_counts / partition$n,
+    ATE    = (t_counts - c_counts) / partition$n
+  )
+
+  return(list(
+    all_nothing_sim = all_nothing_sim,
+    tau_1_estim = tau_1_estim,
+    ATE_total = ATE_total, ATE_treatment = ATE_treatment,
+    ATE_spillover = ATE_spillover, ATE_naive = ATE_naive,
+    treated_pp = treated_pp, control_pp = control_pp
+  ))
+}

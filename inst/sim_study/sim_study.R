@@ -61,10 +61,10 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 10
-  EM_ITER      <- 100
-  SEM_EM_ADAPTIVE_ITER <- 100
-  SEM_N_ITER   <- 10
-  SEM_N_LABELLINGS <- 100
+  EM_ITER      <- 1000
+  SEM_EM_ADAPTIVE_ITER <- 1000
+  SEM_N_ITER   <- 1
+  SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
   TREATMENT_TIME <- 10
@@ -385,7 +385,7 @@ run_em <- function(x) {
     param_update_cadence = 10, proposal_update_cadence = 1,
     update_starting_data = TRUE, include_starting_data = FALSE,
     metric_name = "post_likelihood", optim_method = "max",
-    iter = EM_ITER, n_props = 10, change_factor = 0.02,
+    iter = EM_ITER, n_props = 10, change_factor = 0.01,
     MCMC_style = FALSE, verbose = FALSE
   )
 }
@@ -435,7 +435,7 @@ run_sem <- function(dat) {
       update_control_params = FALSE,
       iter = SEM_EM_ADAPTIVE_ITER,
       n_props = 10,
-      change_factor = 0.02,
+      change_factor = 0.01,
       include_starting_data = FALSE,
       update_starting_data = TRUE,
       verbose = FALSE

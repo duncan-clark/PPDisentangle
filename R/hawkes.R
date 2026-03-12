@@ -608,6 +608,7 @@ sim_hawkes <- function(params,
       yrange = c(windowS[3], windowS[4])
     )
   }
+  if (!is.list(params)) params <- as.list(params)
   mu <- params$mu
   alpha <- params$alpha
   beta <- params$beta
@@ -781,6 +782,7 @@ sim_hawkes_fast <- function(params,
                             covariate_lookup = NULL,
                             t_trunc = NULL,
                             ...) {
+  if (!is.list(params)) params <- as.list(params)
   mu <- params$mu
   K  <- params$K
 
@@ -985,6 +987,7 @@ generate_inhomogeneous_hawkes <- function(Omega,
   for (k in seq_along(processes)) {
     p <- processes[k]
     hp <- hawkes_params[[p]]
+    if (!is.list(hp)) hp <- as.list(hp)
     if (hp$mu < 1e-10) next
     tmp_hp <- hp; tmp_hp$K <- 0
     ev <- do.call(sim_hawkes_fast, c(list(
@@ -1024,6 +1027,7 @@ generate_inhomogeneous_hawkes <- function(Omega,
 
     if (is.null(all_bg_x[[p]])) {
       hp <- hawkes_params[[p]]
+      if (!is.list(hp)) hp <- as.list(hp)
       if (hp$K < 1e-6 && is.null(f)) next
       bg_realization <- list(x = numeric(0), y = numeric(0), t = numeric(0))
     } else {

@@ -43,6 +43,7 @@ adaptive_SEM <- function(pp_data,
                            update_starting_data = TRUE,
                            include_starting_data = FALSE
                          ),
+                         model_type = "hawkes",
                          ...) {
   t_global <- proc.time()[3]
   dots <- list(...)
@@ -50,6 +51,12 @@ adaptive_SEM <- function(pp_data,
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
   dots_no_trunc <- dots
   dots_no_trunc$t_trunc <- NULL
+
+  is_etas <- identical(model_type, "etas")
+  is_biv_etas <- identical(model_type, "etas_bivariate")
+  loglik_fn <- if (is_biv_etas) loglik_etas_bivariate
+               else if (is_etas) loglik_etas
+               else loglik_hawk_fast
 
   if (partition$type != "mask") {
     if (verbose) message("Converting partition to raster mask for speed...")
@@ -89,7 +96,8 @@ adaptive_SEM <- function(pp_data,
     proposal_update_cadence = 1, update_starting_data = TRUE,
     include_starting_data = FALSE, iter = 100, n_props = 10,
     change_factor = 0.1, proposal_method = "simulation",
-    fixed_params = NULL, verbose = FALSE, state_spaces = NULL
+    fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
+    outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1
   )
   for (nm in names(ac_defaults)) {
     if (is.null(adaptive_control[[nm]])) adaptive_control[[nm]] <- ac_defaults[[nm]]
@@ -121,6 +129,7 @@ adaptive_SEM <- function(pp_data,
       proposal_method = adaptive_control$proposal_method,
       fixed_params = adaptive_control$fixed_params,
       verbose = TRUE,
+      model_type = model_type,
       ...
     )
     t_adapt_end <- proc.time()[3]
@@ -154,21 +163,36 @@ adaptive_SEM <- function(pp_data,
   calculate_weights <- function(labellings, treat_par, control_par, ...) {
     sapply(labellings, function(y) {
       realiz <- y %>% dplyr::filter(.data$t >= treatment_time)
+      if (is_biv_etas) {
+        biv_par <- if (is.null(dots$etas_bivariate_params)) {
+          init_bivariate_from_independent(control_par, treat_par)
+        } else {
+          dots$etas_bivariate_params
+        }
+        return(loglik_etas_bivariate(
+          params = biv_par, realiz = realiz,
+          windowT = c(treatment_time, max(starting_data$t)),
+          windowS = statespace,
+          control_state_space = control_state_space,
+          treated_state_space = treated_state_space,
+          t_trunc = t_trunc
+        ))
+      }
       include <- which(realiz$inferred_process == "control")
       if (length(include) == 0) return(-Inf)
-      control_lik <- loglik_hawk_fast(
+      control_lik <- loglik_fn(
         params = control_par, realiz = realiz[include, ],
         windowT = c(treatment_time, max(starting_data$t)),
         windowS = statespace, zero_background_region = treated_state_space,
-        density_approx = FALSE, numeric_integral = FALSE, t_trunc = t_trunc, ...
+        t_trunc = t_trunc, ...
       )
       include <- which(realiz$inferred_process == "treated")
       if (length(include) == 0) return(-Inf)
-      treat_lik <- loglik_hawk_fast(
+      treat_lik <- loglik_fn(
         params = treat_par, realiz = realiz[include, ],
         windowT = c(treatment_time, max(starting_data$t)),
         windowS = statespace, zero_background_region = control_state_space,
-        density_approx = FALSE, numeric_integral = FALSE, t_trunc = t_trunc, ...
+        t_trunc = t_trunc, ...
       )
       return(control_lik + treat_lik)
     })
@@ -210,7 +234,8 @@ adaptive_SEM <- function(pp_data,
           hawkes_params_control = hawkes_params_control,
           hawkes_params_treated = t_params[[length(t_params)]],
           change_factor = adaptive_control$change_factor,
-          filtration = pre, proximity_weight = 0, verbose = FALSE, ...
+          filtration = pre, proximity_weight = 0, verbose = FALSE,
+          model_type = model_type, ...
         )
       })
       baseline_with_pre <- rbind(pre, baseline_adaptive_labelling)
@@ -245,20 +270,123 @@ adaptive_SEM <- function(pp_data,
     }
 
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
-    all_names <- c("mu", "alpha", "beta", "K")
+    outer_maxit <- adaptive_control$outer_maxit
+    outer_maxit_biv <- if (!is.null(adaptive_control$outer_maxit_biv)) {
+      adaptive_control$outer_maxit_biv
+    } else {
+      outer_maxit
+    }
+
+    if (is_biv_etas) {
+      # --- Bivariate ETAS: joint optimization over 15-parameter vector ---
+      biv_names <- .etas_bivariate_par_names
+      biv_fp_idx <- if (!is.null(fp)) match(names(fp), biv_names) else integer(0)
+      biv_fp_idx <- biv_fp_idx[!is.na(biv_fp_idx)]
+      biv_fr_idx <- setdiff(seq_along(biv_names), biv_fp_idx)
+
+      biv_par <- if (!is.null(dots$etas_bivariate_params)) {
+        unlist(dots$etas_bivariate_params)
+      } else {
+        init_bivariate_from_independent(
+          c_params[[length(c_params)]], t_params[[length(t_params)]])
+      }
+      if (is.null(names(biv_par))) names(biv_par) <- biv_names
+
+      biv_wT <- c(treatment_time, max(starting_data$t))
+      biv_precomps <- lapply(labellings[keepers], function(y) {
+        r <- y[y$t >= treatment_time, ]
+        r <- r[order(r$t), ]
+        nn <- nrow(r)
+        W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
+        aS0 <- spatstat.geom::area(control_state_space)
+        aS1 <- spatstat.geom::area(treated_state_space)
+        W0[inside.owin(r$x, r$y, treated_state_space)] <- 0
+        W1[inside.owin(r$x, r$y, control_state_space)] <- 0
+        if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
+        list(realiz = r, precomp = list(W_0 = W0, W_1 = W1,
+                                        areaS_0 = aS0, areaS_1 = aS1))
+      })
+      biv_obj <- function(par15) {
+        liks <- sapply(biv_precomps, function(pc) {
+          loglik_etas_bivariate(
+            params = par15, realiz = pc$realiz,
+            windowT = biv_wT, windowS = statespace,
+            control_state_space = control_state_space,
+            treated_state_space = treated_state_space,
+            t_trunc = t_trunc, precomp = pc$precomp
+          )
+        })
+        sum(liks * weights)
+      }
+
+      if (verbose) {
+        cat("\n--- Outer optim: bivariate ETAS (joint) ---\n")
+        cat(sprintf("  starting par: %s\n",
+                    paste(biv_names, signif(biv_par, 5), sep = "=", collapse = "  ")))
+      }
+
+      t0 <- proc.time()[3]
+      if (length(biv_fp_idx) > 0) {
+        biv_wrap <- function(free_par) {
+          p15 <- biv_par; p15[biv_fr_idx] <- free_par
+          biv_obj(p15)
+        }
+        biv_res <- tryCatch(
+          optim(par = biv_par[biv_fr_idx], fn = biv_wrap, method = "Nelder-Mead",
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit_biv)),
+          error = function(e) {
+            cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
+            list(par = biv_par[biv_fr_idx], convergence = -99)
+          }
+        )
+        biv_par[biv_fr_idx] <- biv_res$par
+      } else {
+        biv_res <- tryCatch(
+          optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit_biv)),
+          error = function(e) {
+            cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
+            list(par = biv_par, convergence = -99)
+          }
+        )
+        biv_par <- biv_res$par
+      }
+      names(biv_par) <- biv_names
+      dots$etas_bivariate_params <- biv_par
+
+      # Extract marginal params for downstream compatibility
+      t_params[[length(t_params) + 1]] <- as.list(c(
+        mu = biv_par[["mu_1"]], A = biv_par[["A_11"]],
+        alpha_m = biv_par[["alpha_m_11"]],
+        c = biv_par[["c"]], p = biv_par[["p"]],
+        D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
+      c_params[[length(c_params) + 1]] <- as.list(c(
+        mu = biv_par[["mu_0"]], A = biv_par[["A_00"]],
+        alpha_m = biv_par[["alpha_m_00"]],
+        c = biv_par[["c"]], p = biv_par[["p"]],
+        D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
+
+      if (verbose) {
+        cat(sprintf("  [bivariate] convergence: %s\n", biv_res$convergence))
+        cat(sprintf("  [bivariate] final par: %s\n",
+                    paste(biv_names, signif(biv_par, 5), sep = "=", collapse = "  ")))
+        cat(sprintf("  [bivariate] took %.1fs\n", proc.time()[3] - t0))
+      }
+    } else {
+    # --- Independent models: separate control/treated optimization ---
+    all_names <- if (is_etas) .etas_par_names else c("mu", "alpha", "beta", "K")
     fp_idx <- if (!is.null(fp)) match(names(fp), all_names) else integer(0)
     fr_idx <- setdiff(seq_along(all_names), fp_idx)
 
     run_outer_optim <- function(process_label, zero_bg_region, par_list) {
       obj_fn <- function(params) {
         liks <- sapply(labellings[keepers], function(y) {
-          loglik_hawk_fast(
+          loglik_fn(
             params = params,
             realiz = y %>% dplyr::filter(.data$t >= treatment_time,
                                          .data$inferred_process == process_label),
             windowT = c(treatment_time, max(starting_data$t)),
             windowS = statespace, zero_background_region = zero_bg_region,
-            density_approx = FALSE, numeric_integral = FALSE,
             background_rate_var = "W",
             t_trunc = t_trunc
           )
@@ -281,7 +409,7 @@ adaptive_SEM <- function(pp_data,
         }
         res <- tryCatch(
           optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit)),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec[fr_idx], convergence = -99) }
         )
         out_par <- full_vec; out_par[fr_idx] <- res$par
@@ -289,7 +417,7 @@ adaptive_SEM <- function(pp_data,
       } else {
         res <- tryCatch(
           optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = 1000)),
+                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit)),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec, convergence = -99) }
         )
       }
@@ -306,14 +434,15 @@ adaptive_SEM <- function(pp_data,
     }
 
     if (verbose) cat("\n--- Outer optim: treated ---\n")
-    fit_t <- run_outer_optim("treated", control_state_space, t_params[[length(t_params)]])
+    fit_t <- as.list(run_outer_optim("treated", control_state_space, t_params[[length(t_params)]]))
     t_params[[length(t_params) + 1]] <- fit_t
 
     if (isTRUE(adaptive_control$update_control_params)) {
       if (verbose) cat("\n--- Outer optim: control ---\n")
-      fit_c <- run_outer_optim("control", treated_state_space, c_params[[length(c_params)]])
+      fit_c <- as.list(run_outer_optim("control", treated_state_space, c_params[[length(c_params)]]))
       c_params[[length(c_params) + 1]] <- fit_c
     }
+    } # end non-bivariate branch
 
     counter <- counter + 1
   }
@@ -328,7 +457,7 @@ adaptive_SEM <- function(pp_data,
     class_results = adapt$class_results,
     adaptive_labelling = if (!is.null(baseline_adaptive_labelling)) baseline_adaptive_labelling else adapt$adaptive_labelling
   )
-  return(list(
+  result <- list(
     hawkes_params_control = c_params[[length(c_params)]],
     hawkes_params_treated = t_params[[length(t_params)]],
     t_params = t_params,
@@ -337,7 +466,11 @@ adaptive_SEM <- function(pp_data,
     adaptive_history = adaptive_history,
     time = proc.time()[3] - t_global,
     time_main_sem = t_main_sem_end - t_main_sem_start
-  ))
+  )
+  if (is_biv_etas && !is.null(dots$etas_bivariate_params)) {
+    result$etas_bivariate_params <- dots$etas_bivariate_params
+  }
+  return(result)
 }
 
 #' Check convergence of the SEM algorithm
