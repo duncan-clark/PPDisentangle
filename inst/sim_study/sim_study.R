@@ -54,8 +54,8 @@ if (TEST) {
   NX <- 10; NY <- 10
   SAVE_DIR     <- file.path(if (nzchar(Sys.getenv("SLURM_JOB_ID"))) Sys.getenv("SLURM_SUBMIT_DIR", getwd()) else getwd(), "cluster_output")
 } else if (ON_CLUSTER) {
-  N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "16"))
-  SIM_SIZE     <- N_CORES
+  N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "100"))
+  SIM_SIZE     <- 100
   N_SIMS       <- 100
   N_TAU_SIMS   <- 10
   N_TAU_I      <- 10

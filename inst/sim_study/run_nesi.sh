@@ -3,9 +3,8 @@
 #SBATCH --account=FIXME          # <-- your NeSI project code (e.g. nesi00123)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=72
 #SBATCH --time=72:00:00
-#SBATCH --mem=100G
+#SBATCH --mem=200G
 
 # ---- NeSI / Mahuika notes ----
 # Partition is auto-selected by Slurm based on resources requested.
@@ -45,9 +44,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
 
     CPUS="$PP_SIMS"
-    if [ "$CPUS" -gt 72 ]; then CPUS=72; fi
 
-    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs${PP_TEST:+, test mode}"
+    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode}"
 
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
