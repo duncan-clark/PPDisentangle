@@ -14,12 +14,9 @@ echo "Package root: $PKG_ROOT"
 echo ""
 
 # ---- Load modules ----
+# R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
 module purge
-module load R
-module load UDUNITS
-module load GDAL
-module load GEOS
-module load PROJ
+module load R-Geo/4.3.2-foss-2023a
 
 echo "R version: $(R --version | head -1)"
 echo "R library paths:"
@@ -31,7 +28,8 @@ echo "Installing R dependencies..."
 Rscript -e '
 deps <- c("spatstat", "ggplot2", "dplyr", "data.table", "parallel",
           "doParallel", "R.utils", "reshape2", "gridExtra", "scales",
-          "Rcpp", "sf", "knitr", "kableExtra", "tidyr", "jsonlite")
+          "Rcpp", "sf", "terra", "numDeriv", "rlang",
+          "knitr", "kableExtra", "tidyr", "jsonlite")
 installed <- rownames(installed.packages())
 to_install <- setdiff(deps, installed)
 if (length(to_install) > 0) {
@@ -56,17 +54,14 @@ cat("PPDisentangle loaded successfully.\n")
 cat("Functions available:", length(ls("package:PPDisentangle")), "\n")
 '
 
-# ---- Create output directories ----
-mkdir -p "$PKG_ROOT/cluster_output/logs"
-mkdir -p "$PKG_ROOT/cluster_output/results"
+mkdir -p "$PKG_ROOT/cluster_output"
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Edit run_nesi.sh: set --account to your NeSI project code"
-echo "  2. Test:   bash inst/sim_study/run_nesi.sh --test --sims 2"
-echo "  3. Run:    bash inst/sim_study/run_nesi.sh --sims 50"
+echo "  1. Test:   bash inst/sim_study/run_nesi.sh --test --sims 2"
+echo "  2. Run:    bash inst/sim_study/run_nesi.sh --sims 50"
 echo ""
 echo "Monitor:  squeue -u \$USER"
-echo "Results:  cluster_output/results/<JOB_ID>.rds"
+echo "Output:   cluster_output/<JOB_ID>.rds  cluster_output/<JOB_ID>.log"

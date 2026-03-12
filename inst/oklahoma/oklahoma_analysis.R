@@ -58,7 +58,7 @@ VANILLA_STARTS <- list(
 
 SEM_N_LABELLINGS  <- if (TEST_MODE) 5  else 10
 SEM_N_ITER        <- if (TEST_MODE) 1  else 1
-SEM_INNER_ITER    <- if (TEST_MODE) 10 else 100
+SEM_INNER_ITER    <- if (TEST_MODE) 10 else 500
 SEM_INNER_PROPS   <- if (TEST_MODE) 5  else 10
 SEM_CHANGE_FACTOR <- 0.01
 SEM_PARAM_UPDATE  <- 10
@@ -68,8 +68,7 @@ SEM_OUTER_MAXIT_BIV   <- if (TEST_MODE) 100 else 200
 FIXED_STRUCTURAL <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 
 ATE_N_SIMS    <- if (TEST_MODE) 20  else 200
-ATE_N_TAU_I   <- if (TEST_MODE) 5   else 30
-ATE_N_TAU_SIM <- if (TEST_MODE) 5   else 20
+ATE_WINDOW_DAYS <- 365
 
 etas_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 
@@ -440,9 +439,9 @@ for (nm in list(list(res = semC, label = "indep", title = "SEM Independent"),
 }
 
 # ============================================================================
-# 6. ATE estimation
+# 6. ATE estimation (1-year horizon)
 # ============================================================================
-cat("\n--- Step 6: ATE estimation ---\n")
+cat("\n--- Step 6: ATE estimation (1-year simulation horizon) ---\n")
 
 treated_partitions <- tilenames(partition)[treated_idx]
 pp_post_sem_C <- if (!is.null(semC)) semC$adaptive$adaptive_labelling else NULL
@@ -450,68 +449,59 @@ pp_post_sem_C <- if (!is.null(pp_post_sem_C)) pp_post_sem_C[pp_post_sem_C$t >= 0
 pp_post_sem_D <- if (!is.null(semD)) semD$adaptive$adaptive_labelling else NULL
 pp_post_sem_D <- if (!is.null(pp_post_sem_D)) pp_post_sem_D[pp_post_sem_D$t >= 0, ] else pp_post
 
-cat("  Computing ATE for Fit A (naive independent)...\n")
-ate_A <- tryCatch(
-  ATE_estim_etas(
-    statespace = win_km, partition = partition,
-    observed_data = pp_post, treated_partitions = treated_partitions,
-    etas_params = list(control = A_ctrl, treated = A_treat),
-    n_sims = ATE_N_SIMS, n_tau_i = ATE_N_TAU_I, n_tau_sims = ATE_N_TAU_SIM,
-    windowT = windowT_post, windowS = win_km,
-    m0 = ETAS_M0, beta_gr = BETA_GR, fixed_params = FIXED_STRUCTURAL
-  ),
-  error = function(e) { cat("    ATE-A error:", e$message, "\n"); NULL }
-)
+windowT_ate <- c(0, ATE_WINDOW_DAYS)
+cat(sprintf("  ATE window: [0, %d] days\n", ATE_WINDOW_DAYS))
 
-cat("  Computing ATE for Fit C (SEM independent)...\n")
-ate_C <- tryCatch(
-  ATE_estim_etas(
-    statespace = win_km, partition = partition,
-    observed_data = pp_post_sem_C, treated_partitions = treated_partitions,
-    etas_params = list(control = C_ctrl, treated = C_treat),
-    n_sims = ATE_N_SIMS, n_tau_i = ATE_N_TAU_I, n_tau_sims = ATE_N_TAU_SIM,
-    windowT = windowT_post, windowS = win_km,
-    m0 = ETAS_M0, beta_gr = BETA_GR, fixed_params = FIXED_STRUCTURAL
-  ),
-  error = function(e) { cat("    ATE-C error:", e$message, "\n"); NULL }
-)
-
-# For bivariate models, extract marginal params for ATE
+# Bivariate marginal params for ATE
 B_ctrl_list <- as.list(c(mu = B_params[["mu_0"]], A = B_params[["A_00"]],
   alpha_m = B_params[["alpha_m_00"]], unlist(FIXED_STRUCTURAL)))
 B_treat_list <- as.list(c(mu = B_params[["mu_1"]], A = B_params[["A_11"]],
   alpha_m = B_params[["alpha_m_11"]], unlist(FIXED_STRUCTURAL)))
-
-cat("  Computing ATE for Fit B (naive bivariate)...\n")
-ate_B <- tryCatch(
-  ATE_estim_etas(
-    statespace = win_km, partition = partition,
-    observed_data = pp_post, treated_partitions = treated_partitions,
-    etas_params = list(control = B_ctrl_list, treated = B_treat_list),
-    n_sims = ATE_N_SIMS, n_tau_i = ATE_N_TAU_I, n_tau_sims = ATE_N_TAU_SIM,
-    windowT = windowT_post, windowS = win_km,
-    m0 = ETAS_M0, beta_gr = BETA_GR, fixed_params = FIXED_STRUCTURAL
-  ),
-  error = function(e) { cat("    ATE-B error:", e$message, "\n"); NULL }
-)
-
 D_ctrl_list <- as.list(c(mu = D_params[["mu_0"]], A = D_params[["A_00"]],
   alpha_m = D_params[["alpha_m_00"]], unlist(FIXED_STRUCTURAL)))
 D_treat_list <- as.list(c(mu = D_params[["mu_1"]], A = D_params[["A_11"]],
   alpha_m = D_params[["alpha_m_11"]], unlist(FIXED_STRUCTURAL)))
 
-cat("  Computing ATE for Fit D (SEM bivariate)...\n")
-ate_D <- tryCatch(
-  ATE_estim_etas(
-    statespace = win_km, partition = partition,
-    observed_data = pp_post_sem_D, treated_partitions = treated_partitions,
-    etas_params = list(control = D_ctrl_list, treated = D_treat_list),
-    n_sims = ATE_N_SIMS, n_tau_i = ATE_N_TAU_I, n_tau_sims = ATE_N_TAU_SIM,
-    windowT = windowT_post, windowS = win_km,
-    m0 = ETAS_M0, beta_gr = BETA_GR, fixed_params = FIXED_STRUCTURAL
-  ),
-  error = function(e) { cat("    ATE-D error:", e$message, "\n"); NULL }
-)
+ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label) {
+  cat(sprintf("  Computing ATE for %s...\n", label))
+  tryCatch({
+    c_counts <- numeric(ATE_N_SIMS)
+    t_counts <- numeric(ATE_N_SIMS)
+    for (s in seq_len(ATE_N_SIMS)) {
+      c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                        m0 = ETAS_M0, beta_gr = BETA_GR)
+      t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                        m0 = ETAS_M0, beta_gr = BETA_GR)
+      c_counts[s] <- length(c_sim$t)
+      t_counts[s] <- length(t_sim$t)
+    }
+    all_nothing_sim <- data.frame(
+      c_mean = c_counts / partition$n,
+      t_mean = t_counts / partition$n,
+      ATE    = (t_counts - c_counts) / partition$n
+    )
+    n_ctrl_loc <- sum(observed_data$location_process == "control")
+    n_treat_loc <- sum(observed_data$location_process == "treated")
+    ATE_naive <- n_treat_loc / sum(treated_idx) - n_ctrl_loc / sum(!treated_idx)
+    ATE_spillover <- if ("inferred_process" %in% names(observed_data)) {
+      n_ctrl_loc / sum(!treated_idx) -
+        sum(observed_data$inferred_process == "control" &
+            observed_data$location_process == "control") / sum(!treated_idx)
+    } else { 0 }
+    analytic <- ATE_analytic_etas(ctrl_pp, treat_pp,
+                                  windowT = windowT_ate, n_tiles = partition$n,
+                                  beta_gr = BETA_GR, m0 = ETAS_M0)
+    list(all_nothing_sim = all_nothing_sim,
+         ATE_naive = ATE_naive, ATE_spillover = ATE_spillover,
+         treated_pp = treat_pp, control_pp = ctrl_pp,
+         analytic = analytic)
+  }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
+}
+
+ate_A <- ate_estim_fast(A_ctrl, A_treat, pp_post, "Fit A (naive independent)")
+ate_C <- ate_estim_fast(C_ctrl, C_treat, pp_post_sem_C, "Fit C (SEM independent)")
+ate_B <- ate_estim_fast(B_ctrl_list, B_treat_list, pp_post, "Fit B (naive bivariate)")
+ate_D <- ate_estim_fast(D_ctrl_list, D_treat_list, pp_post_sem_D, "Fit D (SEM bivariate)")
 
 # ============================================================================
 # 7. Summary tables
@@ -553,30 +543,96 @@ if (!is.null(semD)) {
 
 cat("\n")
 cat("===========================================================================\n")
-cat("                           ATE COMPARISON\n")
+cat(sprintf("              ATE COMPARISON (1-year / %d-day horizon)\n", ATE_WINDOW_DAYS))
 cat("===========================================================================\n\n")
 cat(sprintf("%-22s  %12s  %12s  %12s  %12s\n",
-            "", "All-Nothing", "Tau-1 (flip)", "ATE-naive", "ATE-spillover"))
-cat(paste(rep("-", 80), collapse = ""), "\n")
+            "", "Sim ATE/cty", "Total/77cty", "eta_ctrl", "eta_treat"))
+cat(paste(rep("-", 78), collapse = ""), "\n")
 
-for (nm in list(list(ate = ate_A, lab = "A: Naive Indep"),
-                list(ate = ate_B, lab = "B: Naive Biv"),
-                list(ate = ate_C, lab = "C: SEM Indep"),
-                list(ate = ate_D, lab = "D: SEM Biv"))) {
+for (nm in list(list(ate = ate_B, lab = "B: Naive Biv"),
+                list(ate = ate_D, lab = "D: SEM Biv"),
+                list(ate = ate_A, lab = "A: Naive Indep"),
+                list(ate = ate_C, lab = "C: SEM Indep"))) {
   if (!is.null(nm$ate)) {
-    an_mean <- mean(nm$ate$all_nothing_sim$ATE, na.rm = TRUE)
-    cat(sprintf("%-22s  %12.2f  %12.2f  %12.2f  %12.2f\n",
-      nm$lab, an_mean, nm$ate$tau_1_estim,
-      nm$ate$ATE_naive, nm$ate$ATE_spillover))
+    sim_mean <- mean(nm$ate$all_nothing_sim$ATE, na.rm = TRUE)
+    total <- sim_mean * partition$n
+    eta_c <- if (!is.null(nm$ate$analytic)) nm$ate$analytic$eta_ctrl else NA
+    eta_t <- if (!is.null(nm$ate$analytic)) nm$ate$analytic$eta_treat else NA
+    cat(sprintf("%-22s  %12.1f  %12.0f  %12.3f  %12.3f\n",
+      nm$lab, sim_mean, total, eta_c, eta_t))
   } else {
     cat(sprintf("%-22s  %12s  %12s  %12s  %12s\n",
       nm$lab, "FAILED", "FAILED", "FAILED", "FAILED"))
   }
 }
-cat("\nAll-Nothing: mean per-county difference if ALL counties treated vs ALL control.\n")
-cat("Tau-1: average one-flip effect (randomly switch one county).\n")
-cat("ATE-naive: difference in mean counts between treated and control counties.\n")
-cat("ATE-spillover: excess counts in control counties due to cross-triggering.\n")
+cat("\nSim ATE/cty: mean per-county ATE over 1 year (all-treated vs all-control).\n")
+cat("Total/77cty: projected total across all 77 Oklahoma counties per year.\n")
+
+# ============================================================================
+# 7b. Louis-method SEs for SEM-based ATE estimates
+# ============================================================================
+cat("\n--- Step 7b: Louis-method SE for SEM ATE estimates ---\n")
+
+louis_C <- NULL
+louis_D <- NULL
+
+n_ctrl_tiles <- sum(!treated_idx)
+n_treat_tiles <- sum(treated_idx)
+
+if (!is.null(semC) && length(semC$keepers) > 1) {
+  cat("  Computing Louis SE for Fit C (SEM independent)...\n")
+  louis_C <- tryCatch({
+    kept_labs_C <- semC$labellings[semC$keepers]
+    w_C <- semC$weights
+    dt <- windowT_post[2] - windowT_post[1]
+    ate_fn_C <- function(lab) {
+      r <- lab[lab$t >= 0, ]
+      n_treat <- sum(r$inferred_process == "treated")
+      n_ctrl  <- sum(r$inferred_process == "control")
+      (n_treat - n_ctrl) / partition$n
+    }
+    louis_se_ate(kept_labs_C, w_C, ate_fn_C)
+  }, error = function(e) { cat("    Louis-C error:", e$message, "\n"); NULL })
+}
+
+if (!is.null(semD) && length(semD$keepers) > 1) {
+  cat("  Computing Louis SE for Fit D (SEM bivariate)...\n")
+  louis_D <- tryCatch({
+    kept_labs_D <- semD$labellings[semD$keepers]
+    w_D <- semD$weights
+    dt <- windowT_post[2] - windowT_post[1]
+    ate_fn_D <- function(lab) {
+      r <- lab[lab$t >= 0, ]
+      n_treat <- sum(r$inferred_process == "treated")
+      n_ctrl  <- sum(r$inferred_process == "control")
+      (n_treat - n_ctrl) / partition$n
+    }
+    louis_se_ate(kept_labs_D, w_D, ate_fn_D)
+  }, error = function(e) { cat("    Louis-D error:", e$message, "\n"); NULL })
+}
+
+cat("\n")
+cat("===========================================================================\n")
+cat("                   ATE STANDARD ERRORS (Louis Method)\n")
+cat("===========================================================================\n\n")
+
+if (!is.null(louis_C)) {
+  cat(sprintf("Fit C (SEM Indep):  ATE = %.2f  SE = %.2f  95%% CI = [%.2f, %.2f]\n",
+    louis_C$ate_mean, louis_C$ate_se, louis_C$ci_lower, louis_C$ci_upper))
+  cat(sprintf("  ESS = %.1f, Missing-info variance = %.4f\n",
+    louis_C$ess, louis_C$ate_var_missing))
+} else {
+  cat("Fit C (SEM Indep):  SE not available\n")
+}
+
+if (!is.null(louis_D)) {
+  cat(sprintf("Fit D (SEM Biv):    ATE = %.2f  SE = %.2f  95%% CI = [%.2f, %.2f]\n",
+    louis_D$ate_mean, louis_D$ate_se, louis_D$ci_lower, louis_D$ci_upper))
+  cat(sprintf("  ESS = %.1f, Missing-info variance = %.4f\n",
+    louis_D$ess, louis_D$ate_var_missing))
+} else {
+  cat("Fit D (SEM Biv):    SE not available\n")
+}
 
 # ============================================================================
 # 8. Save results
@@ -586,8 +642,8 @@ cat("\n--- Saving results ---\n")
 results <- list(
   fitA = list(ctrl = A_ctrl, treat = A_treat, ate = ate_A),
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
-  fitC = list(ctrl = C_ctrl, treat = C_treat, sem = semC, ate = ate_C),
-  fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
+  fitC = list(ctrl = C_ctrl, treat = C_treat, sem = semC, ate = ate_C, louis = louis_C),
+  fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D, louis = louis_D),
   pp_data = list(pp_pre = pp_pre, pp_post = pp_post),
   counties = list(
     names = counties_sf_valid$NAME,
@@ -601,7 +657,7 @@ results <- list(
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
-    ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_I = ATE_N_TAU_I,
+    ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     TEST_MODE = TEST_MODE,
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_post = nrow(pp_post),

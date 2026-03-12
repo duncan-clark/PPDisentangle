@@ -48,39 +48,45 @@ if [ -z "$SLURM_JOB_ID" ]; then
     [ -n "$PP_LOG_MEMORY" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY"
     [ -n "$PP_SKIP_CRAZY_PARAMS" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS"
 
+    EXTRA_SBATCH=""
+    if [ "$PP_CPUS" -gt 72 ]; then
+        if [ "$PP_CPUS" -gt 256 ]; then
+            echo "ERROR: max 256 CPUs per node (milan). Reduce --sims or split jobs."
+            exit 1
+        fi
+        EXTRA_SBATCH="--partition=milan"
+        echo "Note: >72 CPUs requested, using Milan partition"
+    fi
+
+    mkdir -p "$PP_PKG_ROOT/cluster_output"
+
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$PP_CPUS" \
-        --output="$PP_PKG_ROOT/cluster_output/logs/%j/slurm.out" \
-        --error="$PP_PKG_ROOT/cluster_output/logs/%j/slurm.err" \
+        $EXTRA_SBATCH \
+        --output="$PP_PKG_ROOT/cluster_output/%j_slurm.out" \
+        --error="$PP_PKG_ROOT/cluster_output/%j_slurm.err" \
         --export="$SBATCH_EXPORT" \
         "$PP_SCRIPT_DIR/run_sim_study.sh")
 
-    mkdir -p "$PP_PKG_ROOT/cluster_output/logs/$JOB_ID"
-
     echo "Job $JOB_ID submitted ($PP_SIMS sims, $PP_CPUS cores${PP_TEST:+, test mode})"
-    echo "  Logs:    cluster_output/logs/$JOB_ID/"
-    echo "  Results: cluster_output/results/$JOB_ID.rds"
-    echo "  tail -f cluster_output/logs/$JOB_ID/slurm.out"
+    echo "  Results: cluster_output/$JOB_ID.rds"
+    echo "  Log:     cluster_output/$JOB_ID.log"
+    echo "  SLURM:   cluster_output/${JOB_ID}_slurm.out"
     exit 0
 fi
 
 # ---- Inside SLURM job ----
 cd "$PP_PKG_ROOT"
-JOB_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
-LOG_DIR="$PP_PKG_ROOT/cluster_output/logs/$JOB_ID"
-mkdir -p "$LOG_DIR"
+mkdir -p "$PP_PKG_ROOT/cluster_output"
 
 echo "=== PPDisentangle Sim Study ==="
-echo "Job $JOB_ID | $(date)"
+echo "Job ${SLURM_JOB_ID:-local} | $(date)"
 echo "Sims: $PP_SIMS | Cores: $PP_CPUS"
-echo "Logs: $LOG_DIR"
 echo ""
 
-module load R 2>/dev/null || true
-module load UDUNITS 2>/dev/null || module load udunits2 2>/dev/null || true
-module load GDAL 2>/dev/null || true
-module load GEOS 2>/dev/null || true
-module load PROJ 2>/dev/null || true
+# R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS
+module purge 2>/dev/null || true
+module load R-Geo/4.3.2-foss-2023a 2>/dev/null || module load R 2>/dev/null || true
 
 echo "Rscript: $(which Rscript)"
 echo ""

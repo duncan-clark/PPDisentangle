@@ -355,11 +355,135 @@ ATE_estim_etas <- function(statespace, partition, observed_data,
     ATE    = (t_counts - c_counts) / partition$n
   )
 
+  analytic <- ATE_analytic_etas(control_pp, treated_pp,
+                                windowT = windowT, n_tiles = partition$n,
+                                beta_gr = beta_gr, m0 = m0)
+
   return(list(
     all_nothing_sim = all_nothing_sim,
     tau_1_estim = tau_1_estim,
     ATE_total = ATE_total, ATE_treatment = ATE_treatment,
     ATE_spillover = ATE_spillover, ATE_naive = ATE_naive,
-    treated_pp = treated_pp, control_pp = control_pp
+    treated_pp = treated_pp, control_pp = control_pp,
+    analytic = analytic
   ))
+}
+
+
+#' Analytic expected count for an ETAS process
+#'
+#' For a univariate ETAS with Gutenberg-Richter magnitudes (exponential
+#' rate beta_gr), the expected total count on the full spatial domain
+#' over a time window of length T is  mu * T / (1 - eta),
+#' where eta = A * beta_gr / (beta_gr - alpha_m) is the branching ratio.
+#'
+#' When eta >= 1 (supercritical) the infinite-time expectation diverges.
+#' In this case we report both the background-only count (mu * T) and
+#' mark the total as NA (must use simulation).
+#'
+#' @param params  Named list with at least mu, A, alpha_m.
+#' @param windowT Numeric c(start, end).
+#' @param beta_gr Gutenberg-Richter beta.
+#' @param m0      Reference magnitude (unused in the formula but kept for API).
+#' @return List with E_N (expected count, NA if supercritical), E_N_bg
+#'   (background-only count), and eta (branching ratio).
+#' @export
+etas_expected_count <- function(params, windowT, beta_gr, m0 = NULL) {
+  if (!is.list(params)) params <- as.list(params)
+  mu      <- params$mu
+  A       <- params$A
+  alpha_m <- params$alpha_m
+  dt <- windowT[2] - windowT[1]
+  E_N_bg <- mu * dt
+
+  if (beta_gr <= alpha_m) {
+    eta <- NA_real_
+    E_N <- NA_real_
+  } else {
+    eta <- A * beta_gr / (beta_gr - alpha_m)
+    if (eta < 1) {
+      E_N <- mu * dt / (1 - eta)
+    } else {
+      E_N <- NA_real_
+    }
+  }
+  list(E_N = E_N, E_N_bg = E_N_bg, eta = eta, mu = mu, A = A, alpha_m = alpha_m)
+}
+
+
+#' Analytic ATE for independent ETAS models (all-or-nothing)
+#'
+#' Computes the per-tile difference in expected counts between the
+#' treated and control ETAS processes analytically. When the branching
+#' ratio eta < 1 (subcritical), uses the full formula mu*T/(1-eta).
+#' Always reports the background-rate ATE (difference in mu*T) which
+#' is valid regardless of criticality.
+#'
+#' @param control_pp  Control ETAS parameters (list).
+#' @param treated_pp  Treated ETAS parameters (list).
+#' @param windowT     Numeric c(start, end).
+#' @param n_tiles     Number of spatial tiles.
+#' @param beta_gr     Gutenberg-Richter beta.
+#' @param m0          Reference magnitude.
+#' @return List with ATE (NA if supercritical), ATE_bg (background-rate
+#'   ATE, always valid), E_N_ctrl, E_N_treat, eta_ctrl, eta_treat.
+#' @export
+ATE_analytic_etas <- function(control_pp, treated_pp, windowT,
+                              n_tiles, beta_gr, m0 = NULL) {
+  ctrl <- etas_expected_count(control_pp, windowT, beta_gr, m0)
+  treat <- etas_expected_count(treated_pp, windowT, beta_gr, m0)
+  ATE <- (treat$E_N - ctrl$E_N) / n_tiles
+  ATE_bg <- (treat$E_N_bg - ctrl$E_N_bg) / n_tiles
+  list(ATE = ATE, ATE_bg = ATE_bg,
+       E_N_ctrl = ctrl$E_N, E_N_treat = treat$E_N,
+       E_N_bg_ctrl = ctrl$E_N_bg, E_N_bg_treat = treat$E_N_bg,
+       eta_ctrl = ctrl$eta, eta_treat = treat$eta)
+}
+
+
+#' Louis-method standard errors for SEM ATE estimates
+#'
+#' Implements the Louis (1982) observed information identity for the SEM.
+#' Given K importance-weighted labellings with log-likelihoods and
+#' parameter estimates, computes the variance of the ATE estimator
+#' accounting for both sampling variability and label uncertainty.
+#'
+#' The complete-data score variance (missing information) is estimated
+#' from the weighted variance of the per-labelling ATE estimates.
+#' The observed information combines the curvature at the MLE with
+#' this missing information correction.
+#'
+#' @param labellings   List of labelling data frames from the SEM.
+#' @param weights      Numeric vector of normalized importance weights.
+#' @param ate_fn       Function(labelling) -> scalar ATE for one labelling.
+#' @param loglik_fn    Optional function(labelling) -> scalar loglik.
+#' @param n_boot       Number of weighted bootstrap resamples for SE.
+#' @return List with ate_mean, ate_se, ate_values, ci_lower, ci_upper.
+#' @export
+louis_se_ate <- function(labellings, weights, ate_fn, loglik_fn = NULL,
+                         n_boot = 1000) {
+  K <- length(labellings)
+  if (length(weights) != K) stop("weights must have same length as labellings")
+
+  ate_vals <- vapply(labellings, ate_fn, numeric(1))
+  ate_mean <- sum(weights * ate_vals)
+
+  # Missing information: weighted variance of ATE across labellings
+  ate_var_missing <- sum(weights * (ate_vals - ate_mean)^2)
+
+  # Weighted bootstrap for total SE (accounts for effective sample size)
+  boot_means <- replicate(n_boot, {
+    idx <- sample(K, K, replace = TRUE, prob = weights)
+    mean(ate_vals[idx])
+  })
+  ate_se <- sd(boot_means)
+
+  ess <- 1 / sum(weights^2)
+  ate_se <- max(ate_se, sqrt(ate_var_missing))
+
+  list(ate_mean = ate_mean, ate_se = ate_se,
+       ate_values = ate_vals, weights = weights,
+       ci_lower = ate_mean - 1.96 * ate_se,
+       ci_upper = ate_mean + 1.96 * ate_se,
+       ate_var_missing = ate_var_missing, ess = ess)
 }

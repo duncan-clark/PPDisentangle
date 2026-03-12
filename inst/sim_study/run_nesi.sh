@@ -44,30 +44,40 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
 
     CPUS="$PP_SIMS"
+    EXTRA_SBATCH=""
+
+    # large partition: max 72 CPUs/node; milan: up to 256 CPUs/node
+    if [ "$CPUS" -gt 72 ]; then
+        if [ "$CPUS" -gt 256 ]; then
+            echo "ERROR: max 256 CPUs per node (milan). Reduce --sims or split jobs."
+            exit 1
+        fi
+        EXTRA_SBATCH="--partition=milan"
+        echo "Note: >72 CPUs requested, using Milan partition (256 CPUs/node)"
+    fi
 
     echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode}"
 
+    mkdir -p "$PKG_ROOT/cluster_output"
+
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
+        $EXTRA_SBATCH \
         --export=ALL,PP_SIMS="$PP_SIMS",PP_TEST="$PP_TEST" \
-        --output="$PKG_ROOT/cluster_output/logs/%j/slurm.out" \
-        --error="$PKG_ROOT/cluster_output/logs/%j/slurm.err" \
+        --output="$PKG_ROOT/cluster_output/%j_slurm.out" \
+        --error="$PKG_ROOT/cluster_output/%j_slurm.err" \
         "$SCRIPT_DIR/run_nesi.sh")
 
-    mkdir -p "$PKG_ROOT/cluster_output/logs/$JOB_ID"
-
     echo "Job $JOB_ID submitted"
-    echo "  Logs:    cluster_output/logs/$JOB_ID/"
-    echo "  Results: cluster_output/results/$JOB_ID.rds"
-    echo "  Monitor: tail -f cluster_output/logs/$JOB_ID/slurm.out"
+    echo "  Results: cluster_output/$JOB_ID.rds"
+    echo "  Log:     cluster_output/$JOB_ID.log"
+    echo "  SLURM:   cluster_output/${JOB_ID}_slurm.out"
     exit 0
 fi
 
 # ---- Inside SLURM job ----
 cd "$PKG_ROOT"
-JOB_ID="$SLURM_JOB_ID"
-LOG_DIR="$PKG_ROOT/cluster_output/logs/$JOB_ID"
-mkdir -p "$LOG_DIR"
+mkdir -p "$PKG_ROOT/cluster_output"
 
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $JOB_ID | $(date)"
@@ -76,12 +86,9 @@ echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
 # ---- Load modules ----
+# R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
 module purge
-module load R
-module load UDUNITS
-module load GDAL
-module load GEOS
-module load PROJ
+module load R-Geo/4.3.2-foss-2023a
 
 echo "R: $(which R) ($(R --version | head -1))"
 echo ""

@@ -1,11 +1,12 @@
 #!/usr/bin/env Rscript
-# Unified simulation study for the PPDisentangle package.
-# Detects SLURM environment automatically; falls back to local defaults.
+# Simulation study for PPDisentangle.
 # Usage:
-#   Local:   Rscript sim_study.R [--small]
-#   Cluster (batch): sbatch run_PPDisentangle_sim.slurm
-#   Cluster (interactive): Rscript sim_study.R --cluster   (or run_sim_study.sh --cluster)
-#   Quick-test: Rscript sim_study.R --test [--sims N]   (10 iters, 2 sims/cores default; verifies machinery)
+#   Rscript sim_study.R                  # local (auto-detect cores)
+#   Rscript sim_study.R --test --sims 2  # quick smoke test
+#   Rscript sim_study.R --small          # local, reduced
+#   sbatch run_nesi.sh --sims 100        # NeSI cluster
+#
+# Output: cluster_output/{JOB_ID}.rds  cluster_output/{JOB_ID}.log
 
 library(PPDisentangle)
 library(spatstat)
@@ -26,16 +27,13 @@ SMALL <- "--small" %in% args
 FORCE_CLUSTER <- "--cluster" %in% args
 TEST <- "--test" %in% args
 
-# Parse --sims N from command line (e.g. run_sim_study.sh --sims 100)
 sims_arg <- grep("^--sims$", args)
 N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
   as.numeric(args[sims_arg + 1L]) else NULL
 
-# Cluster config: when running under SLURM or when --cluster is passed (e.g. interactive on login node)
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
 if (TEST) {
-  # Quick-test mode: minimal iters/sims for fast cluster iteration. Use PP_LOG_MEMORY=1 and PP_SKIP_CRAZY_PARAMS=1 to debug OOM.
   n_test <- if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) N_SIMS_ARG else 2L
   N_CORES      <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
   SIM_SIZE     <- n_test
@@ -62,8 +60,8 @@ if (TEST) {
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 10
   EM_ITER      <- 1000
-  SEM_EM_ADAPTIVE_ITER <- 1000
-  SEM_N_ITER   <- 1
+  SEM_EM_ADAPTIVE_ITER <- 2000
+  SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
@@ -96,8 +94,8 @@ if (TEST) {
   N_TAU_I_TRUE <- 10
   N_PROPOSALS  <- 100
   EM_ITER      <- 100
-  SEM_EM_ADAPTIVE_ITER <- 100
-  SEM_N_ITER   <- 10
+  SEM_EM_ADAPTIVE_ITER <- 200
+  SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
   OMEGA        <- c(0, 100, 0, 100)
   END_TIME     <- 110
@@ -106,7 +104,6 @@ if (TEST) {
   SAVE_DIR     <- file.path(getwd(), "cluster_output")
 }
 
-# Environment and CLI overrides (for cluster or shell script)
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
   SIM_SIZE <- N_SIMS_ARG
@@ -128,49 +125,37 @@ TIME_INT   <- END_TIME - TREATMENT_TIME
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 
 # ------------------------------------------------------------------
-# Logging: timestamped messages to console and log file
+# Logging
 # ------------------------------------------------------------------
 JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
 if (JOB_ID == "") JOB_ID <- paste0("local_", format(Sys.time(), "%Y%m%d_%H%M%S"))
 
-LOG_DIR <- file.path(SAVE_DIR, "logs", JOB_ID)
-dir.create(LOG_DIR, showWarnings = FALSE, recursive = TRUE)
-LOG_FILE <- file.path(LOG_DIR, "sim.log")
+dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
+LOG_FILE <- file.path(SAVE_DIR, paste0(JOB_ID, ".log"))
 log_con <- file(LOG_FILE, open = "wt")
 on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
+
 log_msg <- function(...) {
-  msg <- paste0(...)
-  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  line <- sprintf("[%s] %s\n", ts, msg)
-  if (!ON_CLUSTER) cat(line)
+  line <- sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), paste0(...))
+  cat(line)
   if (isOpen(log_con)) cat(line, file = log_con)
 }
-log_file_only <- function(...) {
-  msg <- paste0(...)
-  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  line <- sprintf("[%s] %s\n", ts, msg)
-  if (isOpen(log_con)) cat(line, file = log_con)
-}
+
 log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
   if (is.null(n_done) || is.null(n_total) || n_total <= 0) {
     log_msg(sprintf("%s: %.1f s", phase, elapsed_sec))
   } else {
     eta_sec <- if (n_done > 0) (elapsed_sec / n_done) * (n_total - n_done) else NA
-    log_msg(sprintf("%s: %.1f s (done %d/%d, ETA %.0f s)", phase, elapsed_sec, n_done, n_total, eta_sec))
+    log_msg(sprintf("%s: %.1f s (%d/%d, ETA %.0f s)", phase, elapsed_sec, n_done, n_total, eta_sec))
   }
 }
 
-# Log memory usage (Vcells = vector heap, Ncells = cons cells). Set PP_LOG_MEMORY=1 to enable.
 log_memory <- function(phase = "") {
-  if (!nzchar(Sys.getenv("PP_LOG_MEMORY")) || Sys.getenv("PP_LOG_MEMORY") != "1") return(invisible(NULL))
+  if (Sys.getenv("PP_LOG_MEMORY") != "1") return(invisible(NULL))
   g <- gc(verbose = FALSE)
-  v_used <- sum(g[, "used"])  # Mb
-  v_max  <- sum(g[, "max used"])
-  log_msg(sprintf("[MEM %s] used=%.0f Mb  max_used=%.0f Mb", phase, v_used, v_max))
+  log_msg(sprintf("[MEM %s] used=%.0f Mb  max=%.0f Mb", phase, sum(g[, "used"]), sum(g[, "max used"])))
 }
 
-# Check if Hawkes params are likely to cause explosive simulations (K near 1, huge mu).
-# Returns TRUE if params are "crazy" and simulations may blow memory.
 params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5) {
   check_one <- function(pp) {
     if (is.null(pp)) return(FALSE)
@@ -181,18 +166,10 @@ params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5)
   check_one(control_pp) || check_one(treated_pp)
 }
 
-log_msg("=== Simulation Study Config ===")
-log_msg("Job ID:", JOB_ID)
-log_msg("Mode:", if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL/LOCAL" else "LOCAL")
-log_msg("Cores:", N_CORES, " Sims:", SIM_SIZE)
-if (nzchar(Sys.getenv("PP_LOG_MEMORY"))) log_msg("PP_LOG_MEMORY:", Sys.getenv("PP_LOG_MEMORY"), "(memory logging)")
-if (nzchar(Sys.getenv("PP_SKIP_CRAZY_PARAMS"))) log_msg("PP_SKIP_CRAZY_PARAMS:", Sys.getenv("PP_SKIP_CRAZY_PARAMS"), "(skip tasks with K>=0.95)")
-log_msg("Omega:", paste(OMEGA, collapse = " "), " T:", END_TIME, " t*:", TREATMENT_TIME)
-log_msg("Grid:", NX, "x", NY)
-log_msg("Save:", SAVE_DIR)
-log_msg("Log file:", LOG_FILE)
-log_msg("EM-style: iter=", EM_ITER, " n_props=10 | SEM adaptive: iter=", SEM_EM_ADAPTIVE_ITER, " n_props=10 | SEM full: N_iter=", SEM_N_ITER, " N_labellings=", SEM_N_LABELLINGS)
-log_msg("===============================")
+MODE <- if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL" else "LOCAL"
+log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
+log_msg("EM iter=", EM_ITER, " | SEM adaptive=", SEM_EM_ADAPTIVE_ITER, " outer=", SEM_N_ITER, " labellings=", SEM_N_LABELLINGS)
+log_msg("Output: ", SAVE_DIR)
 
 # ------------------------------------------------------------------
 # Helper: create a parallel cluster with PPDisentangle loaded
@@ -396,14 +373,10 @@ if (N_CORES > 1 && !SMALL) {
 }
 log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
-# Log EM-style summary per sim: accuracy, n_iters, timing (log file only)
-log_file_only("EM-style per-sim: accuracy | n_iter | sampling_s | likelihood_s | param_update_s")
 for (k in seq_along(EM_max_style)) {
   r <- EM_max_style[[k]]
   acc <- if (length(r$accuracies) > 0) r$accuracies[length(r$accuracies)] else NA_real_
-  t <- r$timing
-  log_file_only(sprintf("  sim %d: %.3f | %d | %.1f | %.1f | %.1f",
-    k, acc, t$n_iter, t$sampling_s, t$likelihood_s, t$param_update_s))
+  log_msg(sprintf("  EM sim %d: acc=%.3f", k, acc))
 }
 
 pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
@@ -451,6 +424,27 @@ log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_memory("post_EM")
 
 # ------------------------------------------------------------------
+# 7b. Extract adaptive SEM diagnostics (flips + accuracy per iteration)
+# ------------------------------------------------------------------
+sem_diagnostics <- lapply(seq_along(EM_results), function(i) {
+  a <- EM_results[[i]]$adaptive
+  if (is.null(a)) return(NULL)
+  n_iter <- length(a$accuracies)
+  data.frame(
+    sim_id = i,
+    iteration = seq_len(n_iter),
+    accuracy = a$accuracies,
+    average_flips = a$average_flips,
+    max_metric_flips = a$max_metric_flips,
+    stringsAsFactors = FALSE
+  )
+})
+sem_diagnostics_df <- do.call(rbind, Filter(Negate(is.null), sem_diagnostics))
+if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
+  log_msg("SEM diagnostics: ", nrow(sem_diagnostics_df), " rows across ", length(unique(sem_diagnostics_df$sim_id)), " sims")
+}
+
+# ------------------------------------------------------------------
 # 8. Assemble all labellings
 # ------------------------------------------------------------------
 labellings <- list(
@@ -475,9 +469,7 @@ class_metrics <- lapply(names(labellings), function(nm) {
   data.frame(method = nm, mean_accuracy = mean(accs, na.rm = TRUE))
 })
 class_metrics <- do.call(rbind, class_metrics)
-cm_out <- capture.output(print(class_metrics))
-for (line in cm_out) log_file_only(line)
-if (!ON_CLUSTER) print(class_metrics)
+print(class_metrics)
 
 # ------------------------------------------------------------------
 # 10. ATE estimation
@@ -508,7 +500,6 @@ for (i in seq_along(EM_results)) {
   )
 }
 
-# Pre-check EM_full_params tasks for crazy params (K>=0.95, mu>1e5) that can blow memory
 SKIP_CRAZY <- nzchar(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) && tolower(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) %in% c("1", "true", "yes")
 crazy_idx <- integer(0)
 for (k in seq_along(tasks)) {
@@ -534,8 +525,6 @@ if (length(crazy_idx) > 0) {
   }
 }
 
-# Use minimal env for task_function to avoid serializing .GlobalEnv (obs_data,
-# EM_results, labellings, etc.) when sending to workers - that causes OOM.
 ATE_env <- new.env(parent = baseenv())
 ATE_env$ATE_estim_hawkes <- getFromNamespace("ATE_estim_hawkes", "PPDisentangle")
 ATE_env$withTimeout <- getFromNamespace("withTimeout", "R.utils")
@@ -552,7 +541,7 @@ ATE_env$MAX_TIME <- MAX_TIME
 
 task_function <- function(task) {
   if (!is.null(task$hawkes_params) && params_are_crazy(task$hawkes_params$control, task$hawkes_params$treated)) {
-    return(NULL)  # Skip to avoid OOM (worker may not have been pre-filtered)
+    return(NULL)
   }
   r <- tryCatch(
     withTimeout(
@@ -570,16 +559,12 @@ task_function <- function(task) {
     ),
     error = function(e) NULL
   )
-  if (!is.null(r)) r$all_nothing_sim <- NULL  # drop sims, keep theory (used in plots)
+  if (!is.null(r)) r$all_nothing_sim <- NULL
   r
 }
 environment(task_function) <- ATE_env
 
-# Free memory before ATE phase; workers get fresh tasks
 if (N_CORES > 1 && !SMALL) gc(verbose = FALSE)
-
-# Sequential ATE fallback: set env ATE_SEQUENTIAL=1 to avoid worker OOM (slower but lower memory).
-# TEST mode uses sequential by default for lower memory and easier debugging.
 ATE_SEQUENTIAL <- TEST || (nzchar(Sys.getenv("ATE_SEQUENTIAL")) && tolower(Sys.getenv("ATE_SEQUENTIAL")) %in% c("1", "true", "yes"))
 if (ATE_SEQUENTIAL) {
   log_msg("ATE estimation: sequential (ATE_SEQUENTIAL=1)")
@@ -644,11 +629,11 @@ if (length(obs_data) > 0) {
   pre_first  <- as.data.frame(obs_data[[1]]) %>% filter(.data$t < TREATMENT_TIME)
   if (nrow(post_first) > 0) {
     sim_study_plots$plot_pp_post <- plot_pp(post_first, partition = partition,
-      title = "Simulated Hawkes-Hawkes (post-treatment)")
+      title = "")
   }
   if (nrow(pre_first) > 0) {
     sim_study_plots$plot_pp_pre <- plot_pp(pre_first, partition = partition,
-      title = "Simulated Hawkes-Hawkes (pre-treatment)")
+      title = "")
   }
 }
 
@@ -685,12 +670,14 @@ if (!is.null(control_params_df) && nrow(control_params_df) > 0) {
   control_param_plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
     tmp <- control_params_long %>% filter(.data$param == p)
     if (nrow(tmp) == 0) return(NULL)
+    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
     ggplot(tmp) +
       geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
       geom_hline(yintercept = hawkes_par_1[[p]], linetype = "dashed", color = "red") +
-      labs(title = paste0(p, " estimates for Hawkes-Hawkes"), x = "Method", y = "Parameter Estimate") +
+      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = median(oracle_vals$value), linetype = "dotted", color = "blue") } +
+      labs(x = "Method", y = paste0(p, " estimate")) +
       theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust = 0.5))
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
   control_param_plots <- Filter(Negate(is.null), control_param_plots)
   if (length(control_param_plots) > 0) {
@@ -705,12 +692,14 @@ if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
   treated_param_plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
     tmp <- treated_params_long %>% filter(.data$param == p)
     if (nrow(tmp) == 0) return(NULL)
+    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
     ggplot(tmp) +
       geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
       geom_hline(yintercept = hawkes_par_2[[p]], linetype = "dashed", color = "red") +
-      labs(title = paste0(p, " estimates for Hawkes-Hawkes example"), x = "Method", y = "Parameter Estimate") +
+      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = median(oracle_vals$value), linetype = "dotted", color = "blue") } +
+      labs(x = "Method", y = paste0(p, " estimate")) +
       theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust = 0.5))
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
   treated_param_plots <- Filter(Negate(is.null), treated_param_plots)
   if (length(treated_param_plots) > 0) {
@@ -718,19 +707,23 @@ if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
   }
 }
 
-# All-nothing ATE boxplot (match old: title, y label, linetype legend, ylim)
+# All-nothing ATE boxplot
 if (!is.null(results_df) && nrow(results_df) > 0) {
   results_df$labelling <- factor(results_df$labelling,
     levels = unique(c("oracle", "naive", "best", "EM_style", "EM_full", "EM_full_params", results_df$labelling)))
   lines_data_ate <- data.frame(all_nothing_ATE = all_nothing_ATE)
+  oracle_ate <- results_df %>% filter(.data$labelling == "oracle")
+  oracle_median_ate <- if (nrow(oracle_ate) > 0) median(oracle_ate$all_nothing_theory, na.rm = TRUE) else NA
   y_lo <- min(all_nothing_ATE * 1.5, min(results_df$all_nothing_theory, na.rm = TRUE) * 0.95)
   y_hi <- max(3, max(results_df$all_nothing_theory, na.rm = TRUE) * 1.05)
   sim_study_plots$plot_all_nothing_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_theory)) +
-    geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE, linetype = "True All/Nothing ATE"),
+    geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE, linetype = "True ATE"),
                color = scales::hue_pal()(3)[1], linewidth = 1) +
-    scale_linetype_manual(name = "", values = c("True All/Nothing ATE" = "solid", "Average Single Flip ATE" = "solid")) +
-    labs(title = "All-Nothing ATE estimates for Hawkes-Hawkes example", x = "Method", y = "All-Nothing ATE Estimate") +
+    {if (!is.na(oracle_median_ate)) geom_hline(aes(yintercept = oracle_median_ate, linetype = "Oracle median"),
+               color = "blue", linewidth = 0.8) } +
+    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle median" = "dotted")) +
+    labs(x = "Method", y = "All-Nothing ATE Estimate") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
     coord_cartesian(ylim = c(y_lo, y_hi))
@@ -768,27 +761,30 @@ if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
     geom_hline(aes(yintercept = .data$mean_ATE, colour = "True mean"), data = true_means_pts, linetype = "dashed", linewidth = 1) +
     scale_colour_manual(name = "Reference", values = c("Oracle mean" = "#0072B2", "True mean" = "#D55E00")) +
     guides(fill = guide_legend(order = 1), colour = guide_legend(order = 2)) +
-    labs(title = "Points-Per-Tile Hawkes-Hawkes example", x = "Method", y = "Points Per Tile") +
+    labs(x = "Method", y = "Points Per Tile") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
     coord_cartesian(ylim = c(0, max(true_means_pts$mean_ATE) * 1.05))
 }
 
-# One-flip ATE boxplot (match old: title, y label, linetype legend)
+# One-flip ATE boxplot
 if (!is.null(results_df) && nrow(results_df) > 0) {
   lines_data_tau <- data.frame(true_1_flip = true_tau_1)
+  oracle_tau <- results_df %>% filter(.data$labelling == "oracle")
+  oracle_median_tau <- if (nrow(oracle_tau) > 0) median(oracle_tau$tau_1_estim, na.rm = TRUE) else NA
   sim_study_plots$plot_one_flip_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$tau_1_estim)) +
-    geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip, linetype = "Average Single Flip ATE"),
+    geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip, linetype = "True ATE"),
                color = scales::hue_pal()(3)[1], linewidth = 1) +
-    scale_linetype_manual(name = "", values = c("All/Nothing ATE" = "solid", "Average Single Flip ATE" = "solid")) +
-    labs(title = "Average Single Flip ATE for Hawkes-Hawkes example", x = "Method", y = "Single Flip ATE Estimate") +
+    {if (!is.na(oracle_median_tau)) geom_hline(aes(yintercept = oracle_median_tau, linetype = "Oracle median"),
+               color = "blue", linewidth = 0.8) } +
+    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle median" = "dotted")) +
+    labs(x = "Method", y = "Single Flip ATE Estimate") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
 }
 
-# Combined param plots: grid.arrange() returns a grid object that does not print after save/load.
-# Store draw functions so you can display combined plots after loading the RDS:
+# Draw helpers (grid.arrange objects don't survive save/load)
 sim_study_plots$draw_control_params_combined <- function() {
   if (length(sim_study_plots$plot_control_params) > 0)
     gridExtra::grid.arrange(grobs = sim_study_plots$plot_control_params, ncol = 2)
@@ -798,10 +794,7 @@ sim_study_plots$draw_treated_params_combined <- function() {
     gridExtra::grid.arrange(grobs = sim_study_plots$plot_treated_params, ncol = 2)
 }
 
-# EM Accuracy over iterations plot
 if (exists("EM_results") && length(EM_results) > 0) {
-  # Extract accuracies from each simulation run
-  # EM_results is a list of results from run_sem (adaptive_SEM)
   acc_list <- lapply(seq_along(EM_results), function(i) {
     acc <- EM_results[[i]]$adaptive$accuracies
     if (is.null(acc) || length(acc) == 0) return(NULL)
@@ -815,28 +808,68 @@ if (exists("EM_results") && length(EM_results) > 0) {
   acc_df <- if (length(acc_list) > 0) do.call(rbind, acc_list) else NULL
 
   if (!is.null(acc_df) && nrow(acc_df) > 0) {
-    # Calculate mean accuracy per iteration
     mean_acc_df <- acc_df %>%
       group_by(iteration) %>%
       summarize(mean_accuracy = mean(accuracy, na.rm = TRUE), .groups = "drop")
 
+    oracle_acc <- mean(sapply(pp_labeled_oracle, function(y) {
+      keep <- which(y$t > TREATMENT_TIME)
+      if (length(keep) < 2) return(NA_real_)
+      mean(y$inferred_process[keep] == y$process[keep])
+    }), na.rm = TRUE)
+    naive_acc <- mean(sapply(pp_labeled_naive, function(y) {
+      keep <- which(y$t > TREATMENT_TIME)
+      if (length(keep) < 2) return(NA_real_)
+      mean(y$inferred_process[keep] == y$process[keep])
+    }), na.rm = TRUE)
+
     sim_study_plots$plot_em_accuracy_iters <- ggplot() +
-    # Individual runs in gray
-    geom_line(data = acc_df, aes(x = iteration, y = accuracy, group = sim_id), 
+    geom_line(data = acc_df, aes(x = iteration, y = accuracy, group = sim_id),
               color = "gray80", alpha = 0.5) +
-    # Mean in red
-    geom_line(data = mean_acc_df, aes(x = iteration, y = mean_accuracy), 
+    geom_line(data = mean_acc_df, aes(x = iteration, y = mean_accuracy),
               color = "red", linewidth = 1) +
-    labs(title = "EM Accuracy over Iterations",
-         subtitle = "Gray lines: individual runs; Red line: mean accuracy",
-         x = "Iteration", y = "Accuracy") +
+    geom_hline(yintercept = oracle_acc, linetype = "dashed", color = "blue", linewidth = 0.7) +
+    geom_hline(yintercept = naive_acc, linetype = "dotted", color = "orange", linewidth = 0.7) +
+    annotate("text", x = max(acc_df$iteration), y = oracle_acc, label = "Oracle",
+             hjust = 1, vjust = -0.5, color = "blue", size = 3) +
+    annotate("text", x = max(acc_df$iteration), y = naive_acc, label = "Naive",
+             hjust = 1, vjust = -0.5, color = "orange", size = 3) +
+    labs(x = "Iteration", y = "Accuracy") +
     theme_minimal()
   }
 }
 
-log_msg("Plots done.")
-log_msg("Plots stored in sim_study_plots:", paste(names(sim_study_plots), collapse = ", "))
-log_msg("  To print combined param plots after load: x <- readRDS(...); x$plots$draw_control_params_combined(); x$plots$draw_treated_params_combined()")
+# Flips over iterations plot
+if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
+  mean_flips_df <- sem_diagnostics_df %>%
+    group_by(iteration) %>%
+    summarize(
+      mean_avg_flips = mean(average_flips, na.rm = TRUE),
+      mean_max_flips = mean(max_metric_flips, na.rm = TRUE),
+      .groups = "drop"
+    )
+  flips_long <- sem_diagnostics_df %>%
+    reshape2::melt(id.vars = c("sim_id", "iteration"),
+                   measure.vars = c("average_flips", "max_metric_flips"),
+                   variable.name = "flip_type", value.name = "flips")
+
+  sim_study_plots$plot_flips_iters <- ggplot() +
+    geom_line(data = flips_long %>% filter(flip_type == "average_flips"),
+              aes(x = iteration, y = flips, group = sim_id),
+              color = "gray80", alpha = 0.4) +
+    geom_line(data = mean_flips_df,
+              aes(x = iteration, y = mean_avg_flips, color = "Mean avg flips"),
+              linewidth = 1) +
+    geom_line(data = mean_flips_df,
+              aes(x = iteration, y = mean_max_flips, color = "Mean accepted flips"),
+              linewidth = 1) +
+    scale_color_manual(name = "", values = c("Mean avg flips" = "blue", "Mean accepted flips" = "red")) +
+    labs(x = "Iteration", y = "Number of Flips") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+log_msg("Plots: ", paste(names(sim_study_plots), collapse = ", "))
 
 # ------------------------------------------------------------------
 # 13. Timing report and save results (including plots)
@@ -864,18 +897,21 @@ sim_study_results <- list(
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
   EM_results = EM_results,
+  sem_diagnostics = sem_diagnostics_df,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
+    N_PROPOSALS = N_PROPOSALS, EM_ITER = EM_ITER,
+    SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
+    SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
   ),
   plots = sim_study_plots
 )
 
-RESULTS_DIR <- file.path(SAVE_DIR, "results")
-dir.create(RESULTS_DIR, showWarnings = FALSE, recursive = TRUE)
-outfile <- file.path(RESULTS_DIR, paste0(JOB_ID, ".rds"))
+outfile <- file.path(SAVE_DIR, paste0(JOB_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
-log_msg("Results saved to:", outfile)
-log_msg("=== TOTAL ELAPSED:", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), "min) ===")
+log_msg("Results: ", outfile)
+log_msg("Log:     ", LOG_FILE)
+log_msg("=== DONE ", JOB_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
 close(log_con)
