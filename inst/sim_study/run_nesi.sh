@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=PPDis_sim
-#SBATCH --account=FIXME          # <-- your NeSI project code (e.g. nesi00123)
+#SBATCH --account=uoo04008
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time=72:00:00
