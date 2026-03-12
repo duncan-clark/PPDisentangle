@@ -42,6 +42,7 @@ PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # ---- If on login node (no SLURM_JOB_ID), submit via sbatch ----
 if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
+    git pull origin main 2>/dev/null || true
 
     CPUS="$PP_SIMS"
     EXTRA_SBATCH=""
@@ -60,10 +61,15 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 
     mkdir -p "$PKG_ROOT/cluster_output"
 
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST"
+    [ -n "${ATE_SEQUENTIAL:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL=$ATE_SEQUENTIAL"
+    [ -n "${PP_LOG_MEMORY:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY=$PP_LOG_MEMORY"
+    [ -n "${PP_SKIP_CRAZY_PARAMS:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS"
+
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         $EXTRA_SBATCH \
-        --export=ALL,PP_SIMS="$PP_SIMS",PP_TEST="$PP_TEST" \
+        --export="$SBATCH_EXPORT" \
         --output="$PKG_ROOT/cluster_output/%j_slurm.out" \
         --error="$PKG_ROOT/cluster_output/%j_slurm.err" \
         "$SCRIPT_DIR/run_nesi.sh")
@@ -80,7 +86,7 @@ cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/cluster_output"
 
 echo "=== PPDisentangle Sim Study (NeSI) ==="
-echo "Job $JOB_ID | $(date)"
+echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""

@@ -1,10 +1,10 @@
 # Deprecated: old sim study scripts and profiling tools
 
-These scripts are superseded by the unified `../sim_study.R` and `../run_sim_study.sh`.
+These scripts are superseded by `../sim_study.R` and `../run_nesi.sh`.
 
 **Use instead:**
 - `../sim_study.R` – main simulation study (supports `--small`, `--cluster`, `--sims N`)
-- `../run_sim_study.sh` – SLURM wrapper (submits via sbatch, runs sim_study.R)
+- `../run_nesi.sh` – NeSI SLURM wrapper (submits via sbatch, runs sim_study.R)
 - `../consistency_study.R` – sanity check for Hawkes fit
 
 **Original local/cluster split:**
