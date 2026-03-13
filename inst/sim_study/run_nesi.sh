@@ -20,6 +20,8 @@
 # Submit from the package root:
 #   cd /path/to/PPDisentangle
 #   sbatch inst/sim_study/run_nesi.sh [--sims 50] [--test]
+#
+#   --test: uses minimal resources (15 min, 4G) for fast scheduling
 
 set -euo pipefail
 
@@ -36,8 +38,16 @@ done
 PP_SIMS="${PP_SIMS:-100}"
 
 # ---- Resolve paths ----
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# When running under SLURM, BASH_SOURCE points to the copied script in /var/spool,
+# so we use PKG_ROOT from --export (set at submit time) or SLURM_SUBMIT_DIR.
+if [ -n "${SLURM_JOB_ID:-}" ] && [ -n "${PKG_ROOT:-}" ] && [ -d "$PKG_ROOT" ]; then
+    :  # PKG_ROOT already set by sbatch --export
+elif [ -n "${SLURM_JOB_ID:-}" ] && [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "$SLURM_SUBMIT_DIR" ]; then
+    PKG_ROOT="$SLURM_SUBMIT_DIR"
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
 
 # ---- If on login node (no SLURM_JOB_ID), submit via sbatch ----
 if [ -z "${SLURM_JOB_ID:-}" ]; then
@@ -47,8 +57,11 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     CPUS="$PP_SIMS"
     EXTRA_SBATCH=""
 
+    # Test mode: minimal resources for fast scheduling
+    if [ -n "$PP_TEST" ]; then
+        EXTRA_SBATCH="--time=00:15:00 --mem=4G"
     # large partition: max 72 CPUs/node; milan: up to 256 CPUs/node
-    if [ "$CPUS" -gt 72 ]; then
+    elif [ "$CPUS" -gt 72 ]; then
         if [ "$CPUS" -gt 256 ]; then
             echo "ERROR: max 256 CPUs per node (milan). Reduce --sims or split jobs."
             exit 1
@@ -57,11 +70,11 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition (256 CPUs/node)"
     fi
 
-    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode}"
+    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode (15 min, 4G)}"
 
     mkdir -p "$PKG_ROOT/cluster_output"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST"
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PKG_ROOT=$PKG_ROOT"
     [ -n "${ATE_SEQUENTIAL:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL=$ATE_SEQUENTIAL"
     [ -n "${PP_LOG_MEMORY:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY=$PP_LOG_MEMORY"
     [ -n "${PP_SKIP_CRAZY_PARAMS:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS"
