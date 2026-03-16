@@ -15,7 +15,7 @@
 #
 # Tune --cpus-per-task and --mem for your sim count:
 #   50 sims  → --cpus-per-task=50  --mem=64G   --time=24:00:00
-#   100 sims → --cpus-per-task=72  --mem=100G  --time=48:00:00  (or use milan)
+#   100 sims → --cpus-per-task=72  --mem=140G  --time=48:00:00  (or use milan)
 #
 # Submit from the package root:
 #   cd /path/to/PPDisentangle
@@ -60,9 +60,13 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         PP_SKIP_CRAZY_PARAMS=1
     fi
     if [ -z "${PP_ATE_WORKERS:-}" ]; then
-        PP_ATE_WORKERS=$(( CPUS / 2 ))
+        # Conservative default for memory-heavy ATE fitting.
+        PP_ATE_WORKERS=$(( CPUS / 8 ))
         [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
-        [ "$PP_ATE_WORKERS" -gt 24 ] && PP_ATE_WORKERS=24
+        [ "$PP_ATE_WORKERS" -gt 12 ] && PP_ATE_WORKERS=12
+    fi
+    if [ -z "${PP_ATE_BATCH_SIZE:-}" ]; then
+        PP_ATE_BATCH_SIZE=$(( PP_ATE_WORKERS * 2 ))
     fi
     EXTRA_SBATCH=""
 
@@ -80,14 +84,14 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     fi
 
     echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode (15 min, 4G)}"
-    echo "Robust defaults: PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS  PP_ATE_WORKERS=$PP_ATE_WORKERS"
+    echo "Robust defaults: PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS  PP_ATE_WORKERS=$PP_ATE_WORKERS  PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
 
     mkdir -p "$PKG_ROOT/cluster_output"
 
     SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PKG_ROOT=$PKG_ROOT"
     [ -n "${ATE_SEQUENTIAL:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL=$ATE_SEQUENTIAL"
     [ -n "${PP_LOG_MEMORY:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY=$PP_LOG_MEMORY"
-    SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS,PP_ATE_WORKERS=$PP_ATE_WORKERS"
+    SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS,PP_ATE_WORKERS=$PP_ATE_WORKERS,PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
 
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
@@ -113,22 +117,25 @@ if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
     PP_SKIP_CRAZY_PARAMS=1
 fi
 if [ -z "${PP_ATE_WORKERS:-}" ]; then
-    PP_ATE_WORKERS=$(( SLURM_CPUS_PER_TASK / 2 ))
+    PP_ATE_WORKERS=$(( SLURM_CPUS_PER_TASK / 8 ))
     [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
-    [ "$PP_ATE_WORKERS" -gt 24 ] && PP_ATE_WORKERS=24
+    [ "$PP_ATE_WORKERS" -gt 12 ] && PP_ATE_WORKERS=12
 fi
-export PP_SKIP_CRAZY_PARAMS PP_ATE_WORKERS
+if [ -z "${PP_ATE_BATCH_SIZE:-}" ]; then
+    PP_ATE_BATCH_SIZE=$(( PP_ATE_WORKERS * 2 ))
+fi
+export PP_SKIP_CRAZY_PARAMS PP_ATE_WORKERS PP_ATE_BATCH_SIZE
 
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
-echo "PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS | PP_ATE_WORKERS=$PP_ATE_WORKERS"
+echo "PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS | PP_ATE_WORKERS=$PP_ATE_WORKERS | PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
 # ---- Load modules ----
 # R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
-module purge
+module --force purge
 module load R-Geo/4.3.2-foss-2023a
 
 echo "R: $(which R) ($(R --version | head -1))"

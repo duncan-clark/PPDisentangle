@@ -60,7 +60,7 @@ if (TEST) {
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 10
   EM_ITER      <- 1000
-  SEM_EM_ADAPTIVE_ITER <- 2000
+  SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -120,6 +120,64 @@ if (nzchar(Sys.getenv("SIM_SIZE_OVERRIDE"))) {
   SIM_SIZE <- as.numeric(Sys.getenv("SIM_SIZE_OVERRIDE"))
 }
 
+env_base_seed <- suppressWarnings(as.integer(Sys.getenv("PP_BASE_SEED", "123")))
+if (!is.finite(env_base_seed) || is.na(env_base_seed)) env_base_seed <- 123L
+BASE_SEED <- as.integer(env_base_seed)
+stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
+  as.integer(BASE_SEED + as.integer(stage_offset) * 100000L + as.integer(sim_id) * 1000L + as.integer(extra))
+}
+
+# SEM/adaptive configuration (env-overridable so cluster tuning does not need code edits)
+SEM_PARAM_UPDATE_CADENCE <- 10L
+SEM_PROPOSAL_UPDATE_CADENCE <- 1L
+SEM_N_PROPS <- 10L
+SEM_CHANGE_FACTOR <- 0.01
+SEM_INCLUDE_STARTING <- TRUE
+SEM_UPDATE_STARTING <- TRUE
+SEM_UPDATE_CONTROL_PARAMS <- FALSE
+
+if (nzchar(Sys.getenv("PP_SEM_INNER_ITER"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_INNER_ITER")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_EM_ADAPTIVE_ITER <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_OUTER_ITER"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_OUTER_ITER")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_ITER <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_N_LABELLINGS"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_N_LABELLINGS")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_LABELLINGS <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_N_PROPS"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_N_PROPS")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_PROPS <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_PARAM_CADENCE"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PARAM_CADENCE")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_PARAM_UPDATE_CADENCE <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_PROPOSAL_CADENCE"))) {
+  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PROPOSAL_CADENCE")))
+  if (is.finite(v) && !is.na(v) && v > 0L) SEM_PROPOSAL_UPDATE_CADENCE <- v
+}
+if (nzchar(Sys.getenv("PP_SEM_CHANGE_FACTOR"))) {
+  v <- suppressWarnings(as.numeric(Sys.getenv("PP_SEM_CHANGE_FACTOR")))
+  if (is.finite(v) && !is.na(v) && v > 0) SEM_CHANGE_FACTOR <- v
+}
+# Outer SEM should always include starting data for stability/consistency.
+if (nzchar(Sys.getenv("PP_SEM_INCLUDE_STARTING"))) {
+  env_inc <- tolower(Sys.getenv("PP_SEM_INCLUDE_STARTING")) %in% c("1", "true", "yes")
+  if (!env_inc) {
+    warning("PP_SEM_INCLUDE_STARTING=FALSE requested, but include_starting_data is enforced TRUE for adaptive SEM.")
+  }
+}
+if (nzchar(Sys.getenv("PP_SEM_UPDATE_STARTING"))) {
+  SEM_UPDATE_STARTING <- tolower(Sys.getenv("PP_SEM_UPDATE_STARTING")) %in% c("1", "true", "yes")
+}
+if (nzchar(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS"))) {
+  SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS")) %in% c("1", "true", "yes")
+}
+
 TREAT_PROP <- 0.5
 TIME_INT   <- END_TIME - TREATMENT_TIME
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
@@ -171,13 +229,28 @@ env_ate_workers <- suppressWarnings(as.integer(Sys.getenv("PP_ATE_WORKERS", ""))
 ATE_WORKERS <- if (!is.na(env_ate_workers) && env_ate_workers > 0L) {
   env_ate_workers
 } else if (ON_CLUSTER) {
-  min(24L, max(4L, as.integer(floor(N_CORES / 2))))
+  min(12L, max(4L, as.integer(floor(N_CORES / 8))))
 } else {
   N_CORES
 }
+env_ate_batch <- suppressWarnings(as.integer(Sys.getenv("PP_ATE_BATCH_SIZE", "")))
+ATE_BATCH_SIZE <- if (!is.na(env_ate_batch) && env_ate_batch > 0L) {
+  env_ate_batch
+} else {
+  max(ATE_WORKERS, 2L * ATE_WORKERS)
+}
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("EM iter=", EM_ITER, " | SEM adaptive=", SEM_EM_ADAPTIVE_ITER, " outer=", SEM_N_ITER, " labellings=", SEM_N_LABELLINGS)
+log_msg("SEM spec: n_props=", SEM_N_PROPS,
+        " | param_cadence=", SEM_PARAM_UPDATE_CADENCE,
+        " | proposal_cadence=", SEM_PROPOSAL_UPDATE_CADENCE,
+        " | change_factor=", SEM_CHANGE_FACTOR,
+        " | include_starting=", SEM_INCLUDE_STARTING,
+        " | update_starting=", SEM_UPDATE_STARTING,
+        " | update_control_params=", SEM_UPDATE_CONTROL_PARAMS)
 log_msg("ATE workers=", ATE_WORKERS)
+log_msg("ATE batch size=", ATE_BATCH_SIZE)
+log_msg("Base seed=", BASE_SEED)
 log_msg("Output: ", SAVE_DIR)
 
 # ------------------------------------------------------------------
@@ -265,8 +338,8 @@ log_msg("True one-flip ATE:", round(true_tau_1, 4))
 # ------------------------------------------------------------------
 log_msg("Generating", SIM_SIZE, "observed datasets ...")
 t0 <- proc.time()[3]
-set.seed(123)
 obs_data <- lapply(1:SIM_SIZE, function(i) {
+  set.seed(stage_seed(1L, i))
   pre_treat <- sim_hawkes(
     params = hawkes_par_1,
     windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
@@ -318,7 +391,9 @@ pp_labeled_naive <- lapply(obs_data, function(s) {
 # ------------------------------------------------------------------
 log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
 t0 <- proc.time()[3]
-gen_proposals <- function(s) {
+gen_proposals <- function(i) {
+  set.seed(stage_seed(2L, i))
+  s <- obs_data[[i]]
   df <- as.data.frame(s)
   pre  <- df[df$t < TREATMENT_TIME, , drop = FALSE]
   post <- df[df$t >= TREATMENT_TIME, , drop = FALSE]
@@ -341,9 +416,9 @@ gen_proposals <- function(s) {
   }))
 }
 if (N_CORES > 1 && !SMALL) {
-  labelling_proposals <- parLapply(cl = cl, X = obs_data, fun = gen_proposals)
+  labelling_proposals <- parLapply(cl = cl, X = seq_along(obs_data), fun = gen_proposals)
 } else {
-  labelling_proposals <- lapply(obs_data, gen_proposals)
+  labelling_proposals <- lapply(seq_along(obs_data), gen_proposals)
 }
 log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
@@ -363,7 +438,9 @@ pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
 # ------------------------------------------------------------------
 log_msg("Running EM-style labelling ...")
 t0 <- proc.time()[3]
-run_em <- function(x) {
+run_em <- function(i) {
+  set.seed(stage_seed(3L, i))
+  x <- obs_data[[i]]
   total_points <- sum(x$location_process == "treated" & x$t >= TREATMENT_TIME)
   mu_start     <- total_points / TIME_INT
   params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
@@ -377,16 +454,16 @@ run_em <- function(x) {
     hawkes_params_control = hawkes_par_1,
     hawkes_params_treated = params_init,
     param_update_cadence = 10, proposal_update_cadence = 1,
-    update_starting_data = TRUE, include_starting_data = FALSE,
+    update_starting_data = TRUE, include_starting_data = TRUE,
     metric_name = "post_likelihood", optim_method = "max",
     iter = EM_ITER, n_props = 10, change_factor = 0.01,
     MCMC_style = FALSE, verbose = FALSE
   )
 }
 if (N_CORES > 1 && !SMALL) {
-  EM_max_style <- parLapply(cl = cl, X = obs_data, fun = run_em)
+  EM_max_style <- parLapply(cl = cl, X = seq_along(obs_data), fun = run_em)
 } else {
-  EM_max_style <- lapply(obs_data, run_em)
+  EM_max_style <- lapply(seq_along(obs_data), run_em)
 }
 log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
@@ -403,7 +480,9 @@ pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
 # ------------------------------------------------------------------
 log_msg("Running adaptive SEM ...")
 t0 <- proc.time()[3]
-run_sem <- function(dat) {
+run_sem <- function(i) {
+  set.seed(stage_seed(4L, i))
+  dat <- obs_data[[i]]
   total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
   mu_start     <- total_points / TIME_INT
   params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
@@ -419,26 +498,30 @@ run_sem <- function(dat) {
     N_labellings = SEM_N_LABELLINGS,
     N_iter = SEM_N_ITER, verbose = FALSE,
     adaptive_control = list(
-      param_update_cadence = 10,
-      proposal_update_cadence = 1,
+      param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
+      proposal_update_cadence = SEM_PROPOSAL_UPDATE_CADENCE,
       state_spaces = NULL,
-      update_control_params = FALSE,
+      update_control_params = SEM_UPDATE_CONTROL_PARAMS,
       iter = SEM_EM_ADAPTIVE_ITER,
-      n_props = 10,
-      change_factor = 0.01,
-      include_starting_data = FALSE,
-      update_starting_data = TRUE,
+      n_props = SEM_N_PROPS,
+      change_factor = SEM_CHANGE_FACTOR,
+      include_starting_data = SEM_INCLUDE_STARTING,
+      update_starting_data = SEM_UPDATE_STARTING,
       verbose = FALSE
     )
   )
 }
 if (N_CORES > 1 && !SMALL) {
-  EM_results <- parLapply(cl = cl, X = obs_data, fun = run_sem)
+  EM_results <- parLapply(cl = cl, X = seq_along(obs_data), fun = run_sem)
 } else {
-  EM_results <- lapply(obs_data, run_sem)
+  EM_results <- lapply(seq_along(obs_data), run_sem)
 }
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_memory("post_EM")
+
+# Free heavy intermediate objects before ATE to reduce peak resident memory.
+rm(labelling_proposals, pp_labeled_best_proposal, EM_max_style)
+gc(verbose = FALSE)
 
 # ------------------------------------------------------------------
 # 7b. Extract adaptive SEM diagnostics (flips + accuracy per iteration)
@@ -495,11 +578,21 @@ log_memory("pre_ATE")
 log_msg("Estimating ATEs ...")
 t0 <- proc.time()[3]
 
+slim_for_ate <- function(df) {
+  keep <- intersect(c("x", "y", "t", "inferred_process", "location_process"), names(df))
+  out <- as.data.frame(df[, keep, drop = FALSE])
+  if (!"inferred_process" %in% names(out) && "location_process" %in% names(out)) {
+    out$inferred_process <- out$location_process
+  }
+  out
+}
+
 tasks <- list()
 for (nm in names(labellings)) {
   for (i in seq_along(labellings[[nm]])) {
+    post_x <- labellings[[nm]][[i]] %>% filter(.data$t >= TREATMENT_TIME)
     tasks[[length(tasks) + 1]] <- list(
-      x = labellings[[nm]][[i]] %>% filter(.data$t >= TREATMENT_TIME),
+      x = slim_for_ate(post_x),
       labelling_name = nm, hawkes_params = NULL
     )
   }
@@ -507,8 +600,9 @@ for (nm in names(labellings)) {
 for (i in seq_along(EM_results)) {
   tmp <- obs_data[[i]]
   tmp$inferred_process <- tmp$location_process
+  post_tmp <- tmp %>% filter(.data$t >= TREATMENT_TIME)
   tasks[[length(tasks) + 1]] <- list(
-    x = tmp %>% filter(.data$t >= TREATMENT_TIME),
+    x = slim_for_ate(post_tmp),
     labelling_name = "EM_full_params",
     hawkes_params = list(
       control = EM_results[[i]]$hawkes_params_control,
@@ -603,16 +697,45 @@ if (ATE_SEQUENTIAL) {
   gc(verbose = FALSE)
   cl_ate <- make_cluster(min(ATE_WORKERS, length(tasks)))
   export_ate_globals(cl_ate)
-  results_flat <- tryCatch(
-    parLapply(cl_ate, tasks, fun = task_function),
-    error = function(e) {
-      log_msg("[ATE PARALLEL ERROR] ", conditionMessage(e))
-      log_msg("[ATE PARALLEL ERROR] Falling back to sequential for robustness.")
-      NULL
+  task_ids <- seq_along(tasks)
+  task_batches <- split(task_ids, ceiling(task_ids / ATE_BATCH_SIZE))
+  results_flat <- vector("list", length(tasks))
+  batch_failed <- FALSE
+  done_total <- 0L
+  ok_total <- 0L
+  null_total <- 0L
+  for (b in seq_along(task_batches)) {
+    idx <- task_batches[[b]]
+    log_msg(sprintf("[ATE BATCH %d/%d] start (tasks %d..%d, n=%d)",
+                    b, length(task_batches), min(idx), max(idx), length(idx)))
+    tb0 <- proc.time()[3]
+    batch_res <- tryCatch(
+      parLapply(cl_ate, tasks[idx], fun = task_function),
+      error = function(e) {
+        log_msg("[ATE PARALLEL ERROR] batch ", b, "/", length(task_batches), ": ", conditionMessage(e))
+        NULL
+      }
+    )
+    if (is.null(batch_res)) {
+      batch_failed <- TRUE
+      break
     }
-  )
+    results_flat[idx] <- batch_res
+    n_ok <- sum(vapply(batch_res, function(z) !is.null(z), logical(1)))
+    n_null <- length(batch_res) - n_ok
+    done_total <- done_total + length(batch_res)
+    ok_total <- ok_total + n_ok
+    null_total <- null_total + n_null
+    batch_elapsed <- proc.time()[3] - tb0
+    log_msg(sprintf("[ATE BATCH %d/%d] done in %.1f s | ok=%d null=%d | cumulative %d/%d (ok=%d null=%d)",
+                    b, length(task_batches), batch_elapsed, n_ok, n_null,
+                    done_total, length(tasks), ok_total, null_total))
+    rm(batch_res); gc(verbose = FALSE)
+    log_elapsed("ATE parallel batch", proc.time()[3] - t0, max(idx), length(tasks))
+  }
   stopCluster(cl_ate)
-  if (is.null(results_flat)) {
+  if (batch_failed) {
+    log_msg("[ATE PARALLEL ERROR] Falling back to sequential for robustness.")
     results_flat <- lapply(tasks, task_function)
   }
 }

@@ -288,6 +288,22 @@ $$
 
 with Omori--Utsu temporal kernel $g$ and power-law spatial kernel $f$.
 
+The kernels used in the fits are:
+
+$$
+g(\Delta t) = \frac{p-1}{c}\left(1+\frac{\Delta t}{c}\right)^{-p}, \qquad \Delta t > 0
+$$
+
+and
+
+$$
+f(\Delta x,\Delta y \mid m_j) =
+\frac{q-1}{\pi\,d(m_j)}\,
+\left(1+\frac{r^2}{d(m_j)}\right)^{-q},
+\quad r^2 = \Delta x^2 + \Delta y^2,
+\quad d(m_j)=D\exp\{\gamma(m_j-m_0)\}.
+$$
+
 ## Bivariate Extension
 
 $$
@@ -339,13 +355,32 @@ if (file.exists(bg_plot_file)) {
 
 ```{r tbl-fixed}
 #| label: tbl-fixed
-fixed_df <- data.frame(
-  Parameter = c("c", "p", "D", "\u03b3", "q"),
-  Value = c(0.05, 1.2, 5.0, 0.5, 1.5),
-  Role = c("Omori onset delay", "Omori decay exponent",
-           "Spatial scale", "Mag-spatial scaling", "Spatial decay exponent"))
-kable(fixed_df, align = "lcl",
-      caption = "Fixed structural parameters.") |>
+fixed_cfg <- cfg$FIXED_STRUCTURAL
+if (is.null(fixed_cfg) || length(fixed_cfg) == 0) {
+  fixed_df <- data.frame(
+    Parameter = "None",
+    Value = "Estimated (not fixed)",
+    Role = "All ETAS parameters are estimated from data",
+    stringsAsFactors = FALSE
+  )
+  cap <- "Fixed structural parameters: none for this run."
+} else {
+  role_map <- c(
+    c = "Omori onset delay",
+    p = "Omori decay exponent",
+    D = "Spatial scale",
+    gamma = "Mag-spatial scaling",
+    q = "Spatial decay exponent"
+  )
+  fixed_df <- data.frame(
+    Parameter = names(fixed_cfg),
+    Value = as.numeric(unlist(fixed_cfg)),
+    Role = unname(role_map[names(fixed_cfg)]),
+    stringsAsFactors = FALSE
+  )
+  cap <- "Fixed structural parameters."
+}
+kable(fixed_df, align = "lcl", caption = cap) |>
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
@@ -804,6 +839,37 @@ if (!is.null(results$fitH) && !is.null(results$fitH$ate)) {
   biv_rows[[length(biv_rows) + 1]] <- list(lab = "H: Decode Biv+KDE", ate = results$fitH$ate, louis = NULL)
 }
 
+boot_obj <- results$bootstrap_ate
+boot_E_df <- NULL
+boot_F_df <- NULL
+if (!is.null(boot_obj) &&
+    !is.null(boot_obj$fit_E) &&
+    !is.null(boot_obj$fit_E$replicate_summary) &&
+    nrow(boot_obj$fit_E$replicate_summary) > 0) {
+  boot_E_df <- boot_obj$fit_E$replicate_summary
+}
+if (!is.null(boot_obj) &&
+    !is.null(boot_obj$fit_F) &&
+    !is.null(boot_obj$fit_F$replicate_summary) &&
+    nrow(boot_obj$fit_F$replicate_summary) > 0) {
+  boot_F_df <- boot_obj$fit_F$replicate_summary
+}
+
+get_boot_summary <- function(model_label) {
+  vals <- NULL
+  if (model_label == "E: Naive Biv+KDE" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
+  if (model_label == "F: SEM Biv+KDE" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (is.null(vals)) return(NULL)
+  vals <- vals[is.finite(vals)]
+  if (length(vals) < 2) return(NULL)
+  list(
+    sd = stats::sd(vals, na.rm = TRUE),
+    lo = as.numeric(stats::quantile(vals, probs = 0.025, na.rm = TRUE)),
+    hi = as.numeric(stats::quantile(vals, probs = 0.975, na.rm = TRUE)),
+    n = length(vals)
+  )
+}
+
 get_total_effect_sim <- function(ate_obj, n_tiles = n_cty) {
   if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
   sim_df <- ate_obj$all_nothing_sim
@@ -843,22 +909,38 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   c_mean <- mean(expected$c_total, na.rm = TRUE)
   t_mean <- mean(expected$t_total, na.rm = TRUE)
   sim_sd_total  <- sd(sim_totals, na.rm = TRUE)
+  boot_sum <- get_boot_summary(r$lab)
+  boot_sd <- if (!is.null(boot_sum)) round(boot_sum$sd, 0) else NA
+  boot_ci <- if (!is.null(boot_sum)) {
+    sprintf("[%d, %d]", round(boot_sum$lo, 0), round(boot_sum$hi, 0))
+  } else {
+    "NA"
+  }
   data.frame(
     Model = r$lab,
     `E[N(0)]` = round(c_mean, 0),
     `E[N(1)]` = round(t_mean, 0),
     `Total Effect` = round(sim_total, 0),
     `SD` = round(sim_sd_total, 0),
+    `Bootstrap SD` = boot_sd,
+    `Bootstrap 95% CI` = boot_ci,
     `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
     check.names = FALSE)
 }))
 kable(ate_biv,
       col.names = c("Model", "E[N(0)]", "E[N(1)]",
                     paste0("Total Effect / ", n_cty, " counties / ", ate_days, "d"),
-                    "SD", paste0("Spillover / ", ate_days, "d")),
+                    "SD", "Bootstrap SD", "Bootstrap 95% CI",
+                    paste0("Spillover / ", ate_days, "d")),
       caption = paste0("All-or-nothing total effect over ", ate_days, " days."),
-      align = "lccccc") |>
+      align = "lccccccc") |>
   kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
+if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
+  labs <- c()
+  if (!is.null(boot_E_df)) labs <- c(labs, "E (Naive Biv+KDE)")
+  if (!is.null(boot_F_df)) labs <- c(labs, "F (SEM Biv+KDE)")
+  cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
+}
 ```
 
 ```{r fig-ate-biv}
