@@ -136,7 +136,24 @@ echo ""
 # ---- Load modules ----
 # R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
 module --force purge
-module load R-Geo/4.3.2-foss-2023a
+
+# Some NeSI stacks require architecture/compiler parents (e.g., NeSI/zen3)
+# before R-Geo can be loaded. Try robust fallbacks in order.
+if ! module load R-Geo/4.3.2-foss-2023a; then
+    echo "Primary load failed: R-Geo/4.3.2-foss-2023a"
+    echo "Trying NeSI/zen3 -> R-Geo/4.3.2-foss-2023a ..."
+    if module load NeSI/zen3 && module load R-Geo/4.3.2-foss-2023a; then
+        :
+    else
+        echo "Trying generic R-Geo module ..."
+        if ! module load R-Geo; then
+            echo "ERROR: Failed to load R-Geo module."
+            echo "Run 'module spider R-Geo' and update run_nesi.sh accordingly."
+            module spider R-Geo || true
+            exit 1
+        fi
+    fi
+fi
 
 echo "R: $(which R) ($(R --version | head -1))"
 echo ""
