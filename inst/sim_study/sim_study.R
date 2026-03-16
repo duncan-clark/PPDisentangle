@@ -167,8 +167,17 @@ params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5)
 }
 
 MODE <- if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL" else "LOCAL"
+env_ate_workers <- suppressWarnings(as.integer(Sys.getenv("PP_ATE_WORKERS", "")))
+ATE_WORKERS <- if (!is.na(env_ate_workers) && env_ate_workers > 0L) {
+  env_ate_workers
+} else if (ON_CLUSTER) {
+  min(24L, max(4L, as.integer(floor(N_CORES / 2))))
+} else {
+  N_CORES
+}
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("EM iter=", EM_ITER, " | SEM adaptive=", SEM_EM_ADAPTIVE_ITER, " outer=", SEM_N_ITER, " labellings=", SEM_N_LABELLINGS)
+log_msg("ATE workers=", ATE_WORKERS)
 log_msg("Output: ", SAVE_DIR)
 
 # ------------------------------------------------------------------
@@ -193,6 +202,14 @@ export_globals <- function(cl) {
     "treated_partitions", "treated_state_space",
     "control_state_space", "hawkes_par_1", "hawkes_par_2",
     "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS"
+  ), envir = .GlobalEnv)
+}
+
+export_ate_globals <- function(cl) {
+  clusterExport(cl, c(
+    "OMEGA", "partition", "N_SIMS", "MAX_TIME",
+    "N_TAU_SIMS", "N_TAU_I", "TREATMENT_TIME", "END_TIME",
+    "treated_partitions", "params_are_crazy"
   ), envir = .GlobalEnv)
 }
 
@@ -500,7 +517,16 @@ for (i in seq_along(EM_results)) {
   )
 }
 
-SKIP_CRAZY <- nzchar(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) && tolower(Sys.getenv("PP_SKIP_CRAZY_PARAMS")) %in% c("1", "true", "yes")
+skip_env_raw <- Sys.getenv("PP_SKIP_CRAZY_PARAMS")
+skip_env_set <- nzchar(skip_env_raw)
+SKIP_CRAZY <- if (skip_env_set) {
+  tolower(skip_env_raw) %in% c("1", "true", "yes")
+} else {
+  ON_CLUSTER
+}
+log_msg(sprintf("[CRAZY PARAMS] skip mode: %s (%s)",
+  ifelse(SKIP_CRAZY, "ON", "OFF"),
+  ifelse(skip_env_set, "from PP_SKIP_CRAZY_PARAMS", "default")))
 crazy_idx <- integer(0)
 for (k in seq_along(tasks)) {
   tsk <- tasks[[k]]
@@ -521,7 +547,7 @@ if (length(crazy_idx) > 0) {
     tasks <- tasks[-crazy_idx]
     log_msg("[CRAZY PARAMS] Skipping these tasks (PP_SKIP_CRAZY_PARAMS=1)")
   } else {
-    log_msg("[CRAZY PARAMS] Running anyway (set PP_SKIP_CRAZY_PARAMS=1 to skip and avoid OOM)")
+    log_msg("[CRAZY PARAMS] Retaining tasks in queue, but worker-side guard still returns NULL for explosive params")
   }
 }
 
@@ -571,8 +597,24 @@ if (ATE_SEQUENTIAL) {
   stopCluster(cl)
   results_flat <- lapply(tasks, task_function)
 } else {
-  results_flat <- parLapply(cl, tasks, fun = task_function)
+  # Recreate a fresh, smaller cluster for ATE to avoid stale worker state and
+  # reduce memory pressure from too many concurrent heavy ATE jobs.
   stopCluster(cl)
+  gc(verbose = FALSE)
+  cl_ate <- make_cluster(min(ATE_WORKERS, length(tasks)))
+  export_ate_globals(cl_ate)
+  results_flat <- tryCatch(
+    parLapply(cl_ate, tasks, fun = task_function),
+    error = function(e) {
+      log_msg("[ATE PARALLEL ERROR] ", conditionMessage(e))
+      log_msg("[ATE PARALLEL ERROR] Falling back to sequential for robustness.")
+      NULL
+    }
+  )
+  stopCluster(cl_ate)
+  if (is.null(results_flat)) {
+    results_flat <- lapply(tasks, task_function)
+  }
 }
 log_elapsed("ATE estimation", proc.time()[3] - t0, length(tasks), length(tasks))
 log_memory("post_ATE")

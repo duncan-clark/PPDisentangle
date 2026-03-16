@@ -55,6 +55,15 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     git pull origin main 2>/dev/null || true
 
     CPUS="$PP_SIMS"
+    # Robust defaults for the heavy ATE stage.
+    if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
+        PP_SKIP_CRAZY_PARAMS=1
+    fi
+    if [ -z "${PP_ATE_WORKERS:-}" ]; then
+        PP_ATE_WORKERS=$(( CPUS / 2 ))
+        [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
+        [ "$PP_ATE_WORKERS" -gt 24 ] && PP_ATE_WORKERS=24
+    fi
     EXTRA_SBATCH=""
 
     # Test mode: minimal resources for fast scheduling
@@ -71,13 +80,14 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     fi
 
     echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode (15 min, 4G)}"
+    echo "Robust defaults: PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS  PP_ATE_WORKERS=$PP_ATE_WORKERS"
 
     mkdir -p "$PKG_ROOT/cluster_output"
 
     SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PKG_ROOT=$PKG_ROOT"
     [ -n "${ATE_SEQUENTIAL:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL=$ATE_SEQUENTIAL"
     [ -n "${PP_LOG_MEMORY:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY=$PP_LOG_MEMORY"
-    [ -n "${PP_SKIP_CRAZY_PARAMS:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS"
+    SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS,PP_ATE_WORKERS=$PP_ATE_WORKERS"
 
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
@@ -98,9 +108,21 @@ fi
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/cluster_output"
 
+# Re-apply robust defaults inside allocation if not exported explicitly.
+if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
+    PP_SKIP_CRAZY_PARAMS=1
+fi
+if [ -z "${PP_ATE_WORKERS:-}" ]; then
+    PP_ATE_WORKERS=$(( SLURM_CPUS_PER_TASK / 2 ))
+    [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
+    [ "$PP_ATE_WORKERS" -gt 24 ] && PP_ATE_WORKERS=24
+fi
+export PP_SKIP_CRAZY_PARAMS PP_ATE_WORKERS
+
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
+echo "PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS | PP_ATE_WORKERS=$PP_ATE_WORKERS"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 

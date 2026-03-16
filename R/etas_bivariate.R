@@ -45,6 +45,7 @@ loglik_etas_bivariate <- function(params,
                                   m0 = NULL,
                                   control_state_space = NULL,
                                   treated_state_space = NULL,
+                                  background_rate_var = NULL,
                                   t_trunc = NULL,
                                   ...) {
   if (is.list(params) && !is.null(names(params))) {
@@ -134,6 +135,20 @@ loglik_etas_bivariate <- function(params,
     if (areaS_1 <= 0) areaS_1 <- 1
   }
 
+  # Optional inhomogeneous background covariate:
+  # W scales the baseline intensity for both processes after region masking.
+  if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
+    W_cov <- realiz[[background_rate_var]]
+    if (length(W_cov) != n) stop("background_rate_var length mismatch in realiz.")
+    W_cov <- as.numeric(W_cov)
+    W_cov[!is.finite(W_cov)] <- 0
+    min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+    if (!is.finite(min_pos)) min_pos <- 1e-12
+    W_cov[W_cov <= 0] <- min_pos
+    W_0 <- W_0 * W_cov
+    W_1 <- W_1 * W_cov
+  }
+
   tval <- windowT[2] - windowT[1]
 
   etas_bivariate_loglik_cpp(
@@ -182,6 +197,7 @@ fit_etas_bivariate <- function(params_init,
                                m0 = NULL,
                                control_state_space = NULL,
                                treated_state_space = NULL,
+                               background_rate_var = NULL,
                                maxit = 5000,
                                fixed_params = NULL,
                                symmetric = FALSE,
@@ -237,6 +253,18 @@ fit_etas_bivariate <- function(params_init,
   } else { areaS_0 <- total_area - areaS_1 }
   if (areaS_0 <= 0) areaS_0 <- 1
   if (areaS_1 <= 0) areaS_1 <- 1
+
+  if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
+    W_cov <- realiz[[background_rate_var]]
+    if (length(W_cov) != n) stop("background_rate_var length mismatch in realiz.")
+    W_cov <- as.numeric(W_cov)
+    W_cov[!is.finite(W_cov)] <- 0
+    min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+    if (!is.finite(min_pos)) min_pos <- 1e-12
+    W_cov[W_cov <= 0] <- min_pos
+    W_0 <- W_0 * W_cov
+    W_1 <- W_1 * W_cov
+  }
   precomp <- list(W_0 = W_0, W_1 = W_1, areaS_0 = areaS_0, areaS_1 = areaS_1)
 
   profile_fn <- function(free_par) {
@@ -254,6 +282,7 @@ fit_etas_bivariate <- function(params_init,
       m0 = m0,
       control_state_space = control_state_space,
       treated_state_space = treated_state_space,
+      background_rate_var = background_rate_var,
       t_trunc = t_trunc, precomp = precomp
     )
   }

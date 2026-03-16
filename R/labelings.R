@@ -478,6 +478,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    verbose = FALSE,
                                                    partition_mask = NULL,
                                                    proximity_weight = 0.9,
+                                                   temporal_weight = 0,
+                                                   temporal_scale_days = NULL,
                                                    points_tile_index = NULL,
                                                    model_type = "hawkes",
                                                    ...) {
@@ -501,6 +503,11 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   dots <- list(...)
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
+  if (!is.finite(temporal_weight)) temporal_weight <- 0
+  temporal_weight <- min(max(temporal_weight, 0), 1)
+  if (is.null(temporal_scale_days) || !is.finite(temporal_scale_days) || temporal_scale_days <= 0) {
+    temporal_scale_days <- max(1, as.numeric(windowT[2] - windowT[1]) / 5)
+  }
 
   # For bivariate ETAS, simulate jointly and compare per-process counts
   if (is_biv_etas) {
@@ -613,6 +620,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       if (length(candidates) == 0) next
 
       sampling_weights <- NULL
+      base_weights <- NULL
       if (has_attractors && length(candidates) > 0 && proximity_weight > 0) {
         X_cand <- ppp(dat$x[candidates], dat$y[candidates], window = win_box, check = FALSE)
         dists <- nncross(X_cand, X_attract)$dist
@@ -623,7 +631,27 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
           geom_weights <- rep(1 / length(candidates), length(candidates))
         }
         uni_weights <- rep(1 / length(candidates), length(candidates))
-        sampling_weights <- (proximity_weight * geom_weights) + ((1 - proximity_weight) * uni_weights)
+        base_weights <- (proximity_weight * geom_weights) + ((1 - proximity_weight) * uni_weights)
+      } else if (length(candidates) > 0) {
+        base_weights <- rep(1 / length(candidates), length(candidates))
+      }
+
+      if (length(candidates) > 0 && temporal_weight > 0) {
+        dt <- pmax(dat$t[candidates] - windowT[1], 0)
+        time_weights <- exp(-dt / temporal_scale_days)
+        if (!any(is.finite(time_weights)) || sum(time_weights, na.rm = TRUE) <= 0) {
+          time_weights <- rep(1 / length(candidates), length(candidates))
+        } else {
+          time_weights[!is.finite(time_weights)] <- 0
+          time_weights <- time_weights / sum(time_weights)
+        }
+        if (is.null(base_weights)) {
+          base_weights <- rep(1 / length(candidates), length(candidates))
+        }
+        sampling_weights <- ((1 - temporal_weight) * base_weights) + (temporal_weight * time_weights)
+        sampling_weights <- sampling_weights / sum(sampling_weights)
+      } else {
+        sampling_weights <- base_weights
       }
 
       changes_local <- sample(
@@ -697,7 +725,17 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
           next
         }
         if (length(candidates_t) == 0) next
-        changes_local <- sample(length(candidates_t), size = min(n_thin, length(candidates_t)), replace = FALSE)
+        sampling_weights_t <- NULL
+        if (temporal_weight > 0) {
+          dt_t <- pmax(dat$t[candidates_t] - windowT[1], 0)
+          tw_t <- exp(-dt_t / temporal_scale_days)
+          if (all(is.finite(tw_t)) && sum(tw_t) > 0) {
+            sampling_weights_t <- tw_t / sum(tw_t)
+          }
+        }
+        changes_local <- sample(length(candidates_t),
+                                size = min(n_thin, length(candidates_t)),
+                                replace = FALSE, prob = sampling_weights_t)
         changes <- candidates_t[changes_local]
         dat$inferred_process[changes] <- ifelse(dat$location_process[changes] == "control", "treated", "control")
       }
@@ -759,8 +797,17 @@ em_style_labelling <- function(pp_data,
                                fixed_params = NULL,
                                verbose = FALSE,
                                model_type = "hawkes",
+                               temporal_weight = 0,
+                               temporal_scale_days = NULL,
                                ...) {
   dots <- list(...)
+  base_change_factor <- as.numeric(change_factor)
+  if (!is.finite(base_change_factor) || base_change_factor <= 0) {
+    stop("change_factor must be a positive finite number.")
+  }
+  # Keep adaptive proposal size changes moderate around the initial setting.
+  change_factor_min <- 0.2 * base_change_factor
+  change_factor_max <- 2.0 * base_change_factor
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
   is_etas <- identical(model_type, "etas")
@@ -804,84 +851,117 @@ em_style_labelling <- function(pp_data,
   }
 
   starting_data <- as.data.frame(pp_data)
-  orig_starting_data <- starting_data
   treated_par <- list(hawkes_params_treated)
   control_par <- list(hawkes_params_control)
   accuracies <- numeric(iter)
   average_flips <- numeric(iter)
   max_metric_flips <- numeric(iter)
   metric_vec <- numeric(iter)
+  change_factor_trace <- numeric(iter)
+  retained_starting_trace <- logical(iter)
   all_accuracies <- vector("list", iter)
   all_metrics <- vector("list", iter)
 
   is_pre <- starting_data$t < treatment_time
-  is_post <- !is_pre
+  pre_data <- starting_data[is_pre, , drop = FALSE]
+  post_data <- starting_data[!is_pre, , drop = FALSE]
+  post_data <- post_data[order(post_data$t), , drop = FALSE]
+  pre_data$location_process <- "control"
+  pre_data$inferred_process <- "control"
+  history_window_start <- if (nrow(pre_data) > 0) min(pre_data$t) else time_window[1]
+  history_window <- c(history_window_start, time_window[2])
+  current_metric_cache <- NA_real_
 
   fits <- list()
   labelling_proposals <- list()
   total_sampling <- 0
   total_likelihood <- 0
   total_param_update <- 0
+  current_change_factor <- change_factor
+  no_flip_streak <- 0L
+  stagnation_trigger_every <- 10L
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
-    pre <- starting_data[is_pre, ]
-    post <- starting_data[is_post, ]
-    post <- post[order(post$t), ]
-    pre$location_process <- "control"
-    pre$inferred_process <- NULL
     t_samp <- proc.time()[3]
+    trigger_explore <- (no_flip_streak > 0L) && ((no_flip_streak %% stagnation_trigger_every) == 0L)
+    proposal_change_factor <- if (trigger_explore) {
+      min(base_change_factor, current_change_factor * 2)
+    } else {
+      current_change_factor
+    }
     if (proposal_method == "single_flip") {
-      pre$inferred_process <- "control"
-      labelling_proposals <- single_flip_proposals(post, pre)
+      n_post_pts <- nrow(post_data)
+      labelling_proposals <- lapply(seq_len(n_post_pts), function(j) {
+        proposed <- post_data
+        proposed$inferred_process[j] <- if (proposed$inferred_process[j] == "control") {
+          "treated"
+        } else {
+          "control"
+        }
+        proposed
+      })
       if (verbose && i == 1) {
         cat(sprintf("  single_flip: %d proposals (one per post-treatment point)\n", length(labelling_proposals)))
       }
     } else if (!is.null(proposal_update_cadence)) {
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
-        post_inds <- as.numeric(tileindex(post$x, post$y, partition))
-        filt_by_proc <- if (!is.null(pre$location_process)) split(pre, pre$location_process) else NULL
+        post_inds <- as.numeric(tileindex(post_data$x, post_data$y, partition))
+        filt_by_proc <- if (!is.null(pre_data$location_process)) split(pre_data, pre_data$location_process) else NULL
         post_proposals <- lapply(1:n_props, function(j) {
           simulation_labeling_hawkes_hawkes_fast(
-            post, partition = partition, partition_process = partition_processes,
+            post_data, partition = partition, partition_process = partition_processes,
             statespace = statespace, state_spaces = state_spaces,
             windowT = time_window,
             hawkes_params_control = control_par[[length(control_par)]],
             hawkes_params_treated = treated_par[[length(treated_par)]],
-            change_factor = change_factor, filtration = pre, verbose = FALSE,
+            change_factor = proposal_change_factor, filtration = pre_data, verbose = FALSE,
+            temporal_weight = temporal_weight,
+            temporal_scale_days = temporal_scale_days,
             points_tile_index = post_inds, filt_by_proc = filt_by_proc,
             model_type = model_type, ...
           )
         })
-        pre$inferred_process <- "control"
-        labelling_proposals <- lapply(post_proposals, function(tmp) rbind(pre, tmp))
+        labelling_proposals <- lapply(post_proposals, function(tmp) {
+          tmp <- as.data.frame(tmp)
+          tmp <- tmp[order(tmp$t), , drop = FALSE]
+          tmp
+        })
       }
     }
-    if (i != 1 && isTRUE(include_starting_data)) {
+    include_starting_this_iter <- isTRUE(include_starting_data) && !isTRUE(trigger_explore)
+    if (i != 1 && include_starting_this_iter) {
       if (length(labelling_proposals) == 0) {
         labelling_proposals <- list()
       }
-      pre$inferred_process <- "control"
-      labelling_proposals[[length(labelling_proposals) + 1]] <- rbind(pre, post)
+      labelling_proposals[[length(labelling_proposals) + 1]] <- post_data
     }
 
     if (length(labelling_proposals) == 0) {
       stop("No labelling proposals generated in iteration ", i)
     }
 
+    current_post_ip <- post_data$inferred_process
+    flips_per_proposal <- vapply(labelling_proposals, function(y) {
+      y_post <- y[order(y$t), , drop = FALSE]
+      sum(current_post_ip != y_post$inferred_process)
+    }, numeric(1))
+
     class_results <- c(class_results, lapply(labelling_proposals, function(d) {
-      d_post <- d[d$t > treatment_time, ]
-      class_func(d_post)
+      class_func(d)
     }))
     t_samp <- proc.time()[3] - t_samp
     total_sampling <- total_sampling + t_samp
 
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
-      ref_post <- post
+      ref_post <- post_data
       ctrl_params_vec <- unlist(hawkes_params_control)
       treat_params_vec <- unlist(treated_par[[length(treated_par)]])
+      metric <- rep(NA_real_, length(labelling_proposals))
+      unchanged_idx <- which(flips_per_proposal == 0)
+      changed_idx <- which(flips_per_proposal != 0)
 
       if (is_biv_etas) {
         biv_par <- if (!is.null(biv_etas_params)) {
@@ -889,24 +969,33 @@ em_style_labelling <- function(pp_data,
         } else {
           init_bivariate_from_independent(ctrl_params_vec, treat_params_vec)
         }
-        metric <- vapply(seq_along(labelling_proposals), function(j) {
-          y <- labelling_proposals[[j]]
-          realiz <- y[is_post, ]
+        eval_biv <- function(realiz) {
+          # Include pre-treatment control history so post-treatment scoring
+          # reflects carryover/triggering from pre events.
+          realiz_full <- rbind(pre_data, realiz)
+          realiz_full <- realiz_full[order(realiz_full$t), , drop = FALSE]
           loglik_etas_bivariate(
-            params = biv_par, realiz = realiz,
-            windowT = time_window, windowS = statespace,
+            params = biv_par, realiz = realiz_full,
+            windowT = history_window, windowS = statespace,
             control_state_space = control_state_space,
             treated_state_space = treated_state_space,
             t_trunc = t_trunc
           )
-        }, numeric(1))
+        }
+        if (length(unchanged_idx) > 0) {
+          if (!is.finite(current_metric_cache)) current_metric_cache <- eval_biv(ref_post)
+          metric[unchanged_idx] <- current_metric_cache
+        }
+        if (length(changed_idx) > 0) {
+          metric[changed_idx] <- vapply(changed_idx, function(j) {
+            y <- labelling_proposals[[j]]
+            eval_biv(y)
+          }, numeric(1))
+        }
       } else {
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
-
-      metric <- vapply(seq_along(labelling_proposals), function(j) {
-        y <- labelling_proposals[[j]]
-        realiz <- y[is_post, ]
+      eval_nonbiv <- function(realiz) {
 
         ctrl_rows <- realiz$inferred_process == "control"
         if (!any(ctrl_rows)) return(-Inf)
@@ -942,12 +1031,22 @@ em_style_labelling <- function(pp_data,
                       signif(max(realiz[treat_rows, "W"], na.rm=TRUE), 4)))
         }
         control_lik + treat_lik
-      }, numeric(1))
+      }
+      if (length(unchanged_idx) > 0) {
+        if (!is.finite(current_metric_cache)) current_metric_cache <- eval_nonbiv(ref_post)
+        metric[unchanged_idx] <- current_metric_cache
+      }
+      if (length(changed_idx) > 0) {
+        metric[changed_idx] <- vapply(changed_idx, function(j) {
+          y <- labelling_proposals[[j]]
+          eval_nonbiv(y)
+        }, numeric(1))
+      }
       } # end non-bivariate metric
     }
     if (metric_name == "post_likelihood_control") {
       metric <- vapply(labelling_proposals, function(y) {
-        post_ctrl <- y[is_post & y$inferred_process == "control", ]
+        post_ctrl <- y[y$inferred_process == "control", ]
         loglik_hawk_fast(
           params = unlist(hawkes_params_control), realiz = post_ctrl,
           windowT = time_window, windowS = statespace,
@@ -973,6 +1072,7 @@ em_style_labelling <- function(pp_data,
     } else {
       max_metric_labelling <- labelling_proposals[[which.max(metric)]]
     }
+    best_metric_idx <- which.max(metric)
     t_lik <- proc.time()[3] - t_lik
     total_likelihood <- total_likelihood + t_lik
 
@@ -981,7 +1081,7 @@ em_style_labelling <- function(pp_data,
         t_param_start <- proc.time()[3]
         if (verbose) print("Updating Parameters")
 
-        mml_post <- max_metric_labelling[is_post, ]
+        mml_post <- max_metric_labelling
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
@@ -995,10 +1095,13 @@ em_style_labelling <- function(pp_data,
               treated_par[[length(treated_par)]])
           }
           if (is.null(names(biv_par))) names(biv_par) <- .etas_bivariate_par_names
+          # Parameter updates should also account for pre-treatment control history.
+          mml_full <- rbind(pre_data, mml_post)
+          mml_full <- mml_full[order(mml_full$t), , drop = FALSE]
           biv_obj <- function(par15) {
             loglik_etas_bivariate(
-              params = par15, realiz = mml_post,
-              windowT = time_window, windowS = statespace,
+              params = par15, realiz = mml_full,
+              windowT = history_window, windowS = statespace,
               control_state_space = control_state_space,
               treated_state_space = treated_state_space,
               t_trunc = t_trunc
@@ -1107,37 +1210,46 @@ em_style_labelling <- function(pp_data,
           print("control:"); print(unlist(control_par[[length(control_par)]]))
           print(paste0("Updating hawkes params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
         }
+        current_metric_cache <- NA_real_
       }
     }
 
-    sd_ip <- starting_data$inferred_process[order(starting_data$t)]
-    flips_per_proposal <- vapply(labelling_proposals, function(y) {
-      sum(sd_ip != y$inferred_process[order(y$t)])
-    }, numeric(1))
-    mml_ip <- max_metric_labelling$inferred_process[order(max_metric_labelling$t)]
-    max_diff <- sum(sd_ip != mml_ip)
+    max_diff <- flips_per_proposal[best_metric_idx]
     average <- mean(flips_per_proposal)
 
+    retained_starting <- isTRUE(max_diff == 0)
+    if (retained_starting) {
+      no_flip_streak <- no_flip_streak + 1L
+    } else {
+      no_flip_streak <- 0L
+    }
+    retained_starting_trace[i] <- retained_starting
+    if (retained_starting) {
+      current_change_factor <- max(change_factor_min, current_change_factor / 2)
+    } else {
+      current_change_factor <- min(change_factor_max, current_change_factor * 2)
+    }
+    change_factor_trace[i] <- current_change_factor
+
     if (update_starting_data) {
-      starting_data <- as.data.frame(max_metric_labelling)
-      is_pre <- starting_data$t < treatment_time
-      is_post <- !is_pre
+      post_data <- as.data.frame(max_metric_labelling)
+      post_data <- post_data[order(post_data$t), , drop = FALSE]
     }
 
-    mml_post_acc <- max_metric_labelling[is_post, ]
+    mml_post_acc <- max_metric_labelling
     accuracy <- mean(mml_post_acc$inferred_process == mml_post_acc$process)
     accuracies[i] <- accuracy
-    metric_vec[i] <- metric[which.max(metric)]
+    metric_vec[i] <- metric[best_metric_idx]
+    current_metric_cache <- metric_vec[i]
     average_flips[i] <- average
     max_metric_flips[i] <- max_diff
 
     all_accuracies[[i]] <- vapply(labelling_proposals, function(y) {
-      y_post <- y[is_post, ]
-      mean(y_post$inferred_process == y_post$process)
+      mean(y$inferred_process == y$process)
     }, numeric(1))
     all_metrics[[i]] <- metric
     if (verbose) {
-      n_post <- sum(is_post)
+      n_post <- nrow(post_data)
       cat(sprintf("  [Iter %d] Proposals: %d | Proposed flips: min=%d avg=%.1f max=%d (of %d post pts) | Accepted (best): %d\n",
                   i, length(labelling_proposals),
                   min(flips_per_proposal), average, max(flips_per_proposal),
@@ -1149,14 +1261,25 @@ em_style_labelling <- function(pp_data,
       print(paste0("Iteration ", i, " took ", signif(proc.time()[3] - t_iter, 2)))
       print(paste0("sampling took: ", signif(t_samp, 2)))
       print(paste0("Likelihood eval took: ", signif(t_lik, 2)))
+      print(paste0("change_factor(next) = ", signif(current_change_factor, 4),
+                   " [retained_starting=", retained_starting, "]"))
+      if (trigger_explore) {
+        print(paste0("stagnation trigger active (streak=", no_flip_streak,
+                     "): excluded starting-data proposal this iter, proposal change_factor=",
+                     signif(proposal_change_factor, 4)))
+      }
     }
   }
+  final_labelling <- rbind(pre_data, max_metric_labelling)
+  final_labelling <- final_labelling[order(final_labelling$t), , drop = FALSE]
   return(list(
-    labelling = max_metric_labelling,
+    labelling = final_labelling,
     treated_par = treated_par, control_par = control_par,
     accuracies = accuracies, average_flips = average_flips,
     max_metric_flips = max_metric_flips, metrics = metric_vec,
     all_accuracies = all_accuracies, all_metrics = all_metrics,
+    change_factor_trace = change_factor_trace,
+    retained_starting_trace = retained_starting_trace,
     class_results = class_results, fits = fits,
     timing = list(
       n_iter = iter,

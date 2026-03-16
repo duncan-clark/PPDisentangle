@@ -1,6 +1,6 @@
 ---
 title: "Oklahoma Induced Seismicity: Causal ETAS Analysis"
-subtitle: "Four-Way Comparison Using County-Level Tessellation"
+subtitle: "Bivariate ETAS with Partition Sensitivity"
 author: "PPDisentangle"
 date: today
 format:
@@ -15,6 +15,21 @@ format:
     fig-height: 7
     fig-dpi: 150
     self-contained: true
+  pdf:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    fig-width: 7
+    fig-height: 5
+    fig-dpi: 300
+    keep-tex: true
+    documentclass: article
+    geometry:
+      - margin=1in
+    echo: false
+    include-in-header:
+      text: |
+        \usepackage{longtable}[=v4.13]
 execute:
   warning: false
   message: false
@@ -39,36 +54,80 @@ knitr::opts_chunk$set(fig.align = "center", out.width = "100%")
 SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
-OUT_DIR  <- file.path(SCRIPT_DIR, "output")
-if (!file.exists(file.path(OUT_DIR, "oklahoma_results.rds")))
-  OUT_DIR <- file.path(dirname(dirname(SCRIPT_DIR)), "output")
+candidate_out_dirs <- unique(c(
+  file.path(SCRIPT_DIR, "output"),
+  file.path(dirname(dirname(SCRIPT_DIR)), "output")
+))
+candidate_result_files <- file.path(candidate_out_dirs, "oklahoma_results.rds")
+existing_result_files <- candidate_result_files[file.exists(candidate_result_files)]
+if (length(existing_result_files) == 0) {
+  stop("No oklahoma_results.rds found in expected output directories.")
+}
+result_file <- existing_result_files[which.max(file.info(existing_result_files)$mtime)]
+OUT_DIR <- dirname(result_file)
+candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
-results <- readRDS(file.path(OUT_DIR, "oklahoma_results.rds"))
+results <- readRDS(result_file)
 cfg <- results$config
 cty <- results$counties
+
+resolve_plot_file <- function(filename) {
+  candidates <- file.path(candidate_plot_dirs, filename)
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) return(NA_character_)
+  existing[which.max(file.info(existing)$mtime)]
+}
+
+render_timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+
+has_fit <- function(fit_name) {
+  !is.null(results[[fit_name]])
+}
+decode_enabled <- isTRUE(cfg$RUN_DECODE) || has_fit("fitG") || has_fit("fitH")
 ```
 
 # Introduction
 
+**Report rendered at:** `r render_timestamp`
+
 On 18 March 2015 the Oklahoma Corporation Commission (OCC) issued
 directive **AOI_20150318**, requiring operators within a defined Area of
 Interest (AOI) in central Oklahoma to reduce wastewater disposal volumes.
-This report quantifies the causal effect of the directive on earthquake
-rates and clustering using the **PPDisentangle** framework.
+This report estimates the **all-or-nothing causal effect** of the
+directive on earthquake rates using the **PPDisentangle** framework.
 
-The analysis uses **Oklahoma county boundaries** as the spatial
-tessellation (`r cty$n_counties` counties, `r cty$n_treated` treated)
-and fits four progressively richer models:
+## Estimand
 
-| Label | Model | Labels | Cross-excitation |
+The target quantity is the **all-or-nothing total treatment effect**:
+the expected difference in total earthquake counts between
+a world in which *every* county receives the directive
+($\mathbf{Z}=(1,\dots,1)$) and a world in which *no* county receives it
+($\mathbf{Z}=(0,\dots,0)$):
+
+$$
+\Delta_{\text{AoN}}
+= \bigl\{
+   \mathbb{E}\!\bigl[N(\mathbf{1})\bigr]
+  -\mathbb{E}\!\bigl[N(\mathbf{0})\bigr]
+\bigr\},
+$$
+
+where $N(\mathbf{z})$ denotes the total event count under treatment
+assignment $\mathbf{z}$.
+
+## Models
+
+The analysis fits four bivariate ETAS models on the **county partition**:
+
+| Label | Model | Background | Labels |
 |:---:|:---|:---|:---|
-| **A** | Naive independent ETAS | Location-based | None |
-| **B** | Naive bivariate ETAS | Location-based | Estimated |
-| **C** | SEM independent ETAS | SEM-corrected | None |
-| **D** | SEM bivariate ETAS | SEM-corrected | Estimated |
+| **B** | Naive bivariate ETAS | Homogeneous | Location-based |
+| **D** | SEM bivariate ETAS | Homogeneous | SEM-corrected |
+| **E** | Naive bivariate ETAS | KDE (non-parametric) | Location-based |
+| **F** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
-Each model produces an **Average Treatment Effect (ATE)** — the expected
-per-county change in earthquake counts from applying the directive.
+Additionally, fits B and D are repeated under alternative **partitioning
+schemes** to assess sensitivity to spatial resolution.
 
 # Study Design
 
@@ -80,8 +139,9 @@ meta <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
 **Treatment.** OCC directive AOI_20150318: mandatory reduction in
 wastewater disposal volumes within the AOI.
 
-**Tessellation.** The 77 Oklahoma counties (US Census Bureau via
-`tigris`). Counties whose centroid falls inside the AOI are treated.
+**Tessellation.** The `r cty$n_counties` Oklahoma counties (US Census
+Bureau via `tigris`). Counties whose centroid falls inside the AOI are
+treated.
 
 **Treated counties** (`r cty$n_treated`):
 `r paste(cty$treated_names, collapse = ", ")`.
@@ -90,14 +150,15 @@ wastewater disposal volumes within the AOI.
 
 - Pre-treatment: `r meta$design$pre_start_utc` to `r meta$design$t_star_utc`
 - Post-treatment: `r meta$design$t_star_utc` to `r meta$design$post_end_utc`
-  (ends before next directive AOI_20150624)
 
 **Magnitude threshold.** $m_0 =$ `r cfg$ETAS_M0`.
 
-**Event counts.** `r cfg$n_pre` pre-treatment,
-`r cfg$n_post` post-treatment
-(`r cfg$n_pre + cfg$n_post` total within Oklahoma).
-
+**Event counts.**
+- Pre-treatment total: `r if (!is.null(cfg$n_pre_total)) cfg$n_pre_total else cfg$n_pre`
+- Pre-treatment holdout (first 50%): `r if (!is.null(cfg$n_pre_holdout)) cfg$n_pre_holdout else NA`
+- Pre-treatment used for estimation/carryover (second 50%): `r cfg$n_pre`
+- Post-treatment: `r cfg$n_post`
+- Total used in SEM estimation (used pre + post): `r cfg$n_pre + cfg$n_post`
 
 # Data
 
@@ -171,30 +232,48 @@ ggplot() +
   theme_minimal(base_size = 13) +
   theme(plot.title = element_text(hjust = 0.5, face = "bold"),
         plot.subtitle = element_text(hjust = 0.5, size = 9))
+
+counties_km <- counties_sf
+st_geometry(counties_km) <- st_geometry(counties_sf) / 1000
+st_crs(counties_km) <- NA
 ```
 
 ## Point Patterns
 
 ```{r fig-pp}
 #| label: fig-pp
-#| fig-cap: "Pre-treatment (left) and post-treatment events coloured by location label (right)."
+#| fig-cap: "Pre-treatment (left) and post-treatment (right) events overlaid on the county partition."
 #| fig-height: 5
-p1 <- ggplot(pp_pre, aes(x = x, y = y, alpha = t)) +
-  geom_point(color = "#377eb8", fill = "#377eb8", size = 1.2, shape = 21) +
-  scale_alpha_continuous(range = c(0.15, 0.8), guide = "none") +
-  labs(title = "Pre-treatment", x = "X (km)", y = "Y (km)") +
+xlims <- range(c(pp_pre$x, pp_post$x))
+ylims <- range(c(pp_pre$y, pp_post$y))
+
+base_map <- ggplot() +
+  geom_sf(data = counties_km, aes(fill = treatment),
+          colour = "grey60", linewidth = 0.25) +
+  scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                    guide = "none") +
+  coord_sf(xlim = xlims, ylim = ylims, datum = NA, expand = FALSE) +
   theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "none")
+
+p1 <- base_map +
+  geom_point(data = pp_pre, aes(x = x, y = y, alpha = t),
+             colour = "#2166ac", size = 0.8) +
+  scale_alpha_continuous(range = c(0.15, 0.8), guide = "none") +
+  labs(title = "Pre-treatment", x = "X (km)", y = "Y (km)")
 
 pp_post_plot <- pp_post
-pp_post_plot$Process <- factor(pp_post_plot$location_process, levels = c("control","treated"))
-p2 <- ggplot(pp_post_plot, aes(x = x, y = y, fill = Process, alpha = t)) +
-  geom_point(size = 1.2, shape = 21, stroke = 0.2) +
-  scale_fill_manual(values = c(control = "#377eb8", treated = "#e41a1c")) +
+pp_post_plot$Process <- factor(pp_post_plot$location_process,
+                               levels = c("control", "treated"))
+p2 <- base_map +
+  geom_point(data = pp_post_plot,
+             aes(x = x, y = y, colour = Process, alpha = t),
+             size = 0.8) +
+  scale_colour_manual(values = c(control = "#2166ac", treated = "#b2182b"),
+                      guide = "none") +
   scale_alpha_continuous(range = c(0.3, 1), guide = "none") +
-  labs(title = "Post-treatment", x = "X (km)", y = "Y (km)") +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  labs(title = "Post-treatment", x = "X (km)", y = "Y (km)")
 
 gridExtra::grid.arrange(p1, p2, ncol = 2)
 ```
@@ -207,23 +286,61 @@ $$
 \lambda(t,x,y) = \frac{\mu}{|S|} + \sum_{j:\,t_j<t} A\,e^{\alpha_m(m_j-m_0)}\,g(t-t_j)\,f(x-x_j,y-y_j\mid m_j)
 $$
 
-with Omori–Utsu temporal kernel $g$ and power-law spatial kernel $f$.
+with Omori--Utsu temporal kernel $g$ and power-law spatial kernel $f$.
 
 ## Bivariate Extension
 
 $$
-\lambda_k(t,x,y) = \frac{\mu_k}{|S_k|} + \sum_{l\in\{0,1\}}\sum_{\substack{j:\,t_j<t\\Z_j=l}} A_{kl}\,e^{\alpha_{m,kl}(m_j-m_0)}\,g(t-t_j)\,f(x-x_j,y-y_j\mid m_j)
+\lambda_k(t,x,y) = \frac{\mu_k}{|S_k|}\,W_k(x,y) + \sum_{l\in\{0,1\}}\sum_{\substack{j:\,t_j<t\\Z_j=l}} A_{kl}\,e^{\alpha_{m,kl}(m_j-m_0)}\,g(t-t_j)\,f(x-x_j,y-y_j\mid m_j)
 $$
 
-Off-diagonal terms $A_{01}$ (treated→control) and $A_{10}$
-(control→treated) capture cross-excitation.
+Off-diagonal terms $A_{01}$ (treated$\to$control) and $A_{10}$
+(control$\to$treated) capture cross-excitation. For the KDE background
+models (E, F), $W_k(x,y)$ is the normalized kernel density estimate from
+control pre-treatment data; for the homogeneous models (B, D),
+$W_k \equiv 1$.
+
+## Non-Parametric Background Rate
+
+```{r tbl-kde}
+#| label: tbl-kde
+kde <- results$kde_info
+kde_holdout <- if (!is.null(kde$n_pre_holdout)) kde$n_pre_holdout else NA
+kde_used <- if (!is.null(kde$n_pre_used)) kde$n_pre_used else NA
+kde_df <- data.frame(
+  Setting = c("KDE training events (held-out control pre)",
+              "Held-out pre-treatment events (all processes)",
+              "Pre-treatment events used for estimation",
+              "Bandwidth (km)", "Estimated triggering range (km)", "Method"),
+  Value = c(kde$n_training, kde_holdout, kde_used,
+            round(kde$bw_sigma, 2), round(kde$trigger_range_km, 2),
+            "Diggle cross-validation"))
+kable(kde_df, align = "lc",
+      caption = "KDE background rate estimation details.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+Only the **second 50%** of pre-treatment events are used for
+estimation/carryover in both homogeneous and inhomogeneous SEM fits.
+The **first 50%** is held out for fairness; in the inhomogeneous case,
+its control events are used to estimate the KDE background via
+`bw.diggle`.
+
+```{r fig-kde-bg}
+#| label: fig-kde-bg
+#| fig-cap: "Estimated inhomogeneous background rate from held-out control pre-treatment events."
+bg_plot_file <- resolve_plot_file("background_rate_kde.png")
+if (file.exists(bg_plot_file)) {
+  knitr::include_graphics(bg_plot_file)
+}
+```
 
 ## Fixed Parameters
 
 ```{r tbl-fixed}
 #| label: tbl-fixed
 fixed_df <- data.frame(
-  Parameter = c("c", "p", "D", "γ", "q"),
+  Parameter = c("c", "p", "D", "\u03b3", "q"),
   Value = c(0.05, 1.2, 5.0, 0.5, 1.5),
   Role = c("Omori onset delay", "Omori decay exponent",
            "Spatial scale", "Mag-spatial scaling", "Spatial decay exponent"))
@@ -236,20 +353,70 @@ kable(fixed_df, align = "lcl",
 
 - **Outer iterations:** `r cfg$SEM_N_ITER`
 - **Inner iterations:** `r cfg$SEM_INNER_ITER`
-- **Labelling proposals:** `r cfg$SEM_N_LABELLINGS`
+- **SEM inner proposals (`SEM_INNER_PROPS`):** `r if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS`
+- **SEM labellings (`SEM_N_LABELLINGS`):** `r cfg$SEM_N_LABELLINGS`
 - **Change factor:** `r cfg$SEM_CHANGE_FACTOR`
 
-# Results
+# Results — County Partition
 
 ```{r extract}
 #| label: extract
-A_ctrl  <- unlist(results$fitA$ctrl);  A_treat <- unlist(results$fitA$treat)
-B_par   <- results$fitB$params
-C_ctrl  <- unlist(results$fitC$ctrl);  C_treat <- unlist(results$fitC$treat)
-D_par   <- results$fitD$params
+B_par <- results$fitB$params
+D_par <- results$fitD$params
+E_par <- results$fitE$params
+F_par <- results$fitF$params
+G_par <- if (!is.null(results$fitG)) results$fitG$params else NULL
+H_par <- if (!is.null(results$fitH)) results$fitH$params else NULL
 
 bc <- function(par, p) if (p=="mu") par[["mu_0"]] else par[[paste0(p,"_00")]]
 bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
+safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
+safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
+
+model_defs <- list(
+  list(id = "B", fit = "fitB", label = "B: Naive", long = "B: Naive Biv", par = B_par),
+  list(id = "D", fit = "fitD", label = "D: SEM", long = "D: SEM Biv", par = D_par),
+  list(id = "E", fit = "fitE", label = "E: Naive+KDE", long = "E: Naive+KDE", par = E_par),
+  list(id = "F", fit = "fitF", label = "F: SEM+KDE", long = "F: SEM+KDE", par = F_par),
+  list(id = "G", fit = "fitG", label = "G: Decode", long = "G: Decode Biv", par = G_par),
+  list(id = "H", fit = "fitH", label = "H: Decode+KDE", long = "H: Decode+KDE", par = H_par)
+)
+param_models <- Filter(function(m) !is.null(m$par), model_defs)
+
+fit_fill_colors <- c(
+  "B: Naive Bivariate" = "#fc8d62",
+  "D: SEM Bivariate" = "#8da0cb",
+  "E: Naive Biv+KDE" = "#e78ac3",
+  "F: SEM Biv+KDE" = "#a6d854",
+  "G: Decode Bivariate" = "#66c2a5",
+  "H: Decode Biv+KDE" = "#ffd92f"
+)
+fit_line_colors <- c(
+  "B: Naive Bivariate" = "#d95f02",
+  "D: SEM Bivariate" = "#7570b3",
+  "E: Naive Biv+KDE" = "#c51b7d",
+  "F: SEM Biv+KDE" = "#4d9221",
+  "G: Decode Bivariate" = "#1b9e77",
+  "H: Decode Biv+KDE" = "#b8860b"
+)
+
+get_sem_metric_trace <- function(fit_obj) {
+  if (is.null(fit_obj) || is.null(fit_obj$sem) || is.null(fit_obj$sem$adaptive)) return(NULL)
+  ad <- fit_obj$sem$adaptive
+  if (!is.null(ad$metrics) && length(ad$metrics) > 0) {
+    return(as.numeric(ad$metrics))
+  }
+  # Backward compatibility: reconstruct selected metric per iter as max over proposal metrics.
+  if (!is.null(ad$all_metrics) && length(ad$all_metrics) > 0) {
+    vals <- vapply(ad$all_metrics, function(v) {
+      if (is.null(v) || length(v) == 0) return(NA_real_)
+      max(as.numeric(v), na.rm = TRUE)
+    }, numeric(1))
+    vals[is.infinite(vals)] <- NA_real_
+    return(vals)
+  }
+  NULL
+}
 ```
 
 ## Marginal Parameters
@@ -258,19 +425,22 @@ bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
 #| label: tbl-params
 pr <- c("mu","A","alpha_m")
 pl <- c("$\\mu$","$A$","$\\alpha_m$")
-tbl <- data.frame(
-  Parameter = pl,
-  A_c = sapply(pr, \(p) A_ctrl[[p]]),  A_t = sapply(pr, \(p) A_treat[[p]]),
-  B_c = sapply(pr, \(p) bc(B_par,p)),  B_t = sapply(pr, \(p) bt(B_par,p)),
-  C_c = sapply(pr, \(p) C_ctrl[[p]]),  C_t = sapply(pr, \(p) C_treat[[p]]),
-  D_c = sapply(pr, \(p) bc(D_par,p)),  D_t = sapply(pr, \(p) bt(D_par,p)))
+tbl <- data.frame(Parameter = pl)
+for (m in param_models) {
+  tbl[[paste0(m$id, "_c")]] <- sapply(pr, function(p) bc(m$par, p))
+  tbl[[paste0(m$id, "_t")]] <- sapply(pr, function(p) bt(m$par, p))
+}
 rownames(tbl) <- NULL
-kable(tbl, digits = 4, escape = FALSE, align = "lcccccccc",
-      col.names = c("","A:ctrl","A:treat","B:ctrl","B:treat",
-                     "C:ctrl","C:treat","D:ctrl","D:treat"),
-      caption = "Marginal ETAS parameters across four fits.") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE) |>
-  add_header_above(c(" "=1,"Naive Indep"=2,"Naive Biv"=2,"SEM Indep"=2,"SEM Biv"=2))
+align_vec <- paste0("l", paste(rep("cc", length(param_models)), collapse = ""))
+col_names <- c("", unlist(lapply(param_models, function(m) c(paste0(m$id, ":ctrl"), paste0(m$id, ":treat")))))
+header <- c(" " = 1)
+for (m in param_models) header[m$long] <- 2
+kable(tbl, digits = 4, escape = FALSE, align = align_vec,
+      col.names = col_names,
+      caption = "Marginal ETAS parameters across available bivariate fits.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
+                font_size = 8, latex_options = c("scale_down", "hold_position")) |>
+  add_header_above(header)
 ```
 
 ## Cross-excitation
@@ -280,13 +450,15 @@ kable(tbl, digits = 4, escape = FALSE, align = "lcccccccc",
 cn <- c("A_01","alpha_m_01","A_10","alpha_m_10")
 cl <- c("$A_{01}$ (treat$\\to$ctrl)","$\\alpha_{m,01}$",
         "$A_{10}$ (ctrl$\\to$treat)","$\\alpha_{m,10}$")
-cross_tbl <- data.frame(Parameter = cl,
-  B = sapply(cn, \(nm) B_par[[nm]]),
-  D = sapply(cn, \(nm) D_par[[nm]]))
+cross_tbl <- data.frame(Parameter = cl)
+for (m in param_models) {
+  cross_tbl[[m$id]] <- sapply(cn, function(nm) m$par[[nm]])
+}
 rownames(cross_tbl) <- NULL
-kable(cross_tbl, digits = 4, escape = FALSE, align = "lcc",
-      col.names = c("","B: Naive Biv","D: SEM Biv"),
-      caption = "Cross-excitation parameters.") |>
+kable(cross_tbl, digits = 4, escape = FALSE,
+      align = paste0("l", paste(rep("c", length(param_models)), collapse = "")),
+      col.names = c("", vapply(param_models, function(m) m$label, character(1))),
+      caption = "Cross-excitation parameters for available models.") |>
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
@@ -294,20 +466,21 @@ kable(cross_tbl, digits = 4, escape = FALSE, align = "lcc",
 
 ```{r fig-params}
 #| label: fig-params
-#| fig-cap: "Marginal parameter estimates across all four fits."
+#| fig-cap: "Marginal parameter estimates across bivariate fits."
 #| fig-height: 5
-param_long <- rbind(
-  data.frame(Fit="A: Naive Indep",Process="Control",mu=A_ctrl[["mu"]],A=A_ctrl[["A"]],alpha_m=A_ctrl[["alpha_m"]]),
-  data.frame(Fit="A: Naive Indep",Process="Treated",mu=A_treat[["mu"]],A=A_treat[["A"]],alpha_m=A_treat[["alpha_m"]]),
-  data.frame(Fit="B: Naive Biv",Process="Control",mu=bc(B_par,"mu"),A=bc(B_par,"A"),alpha_m=bc(B_par,"alpha_m")),
-  data.frame(Fit="B: Naive Biv",Process="Treated",mu=bt(B_par,"mu"),A=bt(B_par,"A"),alpha_m=bt(B_par,"alpha_m")),
-  data.frame(Fit="C: SEM Indep",Process="Control",mu=C_ctrl[["mu"]],A=C_ctrl[["A"]],alpha_m=C_ctrl[["alpha_m"]]),
-  data.frame(Fit="C: SEM Indep",Process="Treated",mu=C_treat[["mu"]],A=C_treat[["A"]],alpha_m=C_treat[["alpha_m"]]),
-  data.frame(Fit="D: SEM Biv",Process="Control",mu=bc(D_par,"mu"),A=bc(D_par,"A"),alpha_m=bc(D_par,"alpha_m")),
-  data.frame(Fit="D: SEM Biv",Process="Treated",mu=bt(D_par,"mu"),A=bt(D_par,"A"),alpha_m=bt(D_par,"alpha_m")))
+param_rows <- lapply(param_models, function(m) {
+  rbind(
+    data.frame(Fit = m$long, Process = "Control",
+               mu = bc(m$par, "mu"), A = bc(m$par, "A"), alpha_m = bc(m$par, "alpha_m")),
+    data.frame(Fit = m$long, Process = "Treated",
+               mu = bt(m$par, "mu"), A = bt(m$par, "A"), alpha_m = bt(m$par, "alpha_m"))
+  )
+})
+param_long <- do.call(rbind, param_rows)
 pm <- pivot_longer(param_long, cols=c(mu,A,alpha_m), names_to="Parameter", values_to="Value")
+pm <- pm[is.finite(pm$Value), , drop = FALSE]
 pm$Parameter <- factor(pm$Parameter, levels=c("mu","A","alpha_m"), labels=c("mu","A","alpha[m]"))
-pm$Fit <- factor(pm$Fit, levels=c("A: Naive Indep","B: Naive Biv","C: SEM Indep","D: SEM Biv"))
+pm$Fit <- factor(pm$Fit, levels = vapply(param_models, function(m) m$long, character(1)))
 ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
   geom_point(size=3, position=position_dodge(0.4)) +
   facet_wrap(~Parameter, scales="free_y", labeller=label_parsed) +
@@ -321,29 +494,157 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "Label flips per SEM iteration."
+#| fig-cap: "Label flips per relabelling iteration."
 #| fig-height: 4
-plots <- list()
-for (nm in list(list(res=results$fitC$sem,lab="C: SEM Indep"),
-                list(res=results$fitD$sem,lab="D: SEM Biv"))) {
-  if (!is.null(nm$res)) plots[[length(plots)+1]] <- plot_flips(nm$res) + ggtitle(nm$lab)
+build_flip_df <- function(avg_flips, max_flips) {
+  if (is.null(avg_flips) || is.null(max_flips)) return(NULL)
+  n <- min(length(avg_flips), length(max_flips))
+  if (n == 0) return(NULL)
+  data.frame(
+    iteration = seq_len(n),
+    average_flips = as.numeric(avg_flips[seq_len(n)]),
+    max_metric_flips = as.numeric(max_flips[seq_len(n)])
+  )
 }
-if (length(plots)==2) {
-  gridExtra::grid.arrange(plots[[1]],plots[[2]],ncol=2)
-} else if (length(plots)==1) {
+
+plot_flip_df <- function(df, ttl) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  ggplot(df, aes(x = iteration)) +
+    geom_line(aes(y = average_flips, color = "Average flips")) +
+    geom_line(aes(y = max_metric_flips, color = "Max metric flips")) +
+    geom_hline(yintercept = 1, linetype = "dashed") +
+    labs(title = ttl, x = "Iteration", y = "Number of flips") +
+    theme_minimal() +
+    scale_color_manual(name = "Metric", values = c("Average flips" = "blue", "Max metric flips" = "red"))
+}
+
+plots <- list()
+for (nm in list(
+  list(kind = "sem", obj = results$fitD$sem, lab = "D: SEM Biv"),
+  list(kind = "sem", obj = results$fitF$sem, lab = "F: SEM Biv+KDE"),
+  list(kind = "decode", obj = results$fitG$decode, lab = "G: Decode Biv"),
+  list(kind = "decode", obj = results$fitH$decode, lab = "H: Decode Biv+KDE")
+)) {
+  if (nm$kind == "sem" && !is.null(nm$obj) && !is.null(nm$obj$adaptive)) {
+    df <- build_flip_df(nm$obj$adaptive$average_flips, nm$obj$adaptive$max_metric_flips)
+    p <- plot_flip_df(df, nm$lab)
+    if (!is.null(p)) plots[[length(plots)+1]] <- p
+  }
+  if (nm$kind == "decode" && !is.null(nm$obj)) {
+    if (!is.null(nm$obj$trace)) {
+      df <- build_flip_df(nm$obj$trace$average_flips, nm$obj$trace$max_metric_flips)
+    } else {
+      # Backward compatibility for older result files without decode traces.
+      nf <- if (!is.null(nm$obj$n_flips)) as.numeric(nm$obj$n_flips) else 0
+      df <- build_flip_df(c(nf, nf), c(nf, 0))
+    }
+    p <- plot_flip_df(df, nm$lab)
+    if (!is.null(p)) plots[[length(plots)+1]] <- p
+  }
+}
+if (length(plots) >= 2) {
+  ncol_use <- if (length(plots) >= 4) 2 else length(plots)
+  do.call(gridExtra::grid.arrange, c(plots, ncol = ncol_use))
+} else if (length(plots) == 1) {
   print(plots[[1]])
 }
 ```
 
-## SEM Relabelling: Confusion Matrices
+```{r fig-sem-adaptive-loglik}
+#| label: fig-sem-adaptive-loglik
+#| fig-cap: "Adaptive SEM selected-label log-likelihood progression (county SEM fits)."
+#| fig-height: 4
+sem_metric_rows <- list()
+sem_trace_D <- get_sem_metric_trace(results$fitD)
+sem_trace_F <- get_sem_metric_trace(results$fitF)
+if (!is.null(sem_trace_D) && length(sem_trace_D) > 0) {
+  sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
+    Iteration = seq_along(sem_trace_D),
+    LogLik = as.numeric(sem_trace_D),
+    Model = "D: SEM Biv"
+  )
+}
+if (!is.null(sem_trace_F) && length(sem_trace_F) > 0) {
+  sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
+    Iteration = seq_along(sem_trace_F),
+    LogLik = as.numeric(sem_trace_F),
+    Model = "F: SEM Biv+KDE"
+  )
+}
+if (length(sem_metric_rows) > 0) {
+  sem_metric_df <- do.call(rbind, sem_metric_rows)
+  sem_metric_df <- sem_metric_df[is.finite(sem_metric_df$LogLik), , drop = FALSE]
+  ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
+    geom_line(linewidth = 0.9) +
+    scale_colour_manual(values = c("D: SEM Biv" = "#7570b3",
+                                   "F: SEM Biv+KDE" = "#4d9221")) +
+    labs(x = "Adaptive SEM iteration", y = "Selected log-likelihood") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No adaptive SEM log-likelihood trace found in this results file.")
+}
+```
 
-The SEM corrects the naive location-based labels by relabelling events
-whose clustering signature is more consistent with the other process.
-The tables below compare the **location-based label** (which county the
-event physically occurred in) against the **SEM-inferred label** (the
-process the SEM assigned). Off-diagonal entries represent events the SEM
-believes were triggered by parents in the other region — i.e. spatial
-spillover.
+```{r fig-selected-loglik}
+#| label: fig-selected-loglik
+#| fig-cap: "Decode selected log-likelihood progression across relabelling iterations (when Decode models are present)."
+#| fig-height: 5
+metric_rows <- list()
+if (!is.null(results$fitG$decode) && !is.null(results$fitG$decode$trace$objective)) {
+  metric_rows[[length(metric_rows) + 1]] <- data.frame(
+    Iteration = seq_along(results$fitG$decode$trace$objective),
+    Objective = as.numeric(results$fitG$decode$trace$objective),
+    Model = "G: Decode Biv"
+  )
+}
+if (!is.null(results$fitH$decode) && !is.null(results$fitH$decode$trace$objective)) {
+  metric_rows[[length(metric_rows) + 1]] <- data.frame(
+    Iteration = seq_along(results$fitH$decode$trace$objective),
+    Objective = as.numeric(results$fitH$decode$trace$objective),
+    Model = "H: Decode Biv+KDE"
+  )
+}
+if (length(metric_rows) > 0) {
+  metric_df <- do.call(rbind, metric_rows)
+  metric_df <- metric_df[is.finite(metric_df$Objective), , drop = FALSE]
+  ggplot(metric_df, aes(x = Iteration, y = Objective, colour = Model)) +
+    geom_line(linewidth = 0.8, alpha = 0.9) +
+    scale_colour_manual(values = c(
+      "G: Decode Biv" = "#1b9e77",
+      "H: Decode Biv+KDE" = "#b8860b"
+    )) +
+    labs(x = "Iteration", y = "Selected objective (log-likelihood scale)") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
+}
+```
+
+```{r fig-decode-flips}
+#| label: fig-decode-flips
+#| fig-cap: "Decode relabelling totals (county models)."
+decode_counts <- data.frame(
+  Model = c("G: Decode Bivariate", "H: Decode Biv+KDE"),
+  Flips = c(
+    if (!is.null(results$fitG$decode$n_flips)) results$fitG$decode$n_flips else NA_real_,
+    if (!is.null(results$fitH$decode$n_flips)) results$fitH$decode$n_flips else NA_real_
+  )
+)
+decode_counts <- decode_counts[is.finite(decode_counts$Flips), , drop = FALSE]
+if (nrow(decode_counts) > 0) {
+  ggplot(decode_counts, aes(x = Model, y = Flips, fill = Model)) +
+    geom_col(width = 0.6, alpha = 0.9) +
+    scale_fill_manual(values = c("G: Decode Bivariate" = "#66c2a5",
+                                 "H: Decode Biv+KDE" = "#ffd92f")) +
+    labs(x = NULL, y = "Number of relabelled points") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 20, hjust = 1))
+}
+```
+
+## SEM Relabelling: Confusion Matrices
 
 ```{r tbl-confusion}
 #| label: tbl-confusion
@@ -356,63 +657,21 @@ build_cm <- function(sem_obj, label) {
   as.data.frame.matrix(tab)
 }
 
-cm_C <- build_cm(results$fitC$sem, "C")
+build_cm_from_labelling <- function(lab) {
+  if (is.null(lab)) return(NULL)
+  post <- lab[lab$t >= 0, ]
+  if (is.null(post$location_process) || is.null(post$inferred_process)) return(NULL)
+  tab <- table(Location = post$location_process, Inferred = post$inferred_process)
+  as.data.frame.matrix(tab)
+}
+
 cm_D <- build_cm(results$fitD$sem, "D")
-```
-
-### Fit C — SEM Independent ETAS
-
-The independent model can only relabel events from one process to the
-other; it has no cross-excitation terms, so relabelling corrects for
-events that the model thinks are background from the wrong region.
-
-```{r tbl-cm-C}
-#| label: tbl-cm-C
-if (!is.null(cm_C)) {
-  n_post_C <- sum(cm_C)
-  cm_C_pct <- round(cm_C / n_post_C * 100, 1)
-  cm_display <- cm_C
-  for (rn in rownames(cm_C)) for (cn in colnames(cm_C)) {
-    cm_display[rn, cn] <- paste0(cm_C[rn, cn], "  (", cm_C_pct[rn, cn], "%)")
-  }
-  kable(cm_display,
-        caption = paste0("Fit C: Location vs SEM-inferred label (n = ", n_post_C,
-                         " post-treatment events). Counts (% of total)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_C)))
-}
-```
-
-```{r fig-cm-C}
-#| label: fig-cm-C
-#| fig-cap: "Fit C — Post-treatment events coloured by SEM-inferred label."
-#| fig-height: 5
-if (!is.null(results$fitC$sem)) {
-  lab_C <- results$fitC$sem$adaptive$adaptive_labelling
-  post_C <- lab_C[lab_C$t >= 0, ]
-  post_C$Relabelled <- post_C$location_process != post_C$inferred_process
-  post_C$Label <- paste0(post_C$location_process, " \u2192 ", post_C$inferred_process)
-  post_C$Label <- factor(post_C$Label)
-  ggplot(post_C, aes(x = x, y = y, colour = inferred_process, shape = Relabelled)) +
-    geom_point(size = 1.5, alpha = 0.7) +
-    scale_colour_manual(values = c(control = "#377eb8", treated = "#e41a1c"),
-                        name = "SEM label") +
-    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 4),
-                       name = "Relabelled?") +
-    labs(title = "Fit C: SEM Independent — Inferred Labels",
-         x = "X (km)", y = "Y (km)") +
-    theme_minimal(base_size = 12) +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "right")
-}
+cm_F <- build_cm(results$fitF$sem, "F")
+cm_G <- build_cm_from_labelling(if (!is.null(results$fitG$decode)) results$fitG$decode$labelling else NULL)
+cm_H <- build_cm_from_labelling(if (!is.null(results$fitH$decode)) results$fitH$decode$labelling else NULL)
 ```
 
 ### Fit D — SEM Bivariate ETAS
-
-The bivariate model has cross-excitation, so its relabelling accounts
-for the branching structure: an event in a control county that was
-likely triggered by a parent in a treated county is relabelled as
-"treated."
 
 ```{r tbl-cm-D}
 #| label: tbl-cm-D
@@ -425,41 +684,82 @@ if (!is.null(cm_D)) {
   }
   kable(cm_display_D,
         caption = paste0("Fit D: Location vs SEM-inferred label (n = ", n_post_D,
-                         " post-treatment events). Counts (% of total)."),
+                         " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
     add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_D)))
 }
 ```
 
-```{r fig-cm-D}
-#| label: fig-cm-D
-#| fig-cap: "Fit D — Post-treatment events coloured by SEM-inferred label. Crosses mark relabelled events."
-#| fig-height: 5
-if (!is.null(results$fitD$sem)) {
-  lab_D <- results$fitD$sem$adaptive$adaptive_labelling
-  post_D <- lab_D[lab_D$t >= 0, ]
-  post_D$Relabelled <- post_D$location_process != post_D$inferred_process
-  ggplot(post_D, aes(x = x, y = y, colour = inferred_process, shape = Relabelled)) +
-    geom_point(size = 1.5, alpha = 0.7) +
-    scale_colour_manual(values = c(control = "#377eb8", treated = "#e41a1c"),
-                        name = "SEM label") +
-    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 4),
-                       name = "Relabelled?") +
-    labs(title = "Fit D: SEM Bivariate — Inferred Labels",
-         x = "X (km)", y = "Y (km)") +
-    theme_minimal(base_size = 12) +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "right")
+### Fit F — SEM Bivariate + KDE Background
+
+```{r tbl-cm-F}
+#| label: tbl-cm-F
+if (!is.null(cm_F)) {
+  n_post_F <- sum(cm_F)
+  cm_F_pct <- round(cm_F / n_post_F * 100, 1)
+  cm_display_F <- cm_F
+  for (rn in rownames(cm_F)) for (cn in colnames(cm_F)) {
+    cm_display_F[rn, cn] <- paste0(cm_F[rn, cn], "  (", cm_F_pct[rn, cn], "%)")
+  }
+  kable(cm_display_F,
+        caption = paste0("Fit F: Location vs SEM-inferred label (n = ", n_post_F,
+                         " post-treatment events)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_F)))
 }
 ```
 
-### Comparison
+### Fit G — Decode Bivariate ETAS
+
+```{r tbl-cm-G}
+#| label: tbl-cm-G
+if (!is.null(cm_G)) {
+  n_post_G <- sum(cm_G)
+  cm_G_pct <- round(cm_G / n_post_G * 100, 1)
+  cm_display_G <- cm_G
+  for (rn in rownames(cm_G)) for (cn in colnames(cm_G)) {
+    cm_display_G[rn, cn] <- paste0(cm_G[rn, cn], "  (", cm_G_pct[rn, cn], "%)")
+  }
+  kable(cm_display_G,
+        caption = paste0("Fit G: Location vs Decode-inferred label (n = ", n_post_G,
+                         " post-treatment events)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_G)))
+}
+```
+
+### Fit H — Decode Bivariate + KDE Background
+
+```{r tbl-cm-H}
+#| label: tbl-cm-H
+if (!is.null(cm_H)) {
+  n_post_H <- sum(cm_H)
+  cm_H_pct <- round(cm_H / n_post_H * 100, 1)
+  cm_display_H <- cm_H
+  for (rn in rownames(cm_H)) for (cn in colnames(cm_H)) {
+    cm_display_H[rn, cn] <- paste0(cm_H[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
+  }
+  kable(cm_display_H,
+        caption = paste0("Fit H: Location vs Decode-inferred label (n = ", n_post_H,
+                         " post-treatment events)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_H)))
+}
+```
+
+### Relabelling Summary
 
 ```{r tbl-cm-summary}
 #| label: tbl-cm-summary
 sum_rows <- list()
-for (info in list(list(cm = cm_C, lab = "C: SEM Independent"),
-                  list(cm = cm_D, lab = "D: SEM Bivariate"))) {
+for (info in list(list(cm = cm_D, lab = "D: SEM Bivariate"),
+                  list(cm = cm_F, lab = "F: SEM Bivariate+KDE"),
+                  list(cm = cm_G, lab = "G: Decode Bivariate"),
+                  list(cm = cm_H, lab = "H: Decode Biv+KDE"))) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
@@ -483,60 +783,9 @@ if (length(sum_rows) > 0) {
 }
 ```
 
-# Average Treatment Effect
+# All-or-Nothing Treatment Effect
 
-## Branching Ratio and Criticality
-
-The ETAS branching ratio $\eta = A\,\beta_{\text{GR}}/(\beta_{\text{GR}} - \alpha_m)$
-gives the expected number of direct offspring per event, integrated over the
-Gutenberg–Richter magnitude distribution. When $\eta \geq 1$ the process is
-formally supercritical: the infinite-horizon expected count diverges.
-
-This is **not a modelling artefact**. ETAS fits to real seismicity
-routinely produce $\eta \geq 1$ (Helmstetter & Sornette, 2003).
-The finite observation window, spatial boundaries, and magnitude bounds
-prevent actual divergence — the process generates finite realisations and
-the simulation-based ATE is well-defined.
-
-Because the closed-form formula
-$\mathbb{E}[N] = \mu T/(1-\eta)$ is inapplicable when $\eta \geq 1$,
-we report: (i) the **background-rate ATE** ($\Delta\mu\cdot T/n$),
-which isolates the treatment effect on immigrant seismicity, and
-(ii) the **simulation-based ATE**, which fully accounts for cascade
-amplification within the finite observation window.
-
-```{r tbl-branching}
-#| label: tbl-branching
-ate_rows <- list(
-  list(lab = "B: Naive Bivariate",   ate = results$fitB$ate),
-  list(lab = "D: SEM Bivariate",     ate = results$fitD$ate))
-
-br_df <- do.call(rbind, lapply(ate_rows, function(r) {
-  if (is.null(r$ate) || is.null(r$ate$analytic)) {
-    return(data.frame(Model = r$lab, `eta ctrl` = NA, `eta treat` = NA,
-                      `BG Rate ATE` = NA, check.names = FALSE))
-  }
-  a <- r$ate$analytic
-  data.frame(Model = r$lab,
-    `eta ctrl`    = round(a$eta_ctrl, 3),
-    `eta treat`   = round(a$eta_treat, 3),
-    `BG Rate ATE` = round(a$ATE_bg, 4),
-    check.names = FALSE)
-}))
-kable(br_df, align = "lccc",
-      col.names = c("Model", "$\\eta_0$ (ctrl)", "$\\eta_1$ (treat)", "BG Rate ATE"),
-      escape = FALSE,
-      caption = "Branching ratios and background-rate ATE for bivariate models.") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
-```
-
-## Naive Bivariate vs SEM Bivariate: 1-Year ATE
-
-The central comparison is between **Fit B** (naive location-based labels)
-and **Fit D** (SEM-corrected labels), both using the bivariate ETAS model
-with cross-excitation. The ATE is estimated by simulating complete
-realisations directly over a **1-year (365-day) horizon** under the
-fitted parameters.
+## County Partition
 
 ```{r tbl-ate-biv}
 #| label: tbl-ate-biv
@@ -545,221 +794,456 @@ ate_days <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 365
 
 biv_rows <- list(
   list(lab = "B: Naive Bivariate", ate = results$fitB$ate, louis = NULL),
-  list(lab = "D: SEM Bivariate",   ate = results$fitD$ate, louis = results$fitD$louis))
+  list(lab = "D: SEM Bivariate",   ate = results$fitD$ate, louis = results$fitD$louis),
+  list(lab = "E: Naive Biv+KDE",   ate = results$fitE$ate, louis = NULL),
+  list(lab = "F: SEM Biv+KDE",     ate = results$fitF$ate, louis = results$fitF$louis))
+if (!is.null(results$fitG) && !is.null(results$fitG$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "G: Decode Bivariate", ate = results$fitG$ate, louis = NULL)
+}
+if (!is.null(results$fitH) && !is.null(results$fitH$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "H: Decode Biv+KDE", ate = results$fitH$ate, louis = NULL)
+}
+
+get_total_effect_sim <- function(ate_obj, n_tiles = n_cty) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
+  sim_df <- ate_obj$all_nothing_sim
+  if ("total_effect" %in% names(sim_df)) return(sim_df$total_effect)
+  # Backward compatibility with old result files.
+  sim_df$ATE * n_tiles
+}
+
+get_expected_totals <- function(ate_obj, n_tiles = n_cty) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
+  sim_df <- ate_obj$all_nothing_sim
+  if (all(c("c_total", "t_total") %in% names(sim_df))) {
+    return(list(c_total = sim_df$c_total, t_total = sim_df$t_total))
+  }
+  # Backward compatibility with old result files.
+  list(c_total = sim_df$c_mean * n_tiles, t_total = sim_df$t_mean * n_tiles)
+}
+
+format_partition_label <- function(part_id) {
+  if (is.na(part_id) || is.null(part_id)) return(part_id)
+  if (part_id == "county") return("County")
+  if (part_id == "aoi_region") return("AOI region")
+  m <- regexec("^grid_([0-9.]+)R$", part_id)
+  g <- regmatches(part_id, m)[[1]]
+  if (length(g) == 2) {
+    mult <- sub("\\.0$", "", g[2])
+    return(paste0("Grid (", mult, "x triggering range)"))
+  }
+  part_id
+}
 
 ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   if (is.null(r$ate)) return(NULL)
-  sim_ate <- mean(r$ate$all_nothing_sim$ATE, na.rm = TRUE)
-  sim_sd  <- sd(r$ate$all_nothing_sim$ATE, na.rm = TRUE)
-  total   <- sim_ate * n_cty
+  expected <- get_expected_totals(r$ate, n_tiles = n_cty)
+  sim_totals <- get_total_effect_sim(r$ate, n_tiles = n_cty)
+  sim_total <- mean(sim_totals, na.rm = TRUE)
+  c_mean <- mean(expected$c_total, na.rm = TRUE)
+  t_mean <- mean(expected$t_total, na.rm = TRUE)
+  sim_sd_total  <- sd(sim_totals, na.rm = TRUE)
   data.frame(
     Model = r$lab,
-    `ATE/county` = round(sim_ate, 1),
-    `SD` = round(sim_sd, 1),
-    `Total` = round(total, 0),
-    Spillover = round(r$ate$ATE_spillover, 2),
+    `E[N(0)]` = round(c_mean, 0),
+    `E[N(1)]` = round(t_mean, 0),
+    `Total Effect` = round(sim_total, 0),
+    `SD` = round(sim_sd_total, 0),
+    `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
     check.names = FALSE)
 }))
 kable(ate_biv,
-      col.names = c("Model", "ATE / county / yr", "SD", paste0("Total (", n_cty, " counties)"), "Spillover"),
-      caption = paste0("1-year ATE: expected earthquakes per county per year (simulated over ", ate_days, " days)."),
-      align = "lcccc") |>
+      col.names = c("Model", "E[N(0)]", "E[N(1)]",
+                    paste0("Total Effect / ", n_cty, " counties / ", ate_days, "d"),
+                    "SD", paste0("Spillover / ", ate_days, "d")),
+      caption = paste0("All-or-nothing total effect over ", ate_days, " days."),
+      align = "lccccc") |>
   kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 ```
 
 ```{r fig-ate-biv}
 #| label: fig-ate-biv
-#| fig-cap: "1-year all-or-nothing ATE: Naive Bivariate (B) vs SEM Bivariate (D)."
+#| fig-cap: "Simulation distribution of the all-or-nothing total effect over the post-treatment horizon."
 #| fig-height: 4
 biv_sim <- do.call(rbind, lapply(biv_rows, function(r) {
   if (is.null(r$ate)) return(NULL)
-  data.frame(Model = r$lab, ATE = r$ate$all_nothing_sim$ATE)
+  data.frame(Model = r$lab, TotalATE = get_total_effect_sim(r$ate, n_tiles = n_cty))
 }))
 if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
-  biv_means <- aggregate(ATE ~ Model, biv_sim, mean)
-  ggplot(biv_sim, aes(x = ATE, fill = Model)) +
-    geom_histogram(bins = 30, alpha = 0.65, position = "identity") +
+  biv_means <- aggregate(TotalATE ~ Model, biv_sim, mean)
+  model_levels <- unique(as.character(biv_sim$Model))
+  fill_vals <- fit_fill_colors[names(fit_fill_colors) %in% model_levels]
+  line_vals <- fit_line_colors[names(fit_line_colors) %in% model_levels]
+  ggplot(biv_sim, aes(x = TotalATE, fill = Model)) +
+    geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
-    geom_vline(data = biv_means, aes(xintercept = ATE, colour = Model),
+    geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Model),
                linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-    scale_fill_manual(values = c("B: Naive Bivariate" = "#fc8d62",
-                                 "D: SEM Bivariate" = "#8da0cb")) +
-    scale_colour_manual(values = c("B: Naive Bivariate" = "#d95f02",
-                                   "D: SEM Bivariate" = "#7570b3")) +
-    labs(x = "Per-county ATE (earthquakes / year)", y = "Simulation count",
-         title = "1-Year All-or-Nothing ATE: Naive vs SEM Bivariate") +
+    scale_fill_manual(values = fill_vals) +
+    scale_colour_manual(values = line_vals) +
+    labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes /" ~ .(ate_days) ~ "days)"),
+         y = "Simulation count",
+         title = "All-or-Nothing Total Effect: Bivariate Models") +
     theme_minimal(base_size = 13) +
     theme(legend.position = "top",
           plot.title = element_text(hjust = 0.5, face = "bold"))
 }
 ```
 
-```{r tbl-ate-biv-total}
-#| label: tbl-ate-biv-total
-total_df <- do.call(rbind, lapply(biv_rows, function(r) {
-  if (is.null(r$ate)) return(NULL)
-  sim_ate <- mean(r$ate$all_nothing_sim$ATE, na.rm = TRUE)
-  data.frame(
-    Model = r$lab,
-    `Per county per year` = round(sim_ate, 1),
-    `All counties per year` = round(sim_ate * n_cty, 0),
-    `Interpretation` = ifelse(sim_ate > 0,
-      paste0("+", round(abs(sim_ate * n_cty)), " more earthquakes/yr under treatment"),
-      paste0(round(abs(sim_ate * n_cty)), " fewer earthquakes/yr under treatment")),
-    check.names = FALSE)
-}))
-kable(total_df, align = "lccc",
-      caption = "1-year treatment effect on earthquake counts.") |>
-  kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-  column_spec(4, bold = TRUE)
+# Partition Sensitivity
+
+The analysis is repeated under alternative spatial partitions to assess
+sensitivity to spatial resolution:
+
+- **Grid partitions** with cell diameters equal to 1, 2, and 5
+  times the estimated triggering range
+  (`r round(results$kde_info$trigger_range_km, 2)` km).
+- **AOI region** partition: the AOI polygon defines one treated region,
+  everything else is control (2 tiles total).
+
+For each partition, both the naive bivariate + KDE (E-type) and
+SEM bivariate + KDE (F-type) models are fitted.
+
+```{r fig-partition-all}
+#| label: fig-partition-all
+#| fig-cap: "Partition maps for all partition schemes evaluated in the run."
+partition_ids <- names(results$partition_results)
+partition_plot_files <- character(0)
+partition_plot_labels <- character(0)
+for (pid in partition_ids) {
+  pfile <- resolve_plot_file(paste0("partition_map_", pid, ".png"))
+  if (file.exists(pfile)) {
+    partition_plot_files <- c(partition_plot_files, pfile)
+    partition_plot_labels <- c(partition_plot_labels, format_partition_label(pid))
+  }
+}
+if (length(partition_plot_files) > 0) {
+  knitr::kable(
+    data.frame(`Panels (top to bottom)` = partition_plot_labels),
+    align = "l"
+  )
+  knitr::include_graphics(partition_plot_files)
+}
 ```
 
-## All Four Models (Reference)
+```{r tbl-partition-sensitivity}
+#| label: tbl-partition-sensitivity
+pr <- results$partition_results
+ap <- results$ate_partitions
 
-```{r tbl-ate-all}
-#| label: tbl-ate-all
-all_rows <- list(
-  list(lab = "A: Naive Independent", ate = results$fitA$ate),
-  list(lab = "B: Naive Bivariate",   ate = results$fitB$ate),
-  list(lab = "C: SEM Independent",   ate = results$fitC$ate),
-  list(lab = "D: SEM Bivariate",     ate = results$fitD$ate))
-
-ate_all <- do.call(rbind, lapply(all_rows, function(r) {
-  if (is.null(r$ate)) return(data.frame(Model=r$lab, `ATE/county/yr`=NA, `Total/yr`=NA, Spillover=NA, check.names=FALSE))
-  sim_ate <- mean(r$ate$all_nothing_sim$ATE, na.rm=TRUE)
-  data.frame(
-    Model = r$lab,
-    `ATE/county/yr` = round(sim_ate, 1),
-    `Total/yr` = round(sim_ate * n_cty, 0),
-    Spillover = round(r$ate$ATE_spillover, 2),
-    check.names = FALSE)
-}))
-kable(ate_all, col.names = c("Model","ATE / county / yr", paste0("Total / ", n_cty, " counties / yr"), "Spillover"),
-      caption = "1-year ATE across all four models.") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
-```
-
-## Louis-Method Standard Errors (SEM Fits)
-
-For the SEM-based fits, uncertainty in the ATE arises from two
-sources: (1) parameter estimation error, and (2) label uncertainty —
-different labellings assign different events to each process.
-The **Louis (1982) identity** decomposes the observed information as
-
-$$
-I_{\text{obs}} = I_{\text{complete}} - I_{\text{missing}}
-$$
-
-where $I_{\text{missing}}$ is estimated from the weighted variance of the
-per-labelling ATE across the importance-sampled proposals.
-
-```{r tbl-louis}
-#| label: tbl-louis
-louis_rows <- list()
-for (info in list(list(louis = results$fitC$louis, lab = "C: SEM Independent"),
-                  list(louis = results$fitD$louis, lab = "D: SEM Bivariate"))) {
-  l <- info$louis
-  if (is.null(l)) {
-    louis_rows[[length(louis_rows)+1]] <- data.frame(
-      Model = info$lab, ATE = NA, SE = NA, `CI lower` = NA, `CI upper` = NA,
-      ESS = NA, check.names = FALSE)
+part_rows <- list()
+for (pname in names(pr)) {
+  info <- pr[[pname]]
+  ate_info <- if (info$label == "county") {
+    list(ate_E = results$fitE$ate, ate_F = results$fitF$ate)
   } else {
-    louis_rows[[length(louis_rows)+1]] <- data.frame(
-      Model = info$lab,
-      ATE = round(l$ate_mean, 2),
-      SE = round(l$ate_se, 4),
-      `CI lower` = round(l$ci_lower, 2),
-      `CI upper` = round(l$ci_upper, 2),
-      ESS = round(l$ess, 1),
+    ap[[pname]]
+  }
+
+  for (fit_type in list(
+    list(lab = "Naive Biv+KDE", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
+    list(lab = "SEM Biv+KDE",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
+  )) {
+    expected <- if (!is.null(fit_type$ate)) {
+      get_expected_totals(fit_type$ate, n_tiles = info$n_tiles)
+    } else { NULL }
+    sim_total <- if (!is.null(fit_type$ate)) {
+      round(mean(get_total_effect_sim(fit_type$ate, n_tiles = info$n_tiles), na.rm = TRUE), 0)
+    } else { NA }
+    n_relabel <- if (!is.null(fit_type$sem_obj) &&
+                     !is.null(fit_type$sem_obj$adaptive$adaptive_labelling)) {
+      lp <- fit_type$sem_obj$adaptive$adaptive_labelling
+      lp <- lp[lp$t >= 0, , drop = FALSE]
+      sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+    } else { 0 }
+    c_mean <- if (!is.null(expected)) round(mean(expected$c_total, na.rm = TRUE), 0) else NA
+    t_mean <- if (!is.null(expected)) round(mean(expected$t_total, na.rm = TRUE), 0) else NA
+
+    part_rows[[length(part_rows) + 1]] <- data.frame(
+      PartitionID = info$label,
+      Partition = format_partition_label(info$label),
+      Model = fit_type$lab,
+      Tiles = info$n_tiles,
+      Treated = info$n_treated,
+      `Relabelled points` = n_relabel,
+      `E[N(0)]` = c_mean,
+      `E[N(1)]` = t_mean,
+      mu_0 = round(fit_type$par[["mu_0"]], 4),
+      mu_1 = round(fit_type$par[["mu_1"]], 4),
+      A_0 = round(fit_type$par[["A_00"]], 4),
+      A_1 = round(fit_type$par[["A_11"]], 4),
+      alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
+      alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
+      `Total Effect` = sim_total,
       check.names = FALSE)
   }
 }
-kable(do.call(rbind, louis_rows),
-      col.names = c("Model","ATE","SE","95% CI lower","95% CI upper","ESS"),
-      caption = "Louis-method standard errors for SEM ATE estimates.",
-      align = "lccccc") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+
+if (length(part_rows) > 0) {
+  part_df <- do.call(rbind, part_rows)
+  # Keep county first, then all remaining partitions alphabetically by ID.
+  part_df$PartitionID <- factor(part_df$PartitionID,
+                                levels = c("county",
+                                           sort(setdiff(unique(as.character(part_df$PartitionID)),
+                                                        "county"))))
+  part_df <- part_df[order(part_df$PartitionID, part_df$Model), ]
+  part_df$Partition <- factor(as.character(part_df$Partition),
+                              levels = unique(as.character(part_df$Partition)))
+  part_df_print <- subset(part_df, select = -PartitionID)
+  kable(part_df_print, align = "llccccccccccccc",
+        caption = paste0("Partition comparison over ", ate_days, " days: E[N(0)], E[N(1)], marginal ETAS parameters, and total effect.")) |>
+    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
+                  font_size = 9, latex_options = c("scale_down", "hold_position"))
+}
 ```
 
-The small SEs reflect that label uncertainty affects only a handful of
-events across proposals (the SEM converges tightly). The ESS of ~3
-indicates weight concentration on a few dominant labellings — a common
-feature of importance sampling in high-dimensional label spaces.
+```{r fig-partition-params}
+#| label: fig-partition-params
+#| fig-cap: "Marginal ETAS parameters (mu, A, alpha_m) across partition schemes. County is highlighted to compare against grid-based partitions."
+#| fig-height: 6
+if (exists("part_df") && nrow(part_df) > 0) {
+  plot_df <- part_df
+  plot_df$is_county <- as.character(plot_df$Partition) == "county"
+
+  param_long <- rbind(
+    data.frame(plot_df[, c("Partition", "Model", "is_county")],
+               Process = "control", mu = plot_df$mu_0, A = plot_df$A_0, alpha_m = plot_df$alpha_m_0),
+    data.frame(plot_df[, c("Partition", "Model", "is_county")],
+               Process = "treated", mu = plot_df$mu_1, A = plot_df$A_1, alpha_m = plot_df$alpha_m_1)
+  )
+  param_long <- pivot_longer(param_long, cols = c(mu, A, alpha_m),
+                             names_to = "Parameter", values_to = "Value")
+  param_long$Process <- factor(param_long$Process, levels = c("control", "treated"))
+
+  param_long$Parameter <- factor(
+    param_long$Parameter,
+    levels = c("mu", "A", "alpha_m"),
+    labels = c(expression(mu), expression(A), expression(alpha[m]))
+  )
+
+  ggplot(param_long, aes(x = Partition, y = Value, colour = Model, group = Model)) +
+    geom_line(alpha = 0.45) +
+    geom_point(aes(size = is_county), alpha = 0.9) +
+    scale_size_manual(values = c(`FALSE` = 2.1, `TRUE` = 3.6), guide = "none") +
+    scale_colour_manual(values = c("Naive Biv+KDE" = "#e78ac3", "SEM Biv+KDE" = "#a6d854")) +
+    facet_grid(Parameter ~ Process, scales = "free_y", labeller = label_parsed) +
+    labs(x = "Partition scheme", y = "Estimate", colour = "Model") +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "top",
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      strip.text = element_text(face = "bold")
+    )
+}
+```
+
+```{r fig-partition-ate}
+#| label: fig-partition-ate
+#| fig-cap: "Partition-sensitivity total-effect distributions (same units and x-axis scale as Section 6.1)."
+if (exists("biv_sim") && !is.null(biv_sim) && nrow(biv_sim) > 0) {
+  biv_xlim <- range(biv_sim$TotalATE, na.rm = TRUE)
+} else {
+  biv_xlim <- NULL
+}
+
+part_sim_rows <- list()
+for (pname in names(pr)) {
+  info <- pr[[pname]]
+  ate_info <- if (info$label == "county") {
+    list(ate_E = results$fitE$ate, ate_F = results$fitF$ate)
+  } else {
+    ap[[pname]]
+  }
+  for (fit_type in list(list(lab = "Naive Biv+KDE", ate = ate_info$ate_E),
+                        list(lab = "SEM Biv+KDE",   ate = ate_info$ate_F))) {
+    if (!is.null(fit_type$ate) && !is.null(fit_type$ate$all_nothing_sim)) {
+      part_sim_rows[[length(part_sim_rows) + 1]] <- data.frame(
+        Partition = info$label,
+        Model = fit_type$lab,
+        TotalATE = get_total_effect_sim(fit_type$ate, n_tiles = info$n_tiles)
+      )
+    }
+  }
+}
+
+if (length(part_sim_rows) > 0) {
+  part_sim <- do.call(rbind, part_sim_rows)
+  part_sim$PartitionID <- part_sim$Partition
+  part_sim$Partition <- vapply(part_sim$Partition, format_partition_label, character(1))
+  part_sim$PartitionID <- factor(part_sim$PartitionID,
+                                 levels = c("county",
+                                            sort(setdiff(unique(as.character(part_sim$PartitionID)),
+                                                         "county"))))
+  part_order <- unique(as.character(part_sim[order(part_sim$PartitionID), "Partition"]))
+  part_sim$Partition <- factor(part_sim$Partition, levels = part_order)
+  p_part <- ggplot(part_sim, aes(x = TotalATE, fill = Model)) +
+    geom_histogram(bins = 25, alpha = 0.55, position = "identity") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+    facet_wrap(~Partition, scales = "fixed") +
+    scale_fill_manual(values = c("Naive Biv+KDE" = "#e78ac3", "SEM Biv+KDE" = "#a6d854")) +
+    labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes /" ~ .(ate_days) ~ "days)"),
+         y = "Simulation count") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top",
+          strip.text = element_text(face = "bold"))
+  if (!is.null(biv_xlim) && all(is.finite(biv_xlim))) {
+    p_part <- p_part + coord_cartesian(xlim = biv_xlim)
+  }
+  print(p_part)
+}
+```
+
+## KDE Bandwidth Sensitivity (County Inhomogeneous E/F)
+
+County-level inhomogeneous fits are re-run across KDE bandwidths:
+Diggle, Diggle$\\times$2, Diggle$\\times$5, and Diggle$\\times$10.
+
+```{r tbl-kde-bandwidth-sensitivity}
+#| label: tbl-kde-bandwidth-sensitivity
+bws <- results$kde_bandwidth_sensitivity
+if (!is.null(bws) && length(bws) > 0) {
+  bw_rows <- list()
+  bw_order <- c("diggle", "digglex2", "digglex5", "digglex10")
+  bw_label <- function(x) {
+    switch(as.character(x),
+           diggle = "Diggle",
+           digglex2 = "Diggle x2",
+           digglex5 = "Diggle x5",
+           digglex10 = "Diggle x10",
+           x)
+  }
+  for (nm in names(bws)) {
+    info <- bws[[nm]]
+    if (is.null(info)) next
+    for (fit_type in list(
+      list(model = "Naive Biv+KDE", par = info$E_params, ate = info$ate_E, relab = 0),
+      list(model = "SEM Biv+KDE",   par = info$F_params, ate = info$ate_F,
+           relab = if (!is.null(info$n_relabel)) info$n_relabel else NA)
+    )) {
+      if (is.null(fit_type$par)) next
+      expected <- if (!is.null(fit_type$ate)) get_expected_totals(fit_type$ate, n_tiles = n_cty) else NULL
+      sim_total <- if (!is.null(fit_type$ate)) {
+        round(mean(get_total_effect_sim(fit_type$ate, n_tiles = n_cty), na.rm = TRUE), 0)
+      } else { NA }
+      c_mean <- if (!is.null(expected)) round(mean(expected$c_total, na.rm = TRUE), 0) else NA
+      t_mean <- if (!is.null(expected)) round(mean(expected$t_total, na.rm = TRUE), 0) else NA
+      bw_rows[[length(bw_rows) + 1]] <- data.frame(
+        BandwidthID = nm,
+        Bandwidth = bw_label(nm),
+        Model = fit_type$model,
+        Tiles = n_cty,
+        Treated = cfg$n_treated,
+        `Relabelled points` = fit_type$relab,
+        `E[N(0)]` = c_mean,
+        `E[N(1)]` = t_mean,
+        mu_0 = round(fit_type$par[["mu_0"]], 4),
+        mu_1 = round(fit_type$par[["mu_1"]], 4),
+        A_0 = round(fit_type$par[["A_00"]], 4),
+        A_1 = round(fit_type$par[["A_11"]], 4),
+        alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
+        alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
+        `Total Effect` = sim_total,
+        check.names = FALSE
+      )
+    }
+  }
+  if (length(bw_rows) > 0) {
+    bw_df <- do.call(rbind, bw_rows)
+    bw_df$BandwidthID <- factor(bw_df$BandwidthID, levels = bw_order)
+    bw_df <- bw_df[order(bw_df$BandwidthID, bw_df$Model), ]
+    bw_df$Bandwidth <- factor(as.character(bw_df$Bandwidth),
+                              levels = unique(as.character(bw_df$Bandwidth)))
+    bw_print <- subset(bw_df, select = -BandwidthID)
+    kable(bw_print, align = "llccccccccccccc",
+          caption = paste0("County inhomogeneous KDE bandwidth sensitivity over ", ate_days,
+                           " days: E[N(0)], E[N(1)], marginal ETAS parameters, and total effect.")) |>
+      kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
+                    font_size = 9, latex_options = c("scale_down", "hold_position"))
+  }
+}
+```
 
 # Interpretation
 
 ```{r summaries, include=FALSE}
 n_cty_interp <- cfg$n_counties
+ate_days_interp <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 100
 
-mu_ratio_D <- bt(D_par,"mu") / bc(D_par,"mu")
-mu_ratio_B <- bt(B_par,"mu") / bc(B_par,"mu")
+mu_ratio_E <- bt(E_par,"mu") / bc(E_par,"mu")
+mu_ratio_F <- bt(F_par,"mu") / bc(F_par,"mu")
 
-ate_B_1yr <- if (!is.null(results$fitB$ate)) round(mean(results$fitB$ate$all_nothing_sim$ATE, na.rm=TRUE), 1) else NA
-ate_D_1yr <- if (!is.null(results$fitD$ate)) round(mean(results$fitD$ate$all_nothing_sim$ATE, na.rm=TRUE), 1) else NA
-total_B_1yr <- round(ate_B_1yr * n_cty_interp)
-total_D_1yr <- round(ate_D_1yr * n_cty_interp)
+total_E_1yr <- if (!is.null(results$fitE$ate)) round(mean(get_total_effect_sim(results$fitE$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_F_1yr <- if (!is.null(results$fitF$ate)) round(mean(get_total_effect_sim(results$fitF$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_H_1yr <- if (!is.null(results$fitH) && !is.null(results$fitH$ate)) round(mean(get_total_effect_sim(results$fitH$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
 
-louis_D_se <- if (!is.null(results$fitD$louis)) round(results$fitD$louis$ate_se, 2) else NA
-louis_D_ci <- if (!is.null(results$fitD$louis)) paste0("[", round(results$fitD$louis$ci_lower, 1), ", ", round(results$fitD$louis$ci_upper, 1), "]") else NA
+effect_direction <- function(x, tol = 10) {
+  if (is.na(x)) return("unavailable")
+  if (x > tol) return("worse under treatment")
+  if (x < -tol) return("beneficial under treatment")
+  "close to no detectable difference"
+}
 ```
 
-The core comparison is **Fit B** (naive bivariate) vs **Fit D** (SEM
-bivariate), both of which model cross-excitation between regions. The
-ATE is simulated directly over a **1-year (365-day) horizon**.
+**Inhomogeneous background rate focus.** Fits E and F use a
+spatially inhomogeneous background estimated from the first half of
+control pre-treatment data. This provides an independent estimate of
+the baseline seismicity pattern without using post-treatment data.
 
-**Background rate.** In Fit B (naive labels), the treated-region
-background rate $\mu_1$ is `r round(mu_ratio_B, 1)`$\times$ higher
-than $\mu_0$. After SEM relabelling (Fit D), this ratio becomes
-`r round(mu_ratio_D, 1)`$\times$ — the SEM shifts some events out of
-the treated label, partially redistributing background intensity.
+**Background contrast (inhomogeneous only).** In Fit E (naive labels),
+the treated-region background rate $\mu_1$ is `r round(mu_ratio_E, 1)`$\times$
+higher than $\mu_0$. After SEM relabelling (Fit F), this ratio is
+`r round(mu_ratio_F, 1)`$\times$.
 
-**Cross-excitation.** Both bivariate models find $A_{01} > A_{10}$:
-treated-region earthquakes trigger aftershocks in control counties more
-than vice versa. The SEM changes the estimated cross-excitation
-slightly ($A_{01}$: `r round(B_par[["A_01"]],4)` →
-`r round(D_par[["A_01"]],4)`).
+**All-or-nothing total effect (`r ate_days_interp`-day horizon).**
 
-**1-Year ATE.**
+```{r interp-effects, results='asis'}
+effect_lines <- c(
+  paste0("- **Fit E (naive+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes / ", ate_days_interp, " days"),
+  paste0("- **Fit F (SEM+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes / ", ate_days_interp, " days"),
+  paste0("- **Interpretation:** In the inhomogeneous SEM model (F), treatment looks **",
+         effect_direction(total_F_1yr), "**; in the inhomogeneous naive model (E), treatment looks **",
+         effect_direction(total_E_1yr), "**.")
+)
+if (!is.na(total_H_1yr)) {
+  effect_lines <- c(effect_lines, paste0("- **Fit H (Decode+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_H_1yr, "** total earthquakes / ", ate_days_interp, " days"))
+}
+cat(paste(effect_lines, collapse = "\n"), "\n")
+```
 
-- **Fit B (naive):** `r ate_B_1yr` events per county per year
-  (**`r total_B_1yr` total** across `r n_cty_interp` counties)
-- **Fit D (SEM):** `r ate_D_1yr` events per county per year
-  (**`r total_D_1yr` total** across `r n_cty_interp` counties)
-
-The naive bivariate model (B) estimates that treatment *increases*
-seismicity — an artefact of mislabelling spillover events. The SEM
-bivariate model (D) corrects for this and finds a near-zero or
-slightly negative ATE, consistent with the directive having a modest
-protective effect that is largely offset by cross-regional triggering.
-
-**Branching ratio.** All fitted ETAS models have
-$\eta = A\beta_{\text{GR}}/(\beta_{\text{GR}} - \alpha_m) \geq 1$. This
-is typical for ETAS fits to real seismicity (Helmstetter & Sornette, 2003)
-and does not indicate model failure — the finite observation window and
-spatial boundaries bound the actual event count. It means the closed-form
-$\mu T/(1-\eta)$ formula is inapplicable, and simulation is required.
-
-**ATE uncertainty (Louis method).** The SEM bivariate ATE has a
-Louis-method SE of **`r louis_D_se`** (95% CI: **`r louis_D_ci`**
-events/county/year), reflecting tight convergence of the SEM labelling
-step.
+**Partition sensitivity.** The alternative partition schemes (grids at
+different scales and the AOI-as-single-region partition) show how the
+treatment effect estimate varies with spatial resolution. Coarser
+partitions aggregate more spatial heterogeneity, while finer grids
+may better capture localized effects but have fewer events per cell.
 
 # Configuration
 
 ```{r tbl-config}
 #| label: tbl-config
 ate_win <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else "N/A"
+sem_inner_props <- if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS
+grid_str <- if (!is.null(cfg$grid_diameters)) {
+  paste(round(cfg$grid_diameters, 2), "km", collapse = ", ")
+} else { "N/A" }
 cdf <- data.frame(
-  Setting = c("Magnitude threshold","GR β","Counties (total / treated)",
-              "SEM outer iters","SEM inner iters","SEM proposals",
-              "SEM change factor","Fitting window (days)",
-              "ATE simulation window (days)","ATE simulations","Test mode"),
+  Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
+              "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
+              "SEM change factor","Decode enabled","Decode iterations","Fitting window (days)",
+              "ATE simulation window (days)","Simulation replicates",
+              "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
+              "Test mode"),
   Value = c(cfg$ETAS_M0, cfg$BETA_GR,
             paste0(cfg$n_counties," / ",cfg$n_treated),
-            cfg$SEM_N_ITER, cfg$SEM_INNER_ITER, cfg$SEM_N_LABELLINGS,
+            cfg$SEM_N_ITER, cfg$SEM_INNER_ITER, sem_inner_props, cfg$SEM_N_LABELLINGS,
             cfg$SEM_CHANGE_FACTOR,
-            paste(cfg$windowT_post, collapse=" – "),
-            ate_win, cfg$ATE_N_SIMS, cfg$TEST_MODE))
+            if (!is.null(cfg$RUN_DECODE)) cfg$RUN_DECODE else decode_enabled,
+            if (!is.null(cfg$DECODE_ITER)) cfg$DECODE_ITER else "N/A",
+            paste(cfg$windowT_post, collapse=" \u2013 "),
+            ate_win, cfg$ATE_N_SIMS,
+            if (!is.null(cfg$spatial_scale_D)) cfg$spatial_scale_D else "N/A",
+            if (!is.null(results$kde_info$trigger_range_km)) round(results$kde_info$trigger_range_km, 2) else "N/A",
+            grid_str,
+            cfg$TEST_MODE))
 kable(cdf, align="lc", caption="Analysis configuration.") |>
   kable_styling(bootstrap_options="striped", full_width=FALSE)
 ```
@@ -767,15 +1251,13 @@ kable(cdf, align="lc", caption="Analysis configuration.") |>
 # References
 
 - Ogata, Y. (1988). Statistical models for earthquake occurrences.
-  *JASA*, 83(401), 9–27.
+  *JASA*, 83(401), 9--27.
 - Zhuang, J., Ogata, Y. & Vere-Jones, D. (2002). Stochastic
   declustering of space-time earthquake occurrences. *JASA*, 97(458),
-  369–380.
+  369--380.
 - Helmstetter, A. & Sornette, D. (2003). Importance of direct and
   indirect triggered seismicity in the ETAS model of seismicity.
   *Geophysical Research Letters*, 30(11), 1576.
-- Louis, T. A. (1982). Finding the observed information matrix when
-  using the EM algorithm. *JRSS-B*, 44(2), 226–233.
 - Langenbruch, C. & Zoback, M. D. (2016). How will induced seismicity
   in Oklahoma respond to decreased saltwater injection rates? *Science
   Advances*, 2(11), e1601542.

@@ -96,6 +96,7 @@ adaptive_SEM <- function(pp_data,
     proposal_update_cadence = 1, update_starting_data = TRUE,
     include_starting_data = FALSE, iter = 100, n_props = 10,
     change_factor = 0.1, proposal_method = "simulation",
+    temporal_weight = 0, temporal_scale_days = NULL,
     fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
     outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1
   )
@@ -127,6 +128,8 @@ adaptive_SEM <- function(pp_data,
       change_factor = adaptive_control$change_factor,
       MCMC_style = FALSE,
       proposal_method = adaptive_control$proposal_method,
+      temporal_weight = adaptive_control$temporal_weight,
+      temporal_scale_days = adaptive_control$temporal_scale_days,
       fixed_params = adaptive_control$fixed_params,
       verbose = TRUE,
       model_type = model_type,
@@ -140,7 +143,7 @@ adaptive_SEM <- function(pp_data,
       accuracies = result$accuracies,
       average_flips = result$average_flips,
       max_metric_flips = result$max_metric_flips,
-      metrics = result$metric_vec,
+      metrics = result$metrics,
       all_accuracies = result$all_accuracies,
       all_metrics = result$all_metrics,
       class_results = result$class_results,
@@ -214,7 +217,8 @@ adaptive_SEM <- function(pp_data,
       adaptive_counter <- 1
       adaptive_history[[1]] <- list(
         max_metric_flips = adapt$max_metric_flips,
-        average_flips = adapt$average_flips
+        average_flips = adapt$average_flips,
+        metrics = adapt$metrics
       )
     }
     if (reset && adaptive_counter > 0) {
@@ -454,6 +458,7 @@ adaptive_SEM <- function(pp_data,
     average_flips = adapt$average_flips,
     max_metric_flips = adapt$max_metric_flips,
     metrics = adapt$metrics,
+    all_metrics = adapt$all_metrics,
     class_results = adapt$class_results,
     adaptive_labelling = if (!is.null(baseline_adaptive_labelling)) baseline_adaptive_labelling else adapt$adaptive_labelling
   )
