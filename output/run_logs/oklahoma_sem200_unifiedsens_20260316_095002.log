@@ -41259,3 +41259,852 @@ Exiting from Nelder Mead minimizer
 [1] "Likelihood eval took: 0.82"
 [1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
 [1] "Updating labelling proposals"
+  [Iter 170] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14957  -14950  -14948  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 170 took 0.77"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.65"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 192] Proposals: 21 | Proposed flips: min=0 avg=4.2 max=9 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15034  -15023  -15013  -15015  -15007  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 192 took 0.89"
+[1] "sampling took: 0.067"
+[1] "Likelihood eval took: 0.82"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 171] Proposals: 21 | Proposed flips: min=0 avg=0.8 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14954  -14948  -14947  -14948  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 171 took 0.54"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.41"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 193] Proposals: 21 | Proposed flips: min=0 avg=4.2 max=11 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15031  -15021  -15016  -15016  -15010  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 193 took 0.85"
+[1] "sampling took: 0.063"
+[1] "Likelihood eval took: 0.78"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 172] Proposals: 21 | Proposed flips: min=0 avg=0.8 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14954  -14950  -14949  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 172 took 0.65"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.53"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 194] Proposals: 21 | Proposed flips: min=0 avg=3.3 max=8 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15029  -15019  -15012  -15013  -15005  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 194 took 0.81"
+[1] "sampling took: 0.061"
+[1] "Likelihood eval took: 0.74"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 173] Proposals: 21 | Proposed flips: min=0 avg=1.3 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14959  -14952  -14950  -14950  -14948  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 173 took 0.79"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.66"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 174] Proposals: 21 | Proposed flips: min=0 avg=1.1 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14961  -14951  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 174 took 0.65"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.53"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 195] Proposals: 21 | Proposed flips: min=0 avg=4.1 max=11 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15040  -15019  -15015  -15015  -15008  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 195 took 0.88"
+[1] "sampling took: 0.056"
+[1] "Likelihood eval took: 0.82"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+[1] "Updating Parameters"
+  [Iter 196] Proposals: 21 | Proposed flips: min=0 avg=3.9 max=12 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15044  -15020  -15011  -15013  -15007  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 196 took 0.86"
+[1] "sampling took: 0.062"
+[1] "Likelihood eval took: 0.79"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 197] Proposals: 21 | Proposed flips: min=0 avg=4.3 max=11 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15045  -15021  -15013  -15016  -15007  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 197 took 0.87"
+[1] "sampling took: 0.072"
+[1] "Likelihood eval took: 0.79"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 198] Proposals: 21 | Proposed flips: min=0 avg=4.6 max=8 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15030  -15022  -15017  -15017  -15013  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 198 took 0.85"
+[1] "sampling took: 0.06"
+[1] "Likelihood eval took: 0.79"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 199] Proposals: 21 | Proposed flips: min=0 avg=3.9 max=9 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15039  -15019  -15016  -15016  -15012  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 199 took 0.8"
+[1] "sampling took: 0.06"
+[1] "Likelihood eval took: 0.74"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+[1] "Updating Parameters"
+[1] "Estimated Hawkes Params"
+[1] "treated:"
+          mu            A      alpha_m            c            p            D 
+2.292682e-06 1.080402e+00 5.962703e-01 5.000000e-02 1.200000e+00 5.000000e+00 
+       gamma            q 
+5.000000e-01 1.500000e+00 
+[1] "control:"
+          mu            A      alpha_m            c            p            D 
+1.753657e-07 1.076215e+00 4.239713e-01 5.000000e-02 1.200000e+00 5.000000e+00 
+       gamma            q 
+5.000000e-01 1.500000e+00 
+[1] "Updating hawkes params on iteration 200 took 21"
+  [Iter 200] Proposals: 21 | Proposed flips: min=0 avg=3.9 max=8 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -15035  -15020  -15013  -15015  -15009  -15001 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             36
+2 control          control treated              1
+3 treated          treated control             61
+4 treated          treated treated            720
+[1] "Accuracy: 0.924205378973105"
+[1] "Iteration 200 took 22"
+[1] "sampling took: 0.066"
+[1] "Likelihood eval took: 0.83"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Estimated Hawkes Params"
+[1] "treated:"
+          mu            A      alpha_m            c            p            D 
+0.0005049727 1.0966274947 0.5954017737 0.0500000000 1.2000000000 5.0000000000 
+       gamma            q 
+0.5000000000 1.5000000000 
+[1] "control:"
+        mu          A    alpha_m          c          p          D      gamma 
+0.00154006 1.17083421 0.24454241 0.05000000 1.20000000 5.00000000 0.50000000 
+         q 
+1.50000000 
+[1] "Updating hawkes params on iteration 175 took 33"
+  [Iter 175] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14961  -14952  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 175 took 34"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.6"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 176] Proposals: 21 | Proposed flips: min=0 avg=1.8 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14961  -14953  -14951  -14951  -14949  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 176 took 0.82"
+[1] "sampling took: 0.13"
+[1] "Likelihood eval took: 0.68"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 177] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14958  -14950  -14948  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 177 took 0.69"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.56"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+[1] "Total time taken for SEM: 410"
+  [Partition aoi_region Fit F] done in 407.5s
+    [aoi_region] E params: mu_0=0.102, mu_1=1.691, A_00=0.9228, alpha_m_00=0.3364, A_11=0.8459, alpha_m_11=0.6223, A_01=0.0074, alpha_m_01=-0.5261, A_10=2e-04, alpha_m_10=0.1574, c=0.05, p=1.2, D=5, gamma=0.5, q=1.5
+    [aoi_region] F params: mu_0=0.0011, mu_1=0.2506, A_00=1.0439, alpha_m_00=0.2897, A_11=1.0377, alpha_m_11=0.6285, A_01=0.0262, alpha_m_01=0.5861, A_10=0.1553, alpha_m_10=0.6145, c=0.05, p=1.2, D=5, gamma=0.5, q=1.5
+  [Iter 178] Proposals: 20 | Proposed flips: min=0 avg=2.8 max=9 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14970  -14956  -14953  -14954  -14950  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 178 took 0.85"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.72"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "stagnation trigger active (streak=11): excluded starting-data proposal this iter, proposal change_factor=0.004"
+[1] "Updating labelling proposals"
+  [Iter 179] Proposals: 21 | Proposed flips: min=0 avg=1.1 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14957  -14950  -14949  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 179 took 0.63"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.51"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 180] Proposals: 21 | Proposed flips: min=0 avg=1.3 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14970  -14953  -14949  -14951  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 180 took 0.64"
+[1] "sampling took: 0.13"
+[1] "Likelihood eval took: 0.51"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 181] Proposals: 21 | Proposed flips: min=0 avg=1.5 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14959  -14951  -14950  -14950  -14948  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 181 took 0.75"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.63"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 182] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14960  -14952  -14948  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 182 took 0.62"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.51"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 183] Proposals: 21 | Proposed flips: min=0 avg=1.1 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14962  -14953  -14947  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 183 took 0.54"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.43"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 184] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14958  -14951  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 184 took 0.62"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.5"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 185] Proposals: 21 | Proposed flips: min=0 avg=1.4 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14961  -14951  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 185 took 0.75"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.63"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 186] Proposals: 21 | Proposed flips: min=0 avg=0.7 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14952  -14949  -14947  -14948  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 186 took 0.51"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.39"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 187] Proposals: 21 | Proposed flips: min=0 avg=0.6 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14955  -14952  -14947  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 187 took 0.5"
+[1] "sampling took: 0.1"
+[1] "Likelihood eval took: 0.39"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 188] Proposals: 20 | Proposed flips: min=0 avg=1.8 max=6 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14960  -14954  -14951  -14951  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 188 took 0.62"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.51"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "stagnation trigger active (streak=21): excluded starting-data proposal this iter, proposal change_factor=0.004"
+[1] "Updating labelling proposals"
+  [Iter 189] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14958  -14952  -14948  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 189 took 0.55"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.43"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 190] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14955  -14952  -14949  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 190 took 0.69"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.57"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 191] Proposals: 21 | Proposed flips: min=0 avg=1.1 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14960  -14951  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 191 took 0.69"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.57"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 192] Proposals: 21 | Proposed flips: min=0 avg=0.8 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14954  -14952  -14947  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 192 took 0.58"
+[1] "sampling took: 0.14"
+[1] "Likelihood eval took: 0.43"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 193] Proposals: 21 | Proposed flips: min=0 avg=0.7 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14955  -14951  -14949  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             37
+4 treated          treated treated            729
+[1] "Accuracy: 0.946210268948655"
+[1] "Iteration 193 took 0.65"
+[1] "sampling took: 0.1"
+[1] "Likelihood eval took: 0.54"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 194] Proposals: 21 | Proposed flips: min=0 avg=0.7 max=2 (of 818 post pts) | Accepted (best): 1
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14954  -14950  -14947  -14948  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 194 took 0.61"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.49"
+[1] "change_factor(next) = 0.004 [retained_starting=FALSE]"
+[1] "Updating labelling proposals"
+  [Iter 195] Proposals: 21 | Proposed flips: min=0 avg=2.1 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14964  -14956  -14951  -14952  -14948  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 195 took 0.91"
+[1] "sampling took: 0.13"
+[1] "Likelihood eval took: 0.78"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 196] Proposals: 21 | Proposed flips: min=0 avg=1.0 max=3 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14956  -14953  -14951  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 196 took 0.7"
+[1] "sampling took: 0.14"
+[1] "Likelihood eval took: 0.55"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 197] Proposals: 21 | Proposed flips: min=0 avg=1.3 max=5 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14962  -14954  -14949  -14950  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 197 took 0.67"
+[1] "sampling took: 0.12"
+[1] "Likelihood eval took: 0.55"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 198] Proposals: 21 | Proposed flips: min=0 avg=0.8 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14958  -14949  -14948  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 198 took 0.62"
+[1] "sampling took: 0.1"
+[1] "Likelihood eval took: 0.51"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+  [Iter 199] Proposals: 21 | Proposed flips: min=0 avg=0.9 max=4 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14962  -14951  -14947  -14949  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 199 took 0.55"
+[1] "sampling took: 0.11"
+[1] "Likelihood eval took: 0.43"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Updating labelling proposals"
+[1] "Updating Parameters"
+[1] "Estimated Hawkes Params"
+[1] "treated:"
+          mu            A      alpha_m            c            p            D 
+2.780095e-06 1.022439e+00 7.275144e-01 5.000000e-02 1.200000e+00 5.000000e+00 
+       gamma            q 
+5.000000e-01 1.500000e+00 
+[1] "control:"
+          mu            A      alpha_m            c            p            D 
+0.0001694826 1.1104948409 0.3568487270 0.0500000000 1.2000000000 5.0000000000 
+       gamma            q 
+0.5000000000 1.5000000000 
+[1] "Updating hawkes params on iteration 200 took 32"
+  [Iter 200] Proposals: 21 | Proposed flips: min=0 avg=0.4 max=2 (of 818 post pts) | Accepted (best): 0
+  Metric summary:
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ -14953  -14948  -14947  -14947  -14947  -14947 
+# A tibble: 4 × 4
+# Groups:   location_process, process [2]
+  location_process process inferred_process     n
+  <chr>            <chr>   <chr>            <int>
+1 control          control control             45
+2 control          control treated              7
+3 treated          treated control             38
+4 treated          treated treated            728
+[1] "Accuracy: 0.944987775061125"
+[1] "Iteration 200 took 32"
+[1] "sampling took: 0.096"
+[1] "Likelihood eval took: 0.27"
+[1] "change_factor(next) = 0.002 [retained_starting=TRUE]"
+[1] "Total time taken for SEM: 480"
+  [Partition grid_2.0R Fit F] done in 480.1s
+    [grid_2.0R] E params: mu_0=0.2444, mu_1=1.7094, A_00=1.2453, alpha_m_00=-0.6868, A_11=0.9703, alpha_m_11=0.3468, A_01=0.002, alpha_m_01=0.6009, A_10=0, alpha_m_10=0.1679, c=0.05, p=1.2, D=5, gamma=0.5, q=1.5
+    [grid_2.0R] F params: mu_0=0.0169, mu_1=0.2927, A_00=1.0519, alpha_m_00=0.3684, A_11=1.003, alpha_m_11=0.6188, A_01=0.0026, alpha_m_01=0.5286, A_10=0.1559, alpha_m_10=0.6465, c=0.05, p=1.2, D=5, gamma=0.5, q=1.5
+
+--- Step 5c: SEM plots ---
+  Saved pp_post_sem_biv.png
+  Saved sem_flips_biv.png
+  Saved pp_post_sem_biv_kde.png
+  Saved sem_flips_biv_kde.png
+
+--- Step 6: ATE estimation (100-day simulation horizon) ---
+  ATE window: [0, 100] days
+  Computing ATE for Fit B (naive bivariate)...
+  Computing ATE for Fit D (SEM bivariate)...
+  Computing ATE for Fit E (naive biv+KDE)...
+  Computing ATE for Fit F (SEM biv+KDE)...
+  Computing ATE for Fit G (Decode biv)...
+  Computing ATE for Fit H (Decode biv+KDE)...
+  Computing ATE for BW diggle naive biv+KDE...
+  Computing ATE for BW diggle SEM biv+KDE...
+  Computing ATE for BW digglex2 naive biv+KDE...
+  Computing ATE for BW digglex2 SEM biv+KDE...
+  Computing ATE for BW digglex5 naive biv+KDE...
+  Computing ATE for BW digglex5 SEM biv+KDE...
+  Computing ATE for BW digglex10 naive biv+KDE...
+  Computing ATE for BW digglex10 SEM biv+KDE...
+  Computing ATE for grid_1.0R naive biv+KDE...
+  Computing ATE for grid_1.0R SEM biv+KDE...
+  Computing ATE for grid_2.0R naive biv+KDE...
+  Computing ATE for grid_2.0R SEM biv+KDE...
+  Computing ATE for grid_5.0R naive biv+KDE...
+  Computing ATE for grid_5.0R SEM biv+KDE...
+  Computing ATE for aoi_region naive biv+KDE...
+  Computing ATE for aoi_region SEM biv+KDE...
+
+===========================================================================
+                       PARAMETER COMPARISON TABLE
+===========================================================================
+
+                B.ctrl   B.treat  |    D.ctrl   D.treat  |    E.ctrl   E.treat  |    F.ctrl   F.treat
+---------------------------------------------------------------------------------------------------------- 
+mu              0.0247    1.3027  |    0.0299    0.2044  |    1.8886    0.3697  |    0.0355    0.2216
+A               1.1569    0.7536  |    1.2337    1.0157  |    0.4953    0.9531  |    1.0636    1.0081
+alpha_m         0.3895    0.8682  |    0.3794    0.6319  |   -3.1600    0.8654  |    0.3429    0.7882
+
+Cross-excitation:
+  B: A_01=0.0031  A_10=0.0000  alpha_m_01=-0.0308  alpha_m_10=-0.3251
+  D: A_01=0.0023  A_10=0.0100  alpha_m_01=0.5260  alpha_m_10=0.5633
+  E: A_01=0.0565  A_10=0.0000  alpha_m_01=-1.0704  alpha_m_10=1.4226
+  F: A_01=0.0076  A_10=0.0141  alpha_m_01=0.5805  alpha_m_10=0.5433
+
+===========================================================================
+              ATE COMPARISON (100-day horizon)
+===========================================================================
+
+                                Total Effect     SD(total)      eta_ctrl     eta_treat
+------------------------------------------------------------------------------------------ 
+B: Naive Biv (county)                    755           235         1.393         1.211
+D: SEM Biv (county)                      114          1165         1.477         1.400
+E: Naive Biv+KDE (county)               3846          7231         0.209         1.528
+F: SEM Biv+KDE (county)                 4833          5432         1.250         1.534
+E: grid_1.0R                             834           180         0.789         1.164
+F: grid_1.0R                             568           394         1.327         1.394
+E: grid_2.0R                             734           142         0.959         1.143
+F: grid_2.0R                             457           244         1.252         1.372
+E: grid_5.0R                             505           226         0.616         1.227
+F: grid_5.0R                             456           380         1.373         1.473
+E: aoi_region                            831           119         1.081         1.160
+F: aoi_region                            652           548         1.194         1.428
+
+Total Effect: expected all-or-nothing total earthquakes over 100 days in Oklahoma.
+
+--- Step 7b: Louis-method SE skipped for this run ---
+
+--- Saving results ---
+Results saved to: /Users/dac6/Library/CloudStorage/GoogleDrive-clark.a.duncan@gmail.com/My Drive/my_laptop/Documents/Academics/computation/r_code/CausalPointProcess/PPDisentangle/output/oklahoma_results.rds
+Plots saved to:   /Users/dac6/Library/CloudStorage/GoogleDrive-clark.a.duncan@gmail.com/My Drive/my_laptop/Documents/Academics/computation/r_code/CausalPointProcess/PPDisentangle/output/plots
+Results mirrored to legacy path: /Users/dac6/Library/CloudStorage/GoogleDrive-clark.a.duncan@gmail.com/My Drive/my_laptop/Documents/Academics/computation/r_code/CausalPointProcess/PPDisentangle/inst/oklahoma/output/oklahoma_results.rds
+
+--- Rendering report (HTML + PDF) ---
+Report render complete.
+Sync stamp written for Google Drive change detection.
+
+=== Oklahoma Analysis Complete ===
+run_exit_code,0

@@ -184,7 +184,7 @@
 \makeatother
 \subtitle{Bivariate ETAS with Partition Sensitivity}
 \author{PPDisentangle}
-\date{2026-03-15}
+\date{2026-03-16}
 \begin{document}
 \maketitle
 
@@ -197,7 +197,7 @@
 
 \section{Introduction}\label{introduction}
 
-\textbf{Report rendered at:} 2026-03-15 23:39:23 EDT
+\textbf{Report rendered at:} 2026-03-16 10:30:28 EDT
 
 On 18 March 2015 the Oklahoma Corporation Commission (OCC) issued
 directive \textbf{AOI\_20150318}, requiring operators within a defined
@@ -435,7 +435,7 @@ q & 1.50 & Spatial decay exponent\\
 \item
   \textbf{Outer iterations:} 1
 \item
-  \textbf{Inner iterations:} 1000
+  \textbf{Inner iterations:} 200
 \item
   \textbf{SEM inner proposals (\texttt{SEM\_INNER\_PROPS}):} 20
 \item
@@ -450,7 +450,7 @@ q & 1.50 & Spatial decay exponent\\
 
 \begingroup\fontsize{8}{10}\selectfont
 
-\begin{longtable}[t]{lcccccccc}
+\begin{longtable}[t]{lcccccccccccc}
 
 \caption{\label{tbl-params}Marginal ETAS parameters across available
 bivariate fits.}
@@ -459,13 +459,13 @@ bivariate fits.}
 
 \\
 \toprule
-\multicolumn{1}{c}{ } & \multicolumn{2}{c}{B: Naive Biv} & \multicolumn{2}{c}{D: SEM Biv} & \multicolumn{2}{c}{E: Naive+KDE} & \multicolumn{2}{c}{F: SEM+KDE} \\
-\cmidrule(l{3pt}r{3pt}){2-3} \cmidrule(l{3pt}r{3pt}){4-5} \cmidrule(l{3pt}r{3pt}){6-7} \cmidrule(l{3pt}r{3pt}){8-9}
- & B:ctrl & B:treat & D:ctrl & D:treat & E:ctrl & E:treat & F:ctrl & F:treat\\
+\multicolumn{1}{c}{ } & \multicolumn{2}{c}{B: Naive Biv} & \multicolumn{2}{c}{D: SEM Biv} & \multicolumn{2}{c}{E: Naive+KDE} & \multicolumn{2}{c}{F: SEM+KDE} & \multicolumn{2}{c}{G: Decode Biv} & \multicolumn{2}{c}{H: Decode+KDE} \\
+\cmidrule(l{3pt}r{3pt}){2-3} \cmidrule(l{3pt}r{3pt}){4-5} \cmidrule(l{3pt}r{3pt}){6-7} \cmidrule(l{3pt}r{3pt}){8-9} \cmidrule(l{3pt}r{3pt}){10-11} \cmidrule(l{3pt}r{3pt}){12-13}
+ & B:ctrl & B:treat & D:ctrl & D:treat & E:ctrl & E:treat & F:ctrl & F:treat & G:ctrl & G:treat & H:ctrl & H:treat\\
 \midrule
-\$\textbackslash{}mu\$ & 0.0247 & 1.3027 & 0.0227 & 0.2011 & 1.8886 & 0.3697 & 0.0195 & 0.1388\\
-\$A\$ & 1.1569 & 0.7536 & 1.1216 & 1.0351 & 0.4953 & 0.9531 & 1.1353 & 1.0506\\
-\$\textbackslash{}alpha\_m\$ & 0.3895 & 0.8682 & 0.6670 & 0.5876 & -3.1600 & 0.8654 & 0.4686 & 0.6725\\
+\$\textbackslash{}mu\$ & 0.0247 & 1.3027 & 0.0299 & 0.2044 & 1.8886 & 0.3697 & 0.0355 & 0.2216 & 0.0000 & 1.2874 & 0.0000 & 1.2701\\
+\$A\$ & 1.1569 & 0.7536 & 1.2337 & 1.0157 & 0.4953 & 0.9531 & 1.0636 & 1.0081 & 1.1602 & 0.7568 & 1.1336 & 0.7665\\
+\$\textbackslash{}alpha\_m\$ & 0.3895 & 0.8682 & 0.3794 & 0.6319 & -3.1600 & 0.8654 & 0.3429 & 0.7882 & 0.4203 & 0.8977 & 0.4703 & 0.8849\\
 \bottomrule
 
 \end{longtable}
@@ -474,7 +474,7 @@ bivariate fits.}
 
 \subsection{Cross-excitation}\label{cross-excitation}
 
-\begin{longtable}[t]{lcccc}
+\begin{longtable}[t]{lcccccc}
 
 \caption{\label{tbl-cross}Cross-excitation parameters for available
 models.}
@@ -483,12 +483,12 @@ models.}
 
 \\
 \toprule
- & B: Naive & D: SEM & E: Naive+KDE & F: SEM+KDE\\
+ & B: Naive & D: SEM & E: Naive+KDE & F: SEM+KDE & G: Decode & H: Decode+KDE\\
 \midrule
-\$A\_\{01\}\$ (treat\$\textbackslash{}to\$ctrl) & 0.0031 & 0.0049 & 0.0565 & 0.0100\\
-\$\textbackslash{}alpha\_\{m,01\}\$ & -0.0308 & 0.5123 & -1.0704 & 0.5706\\
-\$A\_\{10\}\$ (ctrl\$\textbackslash{}to\$treat) & 0.0000 & 0.0160 & 0.0000 & 0.0100\\
-\$\textbackslash{}alpha\_\{m,10\}\$ & -0.3251 & 0.5445 & 1.4226 & 0.5706\\
+\$A\_\{01\}\$ (treat\$\textbackslash{}to\$ctrl) & 0.0031 & 0.0023 & 0.0565 & 0.0076 & 0.0033 & 0.0041\\
+\$\textbackslash{}alpha\_\{m,01\}\$ & -0.0308 & 0.5260 & -1.0704 & 0.5805 & -0.5888 & -1.0772\\
+\$A\_\{10\}\$ (ctrl\$\textbackslash{}to\$treat) & 0.0000 & 0.0100 & 0.0000 & 0.0141 & 0.0000 & 0.0000\\
+\$\textbackslash{}alpha\_\{m,10\}\$ & -0.3251 & 0.5633 & 1.4226 & 0.5433 & 3.1879 & 0.7158\\
 \bottomrule
 
 \end{longtable}
@@ -535,6 +535,33 @@ log-likelihood progression (county SEM fits).}
 
 \end{figure}%
 
+\begin{figure}
+
+\centering{
+
+\includegraphics[width=1\linewidth,height=\textheight,keepaspectratio]{oklahoma_report_files/figure-pdf/fig-selected-loglik-1.pdf}
+
+}
+
+\caption{\label{fig-selected-loglik}Decode selected log-likelihood
+progression across relabelling iterations (when Decode models are
+present).}
+
+\end{figure}%
+
+\begin{figure}
+
+\centering{
+
+\includegraphics[width=1\linewidth,height=\textheight,keepaspectratio]{oklahoma_report_files/figure-pdf/fig-decode-flips-1.pdf}
+
+}
+
+\caption{\label{fig-decode-flips}Decode relabelling totals (county
+models).}
+
+\end{figure}%
+
 \subsection{SEM Relabelling: Confusion
 Matrices}\label{sem-relabelling-confusion-matrices}
 
@@ -554,8 +581,8 @@ post-treatment events).}
 \cmidrule(l{3pt}r{3pt}){1-1}
  & control & treated\\
 \midrule
-control & 216  (26.4\%) & 1  (0.1\%)\\
-treated & 125  (15.3\%) & 476  (58.2\%)\\
+control & 215  (26.3\%) & 2  (0.2\%)\\
+treated & 49  (6\%) & 552  (67.5\%)\\
 \bottomrule
 
 \end{longtable}
@@ -576,8 +603,8 @@ post-treatment events).}
 \cmidrule(l{3pt}r{3pt}){1-1}
  & control & treated\\
 \midrule
-control & 216  (26.4\%) & 1  (0.1\%)\\
-treated & 143  (17.5\%) & 458  (56\%)\\
+control & 215  (26.3\%) & 2  (0.2\%)\\
+treated & 51  (6.2\%) & 550  (67.2\%)\\
 \bottomrule
 
 \end{longtable}
@@ -585,8 +612,46 @@ treated & 143  (17.5\%) & 458  (56\%)\\
 \subsubsection{Fit G --- Decode Bivariate
 ETAS}\label{fit-g-decode-bivariate-etas}
 
+\begin{longtable}[t]{lcc}
+
+\caption{\label{tbl-cm-G}Fit G: Location vs Decode-inferred label (n =
+818 post-treatment events).}
+
+\tabularnewline
+
+\\
+\toprule
+\multicolumn{1}{c}{Location ↓ / Inferred →} & \multicolumn{2}{c}{ } \\
+\cmidrule(l{3pt}r{3pt}){1-1}
+ & control & treated\\
+\midrule
+control & 207  (25.3\%) & 10  (1.2\%)\\
+treated & 4  (0.5\%) & 597  (73\%)\\
+\bottomrule
+
+\end{longtable}
+
 \subsubsection{Fit H --- Decode Bivariate + KDE
 Background}\label{fit-h-decode-bivariate-kde-background}
+
+\begin{longtable}[t]{lcc}
+
+\caption{\label{tbl-cm-H}Fit H: Location vs Decode-inferred label (n =
+818 post-treatment events).}
+
+\tabularnewline
+
+\\
+\toprule
+\multicolumn{1}{c}{Location ↓ / Inferred →} & \multicolumn{2}{c}{ } \\
+\cmidrule(l{3pt}r{3pt}){1-1}
+ & control & treated\\
+\midrule
+control & 205  (25.1\%) & 12  (1.5\%)\\
+treated & 3  (0.4\%) & 598  (73.1\%)\\
+\bottomrule
+
+\end{longtable}
 
 \subsubsection{Relabelling Summary}\label{relabelling-summary}
 
@@ -601,8 +666,10 @@ models.}
 \toprule
 Model & Post events & Ctrl to Treat & Treat to Ctrl & Total relabelled & Pct relabelled\\
 \midrule
-D: SEM Bivariate & 818 & 1 & 125 & 126 & 15.4\%\\
-F: SEM Bivariate+KDE & 818 & 1 & 143 & 144 & 17.6\%\\
+D: SEM Bivariate & 818 & 2 & 49 & 51 & 6.2\%\\
+F: SEM Bivariate+KDE & 818 & 2 & 51 & 53 & 6.5\%\\
+G: Decode Bivariate & 818 & 10 & 4 & 14 & 1.7\%\\
+H: Decode Biv+KDE & 818 & 12 & 3 & 15 & 1.8\%\\
 \bottomrule
 
 \end{longtable}
@@ -622,10 +689,13 @@ Effect}\label{all-or-nothing-treatment-effect}
 \toprule
 Model & E[N(0)] & E[N(1)] & Total Effect / 77 counties / 100d & SD & Spillover / 100d\\
 \midrule
-B: Naive Bivariate & 57 & 819 & 762 & 226 & 0\\
-D: SEM Bivariate & 1114 & 407 & -707 & 3218 & 1\\
-E: Naive Biv+KDE & 220 & 3787 & 3567 & 3436 & 0\\
-F: SEM Biv+KDE & 22 & 686 & 663 & 748 & 1\\
+B: Naive Bivariate & 64 & 819 & 755 & 235 & 0\\
+D: SEM Bivariate & 257 & 371 & 114 & 1165 & 2\\
+E: Naive Biv+KDE & 227 & 4073 & 3846 & 7231 & 0\\
+F: SEM Biv+KDE & 33 & 4866 & 4833 & 5432 & 2\\
+G: Decode Bivariate & 0 & 837 & 837 & 228 & 11\\
+\addlinespace
+H: Decode Biv+KDE & 0 & 921 & 921 & 203 & 14\\
 \bottomrule
 
 \end{longtable}
@@ -740,17 +810,17 @@ effect.}
 \toprule
  & Partition & Model & Tiles & Treated & Relabelled points & E[N(0)] & E[N(1)] & mu\_0 & mu\_1 & A\_0 & A\_1 & alpha\_m\_0 & alpha\_m\_1 & Total Effect\\
 \midrule
-1 & County & Naive Biv+KDE & 77 & 9 & 0 & 220 & 3787 & 1.8886 & 0.3697 & 0.4953 & 0.9531 & -3.1600 & 0.8654 & 3567\\
-2 & County & SEM Biv+KDE & 77 & 9 & 126 & 22 & 686 & 0.0108 & 0.1481 & 1.0820 & 1.0925 & 0.5166 & 0.5996 & 663\\
-9 & AOI region & Naive Biv+KDE & 2 & 1 & 0 & 44 & 896 & 0.1020 & 1.6910 & 0.9228 & 0.8459 & 0.3364 & 0.6223 & 852\\
-10 & AOI region & SEM Biv+KDE & 2 & 1 & 236 & 11 & 160 & 0.0109 & 0.1624 & 1.0699 & 0.9388 & 0.4651 & 0.6409 & 149\\
-3 & Grid (1x triggering range) & Naive Biv+KDE & 5096 & 440 & 0 & 25 & 870 & 0.1266 & 1.6471 & 1.0937 & 0.8316 & -0.8891 & 0.6571 & 845\\
+1 & County & Naive Biv+KDE & 77 & 9 & 0 & 227 & 4073 & 1.8886 & 0.3697 & 0.4953 & 0.9531 & -3.1600 & 0.8654 & 3846\\
+2 & County & SEM Biv+KDE & 77 & 9 & 54 & 33 & 4866 & 0.0363 & 0.2232 & 1.0587 & 1.0058 & 0.3445 & 0.7843 & 4833\\
+9 & AOI region & Naive Biv+KDE & 2 & 1 & 0 & 46 & 877 & 0.1020 & 1.6910 & 0.9228 & 0.8459 & 0.3364 & 0.6223 & 831\\
+10 & AOI region & SEM Biv+KDE & 2 & 1 & 62 & 2 & 653 & 0.0011 & 0.2506 & 1.0439 & 1.0377 & 0.2897 & 0.6285 & 652\\
+3 & Grid (1x triggering range) & Naive Biv+KDE & 5096 & 440 & 0 & 29 & 863 & 0.1266 & 1.6471 & 1.0937 & 0.8316 & -0.8891 & 0.6571 & 834\\
 \addlinespace
-4 & Grid (1x triggering range) & SEM Biv+KDE & 5096 & 440 & 55 & 44 & 221 & 0.0241 & 0.1356 & 1.0643 & 1.0268 & 0.4285 & 0.6097 & 178\\
-5 & Grid (2x triggering range) & Naive Biv+KDE & 3080 & 264 & 0 & 76 & 867 & 0.2444 & 1.7094 & 1.2453 & 0.9703 & -0.6868 & 0.3468 & 790\\
-6 & Grid (2x triggering range) & SEM Biv+KDE & 3080 & 264 & 46 & 0 & 810 & 0.0020 & 0.3082 & 1.0820 & 1.0293 & 0.3423 & 0.6230 & 809\\
-7 & Grid (5x triggering range) & Naive Biv+KDE & 544 & 46 & 0 & 164 & 665 & 0.9086 & 0.9850 & 0.5199 & 0.9472 & 0.3590 & 0.5251 & 501\\
-8 & Grid (5x triggering range) & SEM Biv+KDE & 544 & 46 & 74 & 4 & 428 & 0.0056 & 0.1568 & 1.1406 & 1.0346 & 0.5252 & 0.6590 & 424\\
+4 & Grid (1x triggering range) & SEM Biv+KDE & 5096 & 440 & 40 & 18 & 586 & 0.0223 & 0.3006 & 1.0936 & 1.0218 & 0.4043 & 0.6142 & 568\\
+5 & Grid (2x triggering range) & Naive Biv+KDE & 3080 & 264 & 0 & 85 & 819 & 0.2444 & 1.7094 & 1.2453 & 0.9703 & -0.6868 & 0.3468 & 734\\
+6 & Grid (2x triggering range) & SEM Biv+KDE & 3080 & 264 & 45 & 12 & 469 & 0.0169 & 0.2927 & 1.0519 & 1.0030 & 0.3684 & 0.6188 & 457\\
+7 & Grid (5x triggering range) & Naive Biv+KDE & 544 & 46 & 0 & 159 & 664 & 0.9086 & 0.9850 & 0.5199 & 0.9472 & 0.3590 & 0.5251 & 505\\
+8 & Grid (5x triggering range) & SEM Biv+KDE & 544 & 46 & 68 & 8 & 463 & 0.0085 & 0.1672 & 1.0535 & 1.0821 & 0.5357 & 0.6105 & 456\\
 \bottomrule
 
 \end{longtable}
@@ -784,6 +854,42 @@ distributions (same units and x-axis scale as Section 6.1).}
 
 \end{figure}%
 
+\subsection{KDE Bandwidth Sensitivity (County Inhomogeneous
+E/F)}\label{kde-bandwidth-sensitivity-county-inhomogeneous-ef}
+
+County-level inhomogeneous fits are re-run across KDE bandwidths:
+Diggle,
+Diggle\$\textbackslash times\(2, Diggle\)\textbackslash times\(5, and Diggle\)\textbackslash times\$10.
+
+\begingroup\fontsize{9}{11}\selectfont
+
+\begin{longtable}[t]{llcccccccccccc}
+
+\caption{\label{tbl-kde-bandwidth-sensitivity}County inhomogeneous KDE
+bandwidth sensitivity over 100 days: E{[}N(0){]}, E{[}N(1){]}, marginal
+ETAS parameters, and total effect.}
+
+\tabularnewline
+
+\\
+\toprule
+Bandwidth & Model & Tiles & Treated & Relabelled points & E[N(0)] & E[N(1)] & mu\_0 & mu\_1 & A\_0 & A\_1 & alpha\_m\_0 & alpha\_m\_1 & Total Effect\\
+\midrule
+Diggle & Naive Biv+KDE & 77 & 9 & 0 & 211 & 632 & 1.8091 & 0.1642 & 0.2715 & 1.0736 & -0.8167 & 0.5642 & 420\\
+Diggle & SEM Biv+KDE & 77 & 9 & 38 & 42 & 301 & 0.0368 & 0.1951 & 1.0553 & 1.0034 & 0.4521 & 0.6342 & 259\\
+Diggle x2 & Naive Biv+KDE & 77 & 9 & 0 & 218 & 4008 & 1.8886 & 0.3697 & 0.4953 & 0.9531 & -3.1600 & 0.8654 & 3791\\
+Diggle x2 & SEM Biv+KDE & 77 & 9 & 44 & 20 & 2233 & 0.0302 & 0.2104 & 1.0524 & 1.0055 & 0.3316 & 0.7770 & 2214\\
+Diggle x5 & Naive Biv+KDE & 77 & 9 & 0 & 223 & 1071 & 1.9120 & 0.7402 & 0.1943 & 0.9535 & -0.1300 & 0.6979 & 849\\
+\addlinespace
+Diggle x5 & SEM Biv+KDE & 77 & 9 & 48 & 22 & 226 & 0.0165 & 0.1921 & 1.0960 & 0.9971 & 0.4491 & 0.5920 & 204\\
+Diggle x10 & Naive Biv+KDE & 77 & 9 & 0 & 230 & 684 & 1.7042 & 1.2340 & 0.1468 & 0.9419 & 1.4732 & 0.4796 & 454\\
+Diggle x10 & SEM Biv+KDE & 77 & 9 & 32 & 116 & 590 & 0.0372 & 0.2628 & 1.0681 & 1.0129 & 0.6007 & 0.6523 & 475\\
+\bottomrule
+
+\end{longtable}
+
+\endgroup{}
+
 \section{Interpretation}\label{interpretation}
 
 \textbf{Inhomogeneous background rate focus.} Fits E and F use a
@@ -794,22 +900,25 @@ baseline seismicity pattern without using post-treatment data.
 \textbf{Background contrast (inhomogeneous only).} In Fit E (naive
 labels), the treated-region background rate \(\mu_1\) is 0.2\(\times\)
 higher than \(\mu_0\). After SEM relabelling (Fit F), this ratio is
-7.1\(\times\).
+6.2\(\times\).
 
 \textbf{All-or-nothing total effect (100-day horizon).}
 
 \begin{itemize}
 \tightlist
 \item
-  \textbf{Fit E (naive+KDE):} \(\hat\Delta_{\text{AoN}}=\) \textbf{3567}
+  \textbf{Fit E (naive+KDE):} \(\hat\Delta_{\text{AoN}}=\) \textbf{3846}
   total earthquakes / 100 days
 \item
-  \textbf{Fit F (SEM+KDE):} \(\hat\Delta_{\text{AoN}}=\) \textbf{663}
+  \textbf{Fit F (SEM+KDE):} \(\hat\Delta_{\text{AoN}}=\) \textbf{4833}
   total earthquakes / 100 days
 \item
   \textbf{Interpretation:} In the inhomogeneous SEM model (F), treatment
   looks \textbf{worse under treatment}; in the inhomogeneous naive model
   (E), treatment looks \textbf{worse under treatment}.
+\item
+  \textbf{Fit H (Decode+KDE):} \(\hat\Delta_{\text{AoN}}=\) \textbf{921}
+  total earthquakes / 100 days
 \end{itemize}
 
 \textbf{Partition sensitivity.} The alternative partition schemes (grids
@@ -834,12 +943,12 @@ Magnitude threshold & 2.5\\
 GR β & 2.3\\
 Counties (total / treated) & 77 / 9\\
 SEM outer iters & 1\\
-SEM inner iters & 1000\\
+SEM inner iters & 200\\
 \addlinespace
 SEM inner proposals & 20\\
 SEM labellings & 30\\
 SEM change factor & 0.01\\
-Decode enabled & FALSE\\
+Decode enabled & TRUE\\
 Decode iterations & 200\\
 \addlinespace
 Fitting window (days) & 0 – 98\\
