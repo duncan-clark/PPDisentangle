@@ -168,7 +168,51 @@ if ! try_load_rgeo "$TARGET_R_GEO"; then
   fi
 fi
 
-echo "R: $(which R) ($(R --version | head -1))"
+ensure_r_binaries() {
+  if command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "R binaries not found after R-Geo load; trying explicit R module fallbacks..."
+  local target_r=""
+  local loaded=0
+  local cand
+
+  # Try exact toolchain-matched R module inferred from TARGET_R_GEO.
+  # Example: R-Geo/4.3.2-foss-2023a -> R/4.3.2-foss-2023a
+  if [[ "$TARGET_R_GEO" =~ ^R-Geo/([0-9]+\.[0-9]+\.[0-9]+-[^-]+-[0-9]{4}[a-z]?)$ ]]; then
+    target_r="R/${BASH_REMATCH[1]}"
+    if module load "$target_r" >/dev/null 2>&1; then
+      loaded=1
+    fi
+  fi
+
+  # Fall back to discovered R/* modules if still missing.
+  if [ "$loaded" -ne 1 ]; then
+    mapfile -t R_CANDIDATES < <(module -t avail R 2>&1 | awk '/^R\//{print $1}' | sort -Vr | uniq)
+    for cand in "${R_CANDIDATES[@]}"; do
+      if module load "$cand" >/dev/null 2>&1; then
+        loaded=1
+        break
+      fi
+    done
+  fi
+
+  command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1
+}
+
+if ! ensure_r_binaries; then
+  echo "ERROR: R and/or Rscript not found on PATH after module setup."
+  echo "Diagnostics:"
+  module list 2>&1 || true
+  module spider R 2>&1 || true
+  exit 1
+fi
+
+R_BIN="$(command -v R)"
+RSCRIPT_BIN="$(command -v Rscript)"
+echo "R: $R_BIN ($("$R_BIN" --version | head -1))"
+echo "Rscript: $RSCRIPT_BIN"
 echo ""
 
 # Avoid nested threading / OpenMP crashes.
@@ -178,9 +222,9 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export KMP_INIT_AT_FORK=FALSE
 
-if ! Rscript -e 'library(PPDisentangle)' 2>/dev/null; then
+if ! "$RSCRIPT_BIN" -e 'library(PPDisentangle)' 2>/dev/null; then
   echo "Installing PPDisentangle from source..."
-  R CMD INSTALL --no-multiarch "$PKG_ROOT" 2>&1 | tail -5
+  "$R_BIN" CMD INSTALL --no-multiarch "$PKG_ROOT" 2>&1 | tail -5
   echo ""
 fi
 
@@ -212,7 +256,7 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   export OK_RUN_BOOTSTRAP_ATE=true
 fi
 
-Rscript "$PKG_ROOT/inst/oklahoma/oklahoma_analysis.R" 2>&1
+"$RSCRIPT_BIN" "$PKG_ROOT/inst/oklahoma/oklahoma_analysis.R" 2>&1
 
 echo ""
 echo "=== Done $(date) ==="
