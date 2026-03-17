@@ -451,7 +451,7 @@ t0 <- proc.time()[3]
 sem_jobs <- lapply(seq_along(obs_data), function(i) {
   list(i = i, seed = stage_seed(3L, i), data = obs_data[[i]])
 })
-run_sem <- function(job) {
+run_sem_core <- function(job) {
   set.seed(job$seed)
   dat <- job$data
   total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
@@ -482,10 +482,49 @@ run_sem <- function(job) {
     )
   )
 }
+run_sem <- function(job) {
+  tryCatch(
+    run_sem_core(job),
+    error = function(e) {
+      structure(
+        list(sim_id = job$i, message = conditionMessage(e)),
+        class = "ppdis_sem_error"
+      )
+    }
+  )
+}
+is_sem_error <- function(x) inherits(x, "ppdis_sem_error")
 if (N_CORES > 1 && !SMALL) {
   EM_results <- parLapply(cl = cl, X = sem_jobs, fun = run_sem)
+  failed <- which(vapply(EM_results, is_sem_error, logical(1)))
+  if (length(failed) > 0L) {
+    fail_msg <- paste(
+      vapply(EM_results[failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
+      collapse = " | "
+    )
+    log_msg("[SEM PARALLEL ERROR] ", fail_msg)
+    log_msg("Retrying failed SEM jobs sequentially: ", paste(failed, collapse = ","))
+    retry <- lapply(sem_jobs[failed], run_sem)
+    retry_failed <- which(vapply(retry, is_sem_error, logical(1)))
+    if (length(retry_failed) > 0L) {
+      retry_msg <- paste(
+        vapply(retry[retry_failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
+        collapse = " | "
+      )
+      stop("Adaptive SEM failed after sequential retry: ", retry_msg)
+    }
+    EM_results[failed] <- retry
+  }
 } else {
   EM_results <- lapply(sem_jobs, run_sem)
+  failed <- which(vapply(EM_results, is_sem_error, logical(1)))
+  if (length(failed) > 0L) {
+    fail_msg <- paste(
+      vapply(EM_results[failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
+      collapse = " | "
+    )
+    stop("Adaptive SEM failed: ", fail_msg)
+  }
 }
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_memory("post_SEM")

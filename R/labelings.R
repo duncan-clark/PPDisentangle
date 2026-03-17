@@ -995,6 +995,7 @@ em_style_labelling <- function(pp_data,
       } else {
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
+      printed_metric_diag <- FALSE
       eval_nonbiv <- function(realiz) {
 
         ctrl_rows <- realiz$inferred_process == "control"
@@ -1014,7 +1015,7 @@ em_style_labelling <- function(pp_data,
           precomp = list(active_area = pc_treat_all$active_area,
                          in_zero_bg = pc_treat_all$in_zero_bg_all[treat_rows]), ...
         )
-        if (verbose && j == 1 && i == 1) {
+        if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
                       sum(ctrl_rows), sum(treat_rows), signif(control_lik, 6), signif(treat_lik, 6)))
           cat(sprintf("    ctrl params: %s\n", paste(names(ctrl_params_vec), signif(ctrl_params_vec, 5), sep="=", collapse="  ")))
@@ -1029,6 +1030,7 @@ em_style_labelling <- function(pp_data,
                       signif(min(ctrl_sub$W, na.rm=TRUE), 4), signif(max(ctrl_sub$W, na.rm=TRUE), 4),
                       signif(min(realiz[treat_rows, "W"], na.rm=TRUE), 4),
                       signif(max(realiz[treat_rows, "W"], na.rm=TRUE), 4)))
+          printed_metric_diag <<- TRUE
         }
         control_lik + treat_lik
       }
