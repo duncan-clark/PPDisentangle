@@ -139,19 +139,84 @@ module --force purge
 
 # Some NeSI stacks require architecture/compiler parents (e.g., NeSI/zen3)
 # before R-Geo can be loaded. Try robust fallbacks in order.
-if ! module load R-Geo/4.3.2-foss-2023a; then
-    echo "Primary load failed: R-Geo/4.3.2-foss-2023a"
-    echo "Trying NeSI/zen3 -> R-Geo/4.3.2-foss-2023a ..."
-    if module load NeSI/zen3 && module load R-Geo/4.3.2-foss-2023a; then
+TARGET_R_GEO="${PP_R_GEO_MODULE:-R-Geo/4.3.2-foss-2023a}"
+echo "Requested R-Geo module: $TARGET_R_GEO"
+
+try_load_rgeo() {
+    local mod="$1"
+    if module load "$mod"; then
+        echo "Loaded module: $mod"
+        return 0
+    fi
+    return 1
+}
+
+try_load_rgeo_with_toolchain() {
+    local mod="$1"
+    # Example: R-Geo/4.3.2-foss-2023a -> toolchain foss/2023a
+    local tail tc_name tc_ver tc_mod
+    tail="$(echo "$mod" | awk -F'-' '{print $(NF-1) "-" $NF}')"
+    tc_name="${tail%-*}"
+    tc_ver="${tail#*-}"
+    tc_mod="${tc_name}/${tc_ver}"
+    if [ -n "$tc_name" ] && [ -n "$tc_ver" ] && [ "$tc_name" != "$tc_ver" ]; then
+        echo "Trying toolchain + R-Geo: $tc_mod -> $mod"
+        if module load "$tc_mod" && module load "$mod"; then
+            echo "Loaded module chain: $tc_mod + $mod"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+if ! try_load_rgeo "$TARGET_R_GEO"; then
+    echo "Primary load failed: $TARGET_R_GEO"
+    echo "Trying toolchain-matched load for $TARGET_R_GEO ..."
+    module --force purge
+    if try_load_rgeo_with_toolchain "$TARGET_R_GEO"; then
         :
     else
-        echo "Trying generic R-Geo module ..."
-        if ! module load R-Geo; then
-            echo "ERROR: Failed to load R-Geo module."
-            echo "Run 'module spider R-Geo' and update run_nesi.sh accordingly."
-            module spider R-Geo || true
-            exit 1
+    echo "Trying NeSI/zen3 -> $TARGET_R_GEO ..."
+    module --force purge
+    if module load NeSI/zen3 && try_load_rgeo "$TARGET_R_GEO"; then
+        :
+    else
+        echo "Trying discovered R-Geo/* modules from module avail ..."
+        module --force purge
+        mapfile -t R_GEO_CANDIDATES < <(module -t avail R-Geo 2>&1 | awk '/^R-Geo\//{print $1}' | sort -Vr | uniq)
+        LOADED=0
+        for cand in "${R_GEO_CANDIDATES[@]}"; do
+            if try_load_rgeo "$cand"; then
+                LOADED=1
+                break
+            fi
+            module --force purge
+            if try_load_rgeo_with_toolchain "$cand"; then
+                LOADED=1
+                break
+            fi
+            module --force purge
+            if module load NeSI/zen3 && try_load_rgeo "$cand"; then
+                LOADED=1
+                break
+            fi
+            module --force purge
+        done
+        if [ "$LOADED" -ne 1 ]; then
+            echo "Trying generic R-Geo module ..."
+            if ! try_load_rgeo R-Geo; then
+                module --force purge
+                if ! (module load NeSI/zen3 && try_load_rgeo R-Geo); then
+                    echo "ERROR: Failed to load any R-Geo module."
+                    echo "Set PP_R_GEO_MODULE explicitly, e.g."
+                    echo "  sbatch --export=ALL,PP_R_GEO_MODULE=R-Geo/<version> inst/sim_study/run_nesi.sh --sims 32"
+                    echo "Diagnostics:"
+                    module spider R-Geo || true
+                    exit 1
+                fi
+            fi
         fi
+    fi
     fi
 fi
 

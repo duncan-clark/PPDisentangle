@@ -391,9 +391,12 @@ pp_labeled_naive <- lapply(obs_data, function(s) {
 # ------------------------------------------------------------------
 log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
 t0 <- proc.time()[3]
-gen_proposals <- function(i) {
-  set.seed(stage_seed(2L, i))
-  s <- obs_data[[i]]
+proposal_jobs <- lapply(seq_along(obs_data), function(i) {
+  list(i = i, seed = stage_seed(2L, i), data = obs_data[[i]])
+})
+gen_proposals <- function(job) {
+  set.seed(job$seed)
+  s <- job$data
   df <- as.data.frame(s)
   pre  <- df[df$t < TREATMENT_TIME, , drop = FALSE]
   post <- df[df$t >= TREATMENT_TIME, , drop = FALSE]
@@ -416,9 +419,9 @@ gen_proposals <- function(i) {
   }))
 }
 if (N_CORES > 1 && !SMALL) {
-  labelling_proposals <- parLapply(cl = cl, X = seq_along(obs_data), fun = gen_proposals)
+  labelling_proposals <- parLapply(cl = cl, X = proposal_jobs, fun = gen_proposals)
 } else {
-  labelling_proposals <- lapply(seq_along(obs_data), gen_proposals)
+  labelling_proposals <- lapply(proposal_jobs, gen_proposals)
 }
 log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
@@ -438,9 +441,12 @@ pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
 # ------------------------------------------------------------------
 log_msg("Running EM-style labelling ...")
 t0 <- proc.time()[3]
-run_em <- function(i) {
-  set.seed(stage_seed(3L, i))
-  x <- obs_data[[i]]
+em_jobs <- lapply(seq_along(obs_data), function(i) {
+  list(i = i, seed = stage_seed(3L, i), data = obs_data[[i]])
+})
+run_em <- function(job) {
+  set.seed(job$seed)
+  x <- job$data
   total_points <- sum(x$location_process == "treated" & x$t >= TREATMENT_TIME)
   mu_start     <- total_points / TIME_INT
   params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
@@ -461,9 +467,9 @@ run_em <- function(i) {
   )
 }
 if (N_CORES > 1 && !SMALL) {
-  EM_max_style <- parLapply(cl = cl, X = seq_along(obs_data), fun = run_em)
+  EM_max_style <- parLapply(cl = cl, X = em_jobs, fun = run_em)
 } else {
-  EM_max_style <- lapply(seq_along(obs_data), run_em)
+  EM_max_style <- lapply(em_jobs, run_em)
 }
 log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
@@ -480,9 +486,12 @@ pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
 # ------------------------------------------------------------------
 log_msg("Running adaptive SEM ...")
 t0 <- proc.time()[3]
-run_sem <- function(i) {
-  set.seed(stage_seed(4L, i))
-  dat <- obs_data[[i]]
+sem_jobs <- lapply(seq_along(obs_data), function(i) {
+  list(i = i, seed = stage_seed(4L, i), data = obs_data[[i]])
+})
+run_sem <- function(job) {
+  set.seed(job$seed)
+  dat <- job$data
   total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
   mu_start     <- total_points / TIME_INT
   params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
@@ -512,9 +521,9 @@ run_sem <- function(i) {
   )
 }
 if (N_CORES > 1 && !SMALL) {
-  EM_results <- parLapply(cl = cl, X = seq_along(obs_data), fun = run_sem)
+  EM_results <- parLapply(cl = cl, X = sem_jobs, fun = run_sem)
 } else {
-  EM_results <- lapply(seq_along(obs_data), run_sem)
+  EM_results <- lapply(sem_jobs, run_sem)
 }
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_memory("post_EM")
