@@ -24,6 +24,7 @@ PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --cores) PP_CORES="$2"; shift 2 ;;
+    --sims) PP_CORES="$2"; shift 2 ;;  # alias: match sim_study launcher UX
     --boot-reps) PP_BOOT_REPS="$2"; shift 2 ;;
     --sem-inner) PP_SEM_INNER="$2"; shift 2 ;;
     --sens-sem-inner) PP_SENS_SEM_INNER="$2"; shift 2 ;;
