@@ -64,6 +64,7 @@ fi
 # ----------------------------
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   cd "$PKG_ROOT"
+  git pull origin main 2>/dev/null || true
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   mkdir -p "$PKG_ROOT/cluster_output"
 

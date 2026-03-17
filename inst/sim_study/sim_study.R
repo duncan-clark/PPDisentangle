@@ -130,7 +130,7 @@ SEM_N_PROPS <- 10L
 SEM_CHANGE_FACTOR <- 0.01
 SEM_INCLUDE_STARTING <- TRUE
 SEM_UPDATE_STARTING <- TRUE
-SEM_UPDATE_CONTROL_PARAMS <- FALSE
+SEM_UPDATE_CONTROL_PARAMS <- TRUE
 
 if (nzchar(Sys.getenv("PP_SEM_INNER_ITER"))) {
   v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_INNER_ITER")))
@@ -846,14 +846,13 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
   y_hi <- max(3, max(results_df$all_nothing_theory, na.rm = TRUE) * 1.05)
   sim_study_plots$plot_all_nothing_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_theory)) +
-    geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE, linetype = "True ATE"),
-               color = scales::hue_pal()(3)[1], linewidth = 1) +
-    {if (!is.na(oracle_mean_ate)) geom_hline(yintercept = oracle_mean_ate, linetype = "Oracle mean",
+    geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE),
+               linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+    {if (!is.na(oracle_mean_ate)) geom_hline(yintercept = oracle_mean_ate, linetype = "dotted",
                color = "blue", linewidth = 0.8) } +
-    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle mean" = "dotted")) +
     labs(x = "Method", y = "All-Nothing ATE Estimate") +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     coord_cartesian(ylim = c(y_lo, y_hi))
 }
 
@@ -902,14 +901,13 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
   oracle_mean_tau <- if (nrow(oracle_tau) > 0) mean(oracle_tau$tau_1_estim, na.rm = TRUE) else NA
   sim_study_plots$plot_one_flip_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$tau_1_estim)) +
-    geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip, linetype = "True ATE"),
-               color = scales::hue_pal()(3)[1], linewidth = 1) +
-    {if (!is.na(oracle_mean_tau)) geom_hline(yintercept = oracle_mean_tau, linetype = "Oracle mean",
+    geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip),
+               linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+    {if (!is.na(oracle_mean_tau)) geom_hline(yintercept = oracle_mean_tau, linetype = "dotted",
                color = "blue", linewidth = 0.8) } +
-    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle mean" = "dotted")) +
     labs(x = "Method", y = "Single Flip ATE Estimate") +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
 
 # Draw helpers (grid.arrange objects don't survive save/load)
