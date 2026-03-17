@@ -103,6 +103,10 @@ SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
 SEM_OUTER_MAXIT_BIV   <- if (QUICK_CHECK) 30 else if (TEST_MODE) 100 else 60
 # Keep Decode iterations separate from SEM inner iterations.
 DECODE_ITER <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 200
+env_decode_iter <- suppressWarnings(as.integer(Sys.getenv("OK_DECODE_ITER", "")))
+if (!is.na(env_decode_iter) && env_decode_iter > 0L) {
+  DECODE_ITER <- env_decode_iter
+}
 # Leave Decode capability intact, but default off for long runs unless explicitly enabled.
 RUN_DECODE <- tolower(Sys.getenv("OK_RUN_DECODE", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
@@ -130,6 +134,9 @@ if (!is.finite(BOOT_SEM_INNER_ITER) || is.na(BOOT_SEM_INNER_ITER) || BOOT_SEM_IN
 }
 BOOT_OUTER_CORES_RAW <- Sys.getenv("OK_BOOT_OUTER_CORES", "")
 BOOT_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEED", "")))
+REPORT_FORMATS_RAW <- tolower(trimws(Sys.getenv("OK_REPORT_FORMATS", "html,pdf")))
+REPORT_FORMATS <- unique(trimws(unlist(strsplit(REPORT_FORMATS_RAW, ","))))
+REPORT_FORMATS <- REPORT_FORMATS[REPORT_FORMATS %in% c("html", "pdf")]
 MEMORY_SAFE <- tolower(Sys.getenv("OK_MEMORY_SAFE", "true")) %in% c("1", "true", "yes", "y")
 TRIM_SENS_OBJECTS <- tolower(Sys.getenv("OK_TRIM_SENS_OBJECTS", if (MEMORY_SAFE) "true" else "false")) %in% c("1", "true", "yes", "y")
 SENS_CORES_RAW <- Sys.getenv("OK_SENS_CORES", "")
@@ -2182,35 +2189,54 @@ if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
 
 # Keep report outputs synchronized with the newest results.
 report_file <- file.path(SCRIPT_DIR, "oklahoma_report.qmd")
-if (file.exists(report_file)) {
+if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
   quarto_bin <- Sys.which("quarto")
   if (nzchar(quarto_bin)) {
-    cat("\n--- Rendering report (HTML + PDF) ---\n")
+    cat(sprintf("\n--- Rendering report (%s) ---\n", paste(REPORT_FORMATS, collapse = ", ")))
     old_wd <- getwd()
     setwd(dirname(report_file))
-    render_status <- tryCatch(
-      system2(
-        quarto_bin,
-        c("render", basename(report_file)),
-        stdout = TRUE,
-        stderr = TRUE
-      ),
-      error = function(e) e
-    )
+    render_errors <- character(0)
+    for (fmt in REPORT_FORMATS) {
+      render_status <- tryCatch(
+        system2(
+          quarto_bin,
+          c("render", basename(report_file), "--to", fmt),
+          stdout = TRUE,
+          stderr = TRUE
+        ),
+        error = function(e) e
+      )
+      if (inherits(render_status, "error")) {
+        render_errors <- c(render_errors, sprintf("[%s] %s", fmt, render_status$message))
+      } else if (!is.null(attr(render_status, "status"))) {
+        render_errors <- c(
+          render_errors,
+          sprintf("[%s] exit code %s", fmt, as.character(attr(render_status, "status")))
+        )
+      }
+    }
     setwd(old_wd)
-    if (inherits(render_status, "error")) {
-      cat("Report render error:", render_status$message, "\n")
-    } else if (!is.null(attr(render_status, "status"))) {
-      cat("Report render failed with exit code:", attr(render_status, "status"), "\n")
-      if (length(render_status) > 0) cat(paste(render_status, collapse = "\n"), "\n")
+    if (length(render_errors) > 0L) {
+      cat("Report render failed:\n")
+      cat(paste0("  - ", render_errors, collapse = "\n"), "\n")
     } else {
       cat("Report render complete.\n")
       sync_stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+      report_html_path <- if ("html" %in% REPORT_FORMATS) {
+        normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.html"), winslash = "/", mustWork = FALSE)
+      } else {
+        NA_character_
+      }
+      report_pdf_path <- if ("pdf" %in% REPORT_FORMATS) {
+        normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.pdf"), winslash = "/", mustWork = FALSE)
+      } else {
+        NA_character_
+      }
       stamp_lines <- c(
         paste0("sync_stamp: ", sync_stamp),
         paste0("results_file: ", normalizePath(out_file, winslash = "/", mustWork = FALSE)),
-        paste0("report_html: ", normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.html"), winslash = "/", mustWork = FALSE)),
-        paste0("report_pdf: ", normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.pdf"), winslash = "/", mustWork = FALSE))
+        paste0("report_html: ", report_html_path),
+        paste0("report_pdf: ", report_pdf_path)
       )
       stamp_root <- file.path(OUT_DIR, "last_run_sync_stamp.txt")
       writeLines(stamp_lines, stamp_root)
@@ -2223,6 +2249,8 @@ if (file.exists(report_file)) {
   } else {
     cat("Quarto not found in PATH; skipping report render.\n")
   }
+} else if (file.exists(report_file)) {
+  cat("Report render skipped (OK_REPORT_FORMATS empty).\n")
 }
 
 cat("\n=== Oklahoma Analysis Complete ===\n")
