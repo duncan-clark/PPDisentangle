@@ -124,6 +124,15 @@ echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_IN
 echo "setup_test=$PP_SETUP_TEST"
 echo ""
 
+# Isolate package installs per job to avoid 00LOCK collisions across jobs.
+SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
+JOB_LIB_TAG="${SLURM_JOB_ID:-manual}_$$"
+JOB_R_LIBS_USER="${SHARED_R_LIBS_USER}/jobs/${JOB_LIB_TAG}"
+mkdir -p "$JOB_R_LIBS_USER" "$SHARED_R_LIBS_USER"
+export R_LIBS_USER="${JOB_R_LIBS_USER}:${SHARED_R_LIBS_USER}"
+echo "R_LIBS_USER=$R_LIBS_USER"
+rm -rf "${JOB_R_LIBS_USER}/00LOCK-PPDisentangle" 2>/dev/null || true
+
 module --force purge
 
 TARGET_R_GEO="${PP_R_GEO_MODULE:-R-Geo/4.3.2-foss-2023a}"
@@ -248,6 +257,9 @@ if ! "$RSCRIPT_BIN" -e 'if (!requireNamespace("terra", quietly = TRUE)) quit(sta
   echo "Dependency 'terra' missing; attempting install from CRAN..."
   "$RSCRIPT_BIN" -e 'install.packages("terra", repos = "https://cloud.r-project.org")'
 fi
+
+echo "Ensuring Oklahoma runtime packages are installed..."
+"$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","sf","tigris","data.table","dplyr","ggplot2","pkgload","quarto"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = TRUE)'
 
 echo "Installing PPDisentangle from source (fresh install)..."
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"

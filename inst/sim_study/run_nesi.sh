@@ -148,6 +148,15 @@ echo "PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS | PP_ATE_WORKERS=$PP_ATE_WORKER
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
+# Isolate package installs per job to avoid 00LOCK collisions across jobs.
+SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
+JOB_LIB_TAG="${SLURM_JOB_ID:-manual}_$$"
+JOB_R_LIBS_USER="${SHARED_R_LIBS_USER}/jobs/${JOB_LIB_TAG}"
+mkdir -p "$JOB_R_LIBS_USER" "$SHARED_R_LIBS_USER"
+export R_LIBS_USER="${JOB_R_LIBS_USER}:${SHARED_R_LIBS_USER}"
+echo "R_LIBS_USER=$R_LIBS_USER"
+rm -rf "${JOB_R_LIBS_USER}/00LOCK-PPDisentangle" 2>/dev/null || true
+
 # ---- Load modules ----
 # R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
 module --force purge
@@ -306,6 +315,9 @@ if ! "$RSCRIPT_BIN" -e 'if (!requireNamespace("terra", quietly = TRUE)) quit(sta
     echo "Dependency 'terra' missing; attempting install from CRAN..."
     "$RSCRIPT_BIN" -e 'install.packages("terra", repos = "https://cloud.r-project.org")'
 fi
+
+echo "Ensuring sim-study runtime packages are installed..."
+"$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","sf","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = TRUE)'
 
 echo "Installing PPDisentangle from source (fresh install)..."
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
