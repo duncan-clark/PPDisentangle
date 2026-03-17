@@ -42,8 +42,7 @@ if (TEST) {
   N_TAU_I      <- 3
   N_TAU_I_TRUE <- 5
   N_PROPOSALS  <- 5
-  EM_ITER      <- 5
-  SEM_EM_ADAPTIVE_ITER <- 5
+  SEM_EM_ADAPTIVE_ITER <- 250
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 5
   OMEGA        <- c(0, 100, 0, 100)
@@ -59,8 +58,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 10
-  EM_ITER      <- 1000
-  SEM_EM_ADAPTIVE_ITER <- 1000
+  SEM_EM_ADAPTIVE_ITER <- 250
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -76,8 +74,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 10
   N_PROPOSALS  <- 5
-  EM_ITER      <- 10
-  SEM_EM_ADAPTIVE_ITER <- 10
+  SEM_EM_ADAPTIVE_ITER <- 250
   SEM_N_ITER   <- 10
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -93,8 +90,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 10
   N_PROPOSALS  <- 100
-  EM_ITER      <- 100
-  SEM_EM_ADAPTIVE_ITER <- 200
+  SEM_EM_ADAPTIVE_ITER <- 250
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
   OMEGA        <- c(0, 100, 0, 100)
@@ -240,7 +236,7 @@ ATE_BATCH_SIZE <- if (!is.na(env_ate_batch) && env_ate_batch > 0L) {
   max(ATE_WORKERS, 2L * ATE_WORKERS)
 }
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
-log_msg("EM iter=", EM_ITER, " | SEM adaptive=", SEM_EM_ADAPTIVE_ITER, " outer=", SEM_N_ITER, " labellings=", SEM_N_LABELLINGS)
+log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
         " | param_cadence=", SEM_PARAM_UPDATE_CADENCE,
         " | proposal_cadence=", SEM_PROPOSAL_UPDATE_CADENCE,
@@ -274,7 +270,7 @@ export_globals <- function(cl) {
     "TIME_INT", "state_spaces", "partition_processes",
     "treated_partitions", "treated_state_space",
     "control_state_space", "hawkes_par_1", "hawkes_par_2",
-    "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
+    "N_PROPOSALS", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
     "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
     "SEM_N_PROPS", "SEM_CHANGE_FACTOR",
     "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS"
@@ -440,57 +436,12 @@ pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
 })
 
 # ------------------------------------------------------------------
-# 6. EM-style labelling
-# ------------------------------------------------------------------
-log_msg("Running EM-style labelling ...")
-t0 <- proc.time()[3]
-em_jobs <- lapply(seq_along(obs_data), function(i) {
-  list(i = i, seed = stage_seed(3L, i), data = obs_data[[i]])
-})
-run_em <- function(job) {
-  set.seed(job$seed)
-  x <- job$data
-  total_points <- sum(x$location_process == "treated" & x$t >= TREATMENT_TIME)
-  mu_start     <- total_points / TIME_INT
-  params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
-
-  em_style_labelling(
-    pp_data = x, partition = partition,
-    partition_processes = partition_processes,
-    statespace = OMEGA, state_spaces = state_spaces,
-    time_window = c(TREATMENT_TIME, END_TIME),
-    treatment_time = TREATMENT_TIME,
-    hawkes_params_control = hawkes_par_1,
-    hawkes_params_treated = params_init,
-    param_update_cadence = 10, proposal_update_cadence = 1,
-    update_starting_data = TRUE, include_starting_data = TRUE,
-    metric_name = "post_likelihood", optim_method = "max",
-    iter = EM_ITER, n_props = 10, change_factor = 0.01,
-    MCMC_style = FALSE, verbose = FALSE
-  )
-}
-if (N_CORES > 1 && !SMALL) {
-  EM_max_style <- parLapply(cl = cl, X = em_jobs, fun = run_em)
-} else {
-  EM_max_style <- lapply(em_jobs, run_em)
-}
-log_elapsed("EM-style labelling", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
-
-for (k in seq_along(EM_max_style)) {
-  r <- EM_max_style[[k]]
-  acc <- if (length(r$accuracies) > 0) r$accuracies[length(r$accuracies)] else NA_real_
-  log_msg(sprintf("  EM sim %d: acc=%.3f", k, acc))
-}
-
-pp_labelled_em_post <- lapply(EM_max_style, function(x) x$labelling)
-
-# ------------------------------------------------------------------
 # 7. Adaptive SEM
 # ------------------------------------------------------------------
 log_msg("Running adaptive SEM ...")
 t0 <- proc.time()[3]
 sem_jobs <- lapply(seq_along(obs_data), function(i) {
-  list(i = i, seed = stage_seed(4L, i), data = obs_data[[i]])
+  list(i = i, seed = stage_seed(3L, i), data = obs_data[[i]])
 })
 run_sem <- function(job) {
   set.seed(job$seed)
@@ -529,11 +480,11 @@ if (N_CORES > 1 && !SMALL) {
   EM_results <- lapply(sem_jobs, run_sem)
 }
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
-log_memory("post_EM")
+log_memory("post_SEM")
 
 # Free heavy intermediates that are no longer needed before ATE.
 # Keep pp_labeled_best_proposal because it is still used in downstream summaries.
-rm(labelling_proposals, EM_max_style)
+rm(labelling_proposals)
 gc(verbose = FALSE)
 
 # ------------------------------------------------------------------
@@ -564,8 +515,7 @@ labellings <- list(
   oracle   = pp_labeled_oracle,
   naive    = pp_labeled_naive,
   best     = pp_labeled_best_proposal,
-  EM_style = pp_labelled_em_post,
-  EM_full  = lapply(EM_results, function(x) x$adaptive$adaptive_labelling)
+  SEM_adaptive = lapply(EM_results, function(x) x$adaptive$adaptive_labelling)
 )
 
 # ------------------------------------------------------------------
@@ -616,7 +566,7 @@ for (i in seq_along(EM_results)) {
   post_tmp <- tmp %>% filter(.data$t >= TREATMENT_TIME)
   tasks[[length(tasks) + 1]] <- list(
     x = slim_for_ate(post_tmp),
-    labelling_name = "EM_full_params",
+    labelling_name = "SEM_full",
     hawkes_params = list(
       control = EM_results[[i]]$hawkes_params_control,
       treated = EM_results[[i]]$hawkes_params_treated
@@ -637,12 +587,12 @@ log_msg(sprintf("[CRAZY PARAMS] skip mode: %s (%s)",
 crazy_idx <- integer(0)
 for (k in seq_along(tasks)) {
   tsk <- tasks[[k]]
-  if (tsk$labelling_name == "EM_full_params" && !is.null(tsk$hawkes_params)) {
+  if (tsk$labelling_name == "SEM_full" && !is.null(tsk$hawkes_params)) {
     if (params_are_crazy(tsk$hawkes_params$control, tsk$hawkes_params$treated)) {
       crazy_idx <- c(crazy_idx, k)
       ctrl <- tsk$hawkes_params$control
       treat <- tsk$hawkes_params$treated
-      log_msg(sprintf("[CRAZY PARAMS] task %d (EM_full_params sim %d): control mu=%.2g K=%.3f | treated mu=%.2g K=%.3f",
+      log_msg(sprintf("[CRAZY PARAMS] task %d (SEM_full sim %d): control mu=%.2g K=%.3f | treated mu=%.2g K=%.3f",
         k, ((k - 1) %% SIM_SIZE) + 1,
         ctrl$mu, ctrl$K, treat$mu, treat$K))
     }
@@ -852,7 +802,7 @@ if (!is.null(control_params_df) && nrow(control_params_df) > 0) {
     ggplot(tmp) +
       geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
       geom_hline(yintercept = hawkes_par_1[[p]], linetype = "dashed", color = "red") +
-      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = median(oracle_vals$value), linetype = "dotted", color = "blue") } +
+      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
       labs(x = "Method", y = paste0(p, " estimate")) +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -874,7 +824,7 @@ if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
     ggplot(tmp) +
       geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
       geom_hline(yintercept = hawkes_par_2[[p]], linetype = "dashed", color = "red") +
-      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = median(oracle_vals$value), linetype = "dotted", color = "blue") } +
+      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
       labs(x = "Method", y = paste0(p, " estimate")) +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -888,19 +838,19 @@ if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
 # All-nothing ATE boxplot
 if (!is.null(results_df) && nrow(results_df) > 0) {
   results_df$labelling <- factor(results_df$labelling,
-    levels = unique(c("oracle", "naive", "best", "EM_style", "EM_full", "EM_full_params", results_df$labelling)))
+    levels = unique(c("oracle", "naive", "best", "SEM_adaptive", "SEM_full", results_df$labelling)))
   lines_data_ate <- data.frame(all_nothing_ATE = all_nothing_ATE)
   oracle_ate <- results_df %>% filter(.data$labelling == "oracle")
-  oracle_median_ate <- if (nrow(oracle_ate) > 0) median(oracle_ate$all_nothing_theory, na.rm = TRUE) else NA
+  oracle_mean_ate <- if (nrow(oracle_ate) > 0) mean(oracle_ate$all_nothing_theory, na.rm = TRUE) else NA
   y_lo <- min(all_nothing_ATE * 1.5, min(results_df$all_nothing_theory, na.rm = TRUE) * 0.95)
   y_hi <- max(3, max(results_df$all_nothing_theory, na.rm = TRUE) * 1.05)
   sim_study_plots$plot_all_nothing_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_theory)) +
     geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE, linetype = "True ATE"),
                color = scales::hue_pal()(3)[1], linewidth = 1) +
-    {if (!is.na(oracle_median_ate)) geom_hline(aes(yintercept = oracle_median_ate, linetype = "Oracle median"),
+    {if (!is.na(oracle_mean_ate)) geom_hline(yintercept = oracle_mean_ate, linetype = "Oracle mean",
                color = "blue", linewidth = 0.8) } +
-    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle median" = "dotted")) +
+    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle mean" = "dotted")) +
     labs(x = "Method", y = "All-Nothing ATE Estimate") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
@@ -931,7 +881,7 @@ if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
   oracle_means_pts <- ate_detail_rows %>%
     filter(.data$labelling == "oracle") %>%
     group_by(.data$method) %>%
-    summarize(mean_ATE = median(.data$ATE_estim), .groups = "drop")
+    summarize(mean_ATE = mean(.data$ATE_estim, na.rm = TRUE), .groups = "drop")
   sim_study_plots$plot_points_per_tile <- ggplot(ate_detail_rows, aes(x = .data$labelling, y = .data$ATE_estim, fill = .data$method)) +
     geom_boxplot() +
     facet_wrap(~ method) +
@@ -949,14 +899,14 @@ if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
 if (!is.null(results_df) && nrow(results_df) > 0) {
   lines_data_tau <- data.frame(true_1_flip = true_tau_1)
   oracle_tau <- results_df %>% filter(.data$labelling == "oracle")
-  oracle_median_tau <- if (nrow(oracle_tau) > 0) median(oracle_tau$tau_1_estim, na.rm = TRUE) else NA
+  oracle_mean_tau <- if (nrow(oracle_tau) > 0) mean(oracle_tau$tau_1_estim, na.rm = TRUE) else NA
   sim_study_plots$plot_one_flip_ATE <- ggplot(results_df) +
     geom_boxplot(aes(x = .data$labelling, y = .data$tau_1_estim)) +
     geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip, linetype = "True ATE"),
                color = scales::hue_pal()(3)[1], linewidth = 1) +
-    {if (!is.na(oracle_median_tau)) geom_hline(aes(yintercept = oracle_median_tau, linetype = "Oracle median"),
+    {if (!is.na(oracle_mean_tau)) geom_hline(yintercept = oracle_mean_tau, linetype = "Oracle mean",
                color = "blue", linewidth = 0.8) } +
-    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle median" = "dotted")) +
+    scale_linetype_manual(name = "", values = c("True ATE" = "solid", "Oracle mean" = "dotted")) +
     labs(x = "Method", y = "Single Flip ATE Estimate") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
@@ -1078,7 +1028,7 @@ sim_study_results <- list(
   sem_diagnostics = sem_diagnostics_df,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
-    N_PROPOSALS = N_PROPOSALS, EM_ITER = EM_ITER,
+    N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,

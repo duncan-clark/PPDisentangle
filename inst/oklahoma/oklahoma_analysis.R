@@ -90,6 +90,10 @@ env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER"
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
   SEM_INNER_ITER <- env_sem_inner_iter
 }
+SENS_SEM_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_SENS_SEM_INNER_ITER", as.character(SEM_INNER_ITER))))
+if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_INNER_ITER < 1L) {
+  SENS_SEM_INNER_ITER <- SEM_INNER_ITER
+}
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_CHANGE_FACTOR <- 0.01
 SEM_TEMPORAL_WEIGHT <- if (QUICK_CHECK) 0.2 else if (TEST_MODE) 0.4 else 0.6
@@ -126,6 +130,10 @@ if (!is.finite(BOOT_SEM_INNER_ITER) || is.na(BOOT_SEM_INNER_ITER) || BOOT_SEM_IN
 }
 BOOT_OUTER_CORES_RAW <- Sys.getenv("OK_BOOT_OUTER_CORES", "")
 BOOT_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEED", "")))
+MEMORY_SAFE <- tolower(Sys.getenv("OK_MEMORY_SAFE", "true")) %in% c("1", "true", "yes", "y")
+TRIM_SENS_OBJECTS <- tolower(Sys.getenv("OK_TRIM_SENS_OBJECTS", if (MEMORY_SAFE) "true" else "false")) %in% c("1", "true", "yes", "y")
+SENS_CORES_RAW <- Sys.getenv("OK_SENS_CORES", "")
+ATE_SIM_CORES_RAW <- Sys.getenv("OK_ATE_SIM_CORES", "")
 
 etas_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 
@@ -133,17 +141,83 @@ etas_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 # - defaults to all local cores minus one
 # - can be overridden via OK_CORES
 default_local_cores <- max(1L, parallel::detectCores() - 1L)
-N_CORES <- as.integer(Sys.getenv("OK_CORES", default_local_cores))
+OK_CORES_RAW <- Sys.getenv("OK_CORES", "")
+N_CORES <- as.integer(ifelse(nzchar(OK_CORES_RAW), OK_CORES_RAW, default_local_cores))
 N_CORES <- max(1L, min(N_CORES, parallel::detectCores()))
-BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(N_CORES))))
+if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
+  N_CORES <- min(N_CORES, 4L)
+}
+BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
+BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
 BOOT_OUTER_CORES <- max(1L, min(BOOT_OUTER_CORES, N_CORES))
+SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
+SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
+if (!is.finite(SENS_CORES) || is.na(SENS_CORES) || SENS_CORES < 1L) SENS_CORES <- 1L
+SENS_CORES <- max(1L, min(SENS_CORES, N_CORES))
+ATE_SIM_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
+ATE_SIM_CORES <- suppressWarnings(as.integer(ifelse(nzchar(ATE_SIM_CORES_RAW), ATE_SIM_CORES_RAW, as.character(ATE_SIM_CORES_DEFAULT))))
+if (!is.finite(ATE_SIM_CORES) || is.na(ATE_SIM_CORES) || ATE_SIM_CORES < 1L) ATE_SIM_CORES <- 1L
+ATE_SIM_CORES <- max(1L, min(ATE_SIM_CORES, N_CORES))
+PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
+  "OK_PARALLEL_BACKEND",
+  if (MEMORY_SAFE) "psock" else "fork"
+)))
+if (!PARALLEL_BACKEND %in% c("fork", "psock", "sequential")) PARALLEL_BACKEND <- "psock"
+
+run_parallel <- function(X, FUN, cores, label = "job") {
+  n <- length(X)
+  cores_use <- max(1L, min(as.integer(cores), as.integer(n)))
+  if (n <= 1L || cores_use <= 1L || identical(PARALLEL_BACKEND, "sequential")) {
+    return(lapply(X, FUN))
+  }
+  if (identical(PARALLEL_BACKEND, "fork")) {
+    return(parallel::mclapply(X, FUN, mc.cores = cores_use))
+  }
+  cl <- parallel::makePSOCKcluster(cores_use)
+  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+  if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
+    parallel::clusterExport(cl, varlist = c("REPO_DIR"), envir = .GlobalEnv)
+  }
+  parallel::clusterEvalQ(cl, {
+    suppressPackageStartupMessages({
+      library(spatstat)
+      library(sf)
+      library(tigris)
+      library(data.table)
+      library(dplyr)
+      library(ggplot2)
+      library(parallel)
+    })
+    if (exists("REPO_DIR", inherits = TRUE) && requireNamespace("pkgload", quietly = TRUE)) {
+      try(pkgload::load_all(REPO_DIR, quiet = TRUE, export_all = TRUE, helpers = FALSE, attach_testthat = FALSE),
+          silent = TRUE)
+    }
+    NULL
+  })
+  worker_globals <- ls(envir = .GlobalEnv, all.names = TRUE)
+  if (length(worker_globals) > 0L) {
+    parallel::clusterExport(cl, varlist = worker_globals, envir = .GlobalEnv)
+  }
+  tryCatch(
+    parallel::parLapply(cl, X, FUN),
+    error = function(e) {
+      warning(sprintf("PSOCK failed for %s; falling back to sequential: %s", label, e$message))
+      lapply(X, FUN)
+    }
+  )
+}
 
 mode_label <- if (QUICK_CHECK) "QUICK_CHECK" else if (TEST_MODE) "TEST" else "FULL"
 cat("=== Oklahoma County-Based ETAS Analysis ===\n")
 cat(sprintf("Mode: %s | SEM iters: %d | Change factor: %.3f | Cores: %d\n",
             mode_label, SEM_N_ITER, SEM_CHANGE_FACTOR,
             N_CORES))
+cat(sprintf("Memory safe: %s | Sens cores: %d | ATE sim cores: %d | Boot outer cores: %d | Trim sensitivity objects: %s\n",
+            MEMORY_SAFE, SENS_CORES, ATE_SIM_CORES, BOOT_OUTER_CORES, TRIM_SENS_OBJECTS))
+cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
+cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
+            SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
 
 # ============================================================================
 # 1. Data loading
@@ -466,9 +540,9 @@ if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1) {
     list(id = "control", realiz = naive_control, zbr = treated_ss),
     list(id = "treated", realiz = naive_treated, zbr = control_ss)
   )
-  init_out <- parallel::mclapply(init_jobs, function(j) {
+  init_out <- run_parallel(init_jobs, function(j) {
     list(id = j$id, fit = fit_best_indep(j$realiz, j$zbr, VANILLA_STARTS, VANILLA_MAXIT))
-  }, mc.cores = min(2L, N_CORES))
+  }, cores = min(2L, N_CORES), label = "indep-init")
   fitA_ctrl <- init_out[[which(vapply(init_out, function(z) z$id == "control", logical(1)))]]$fit
   fitA_treat <- init_out[[which(vapply(init_out, function(z) z$id == "treated", logical(1)))]]$fit
 } else {
@@ -1028,9 +1102,10 @@ run_one_fit_job <- function(tag) {
 
 if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(fit_jobs) > 1) {
   # Single outer parallel layer only.
-  fit_out <- parallel::mclapply(
+  fit_out <- run_parallel(
     fit_jobs, run_one_fit_job,
-    mc.cores = min(length(fit_jobs), N_CORES)
+    cores = min(length(fit_jobs), N_CORES),
+    label = "fit-jobs"
   )
 } else {
   fit_out <- lapply(fit_jobs, run_one_fit_job)
@@ -1147,6 +1222,7 @@ run_kde_bandwidth_fit <- function(spec) {
       state_spaces_in = state_spaces,
       init_params_in = biv_init_local,
       background_rate_var_in = "W",
+      sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("BW %s Fit F", bw_label)
     )
@@ -1399,20 +1475,37 @@ run_biv_for_partition <- function(part_info) {
       state_spaces_in = p_state_spaces,
       init_params_in = biv_init_sem_p,
       background_rate_var_in = "W",
+      sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("Partition %s Fit F", label)
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom SEM error: %s\n", label, e$message)); NULL })
 
   F_params_p <- if (!is.null(semF_p)) semF_p$etas_bivariate_params else biv_init_sem_p
+  pp_post_sem_p <- if (!is.null(semF_p) && !is.null(semF_p$adaptive$adaptive_labelling)) {
+    semF_p$adaptive$adaptive_labelling
+  } else {
+    pp_post_p_bg
+  }
+  pp_post_sem_p <- pp_post_sem_p[pp_post_sem_p$t >= 0, ]
+  n_relabel_p <- if (!is.null(semF_p) && !is.null(semF_p$adaptive$adaptive_labelling)) {
+    lp <- semF_p$adaptive$adaptive_labelling
+    lp <- lp[lp$t >= 0, , drop = FALSE]
+    sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+  } else { 0L }
 
   cat(sprintf("    [%s] E params: %s\n", label,
               paste(biv_names, round(E_params_p, 4), sep = "=", collapse = ", ")))
   cat(sprintf("    [%s] F params: %s\n", label,
               paste(biv_names, round(F_params_p, 4), sep = "=", collapse = ", ")))
 
-  list(label = label, fitE = fitE_p, E_params = E_params_p,
-       semF = semF_p, F_params = F_params_p,
+  list(label = label,
+       fitE = if (TRIM_SENS_OBJECTS) NULL else fitE_p,
+       E_params = E_params_p,
+       semF = if (TRIM_SENS_OBJECTS) NULL else semF_p,
+       F_params = F_params_p,
+       pp_post_sem = pp_post_sem_p,
+       n_relabel = as.integer(n_relabel_p),
        n_tiles = part_info$partition$n,
        n_treated = sum(p_treated_idx),
        n_post_ctrl = sum(pp_post_p$location_process == "control"),
@@ -1438,9 +1531,10 @@ run_sensitivity_job <- function(job) {
 }
 
 if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(sensitivity_jobs) > 1) {
-  sens_out <- parallel::mclapply(
+  sens_out <- run_parallel(
     sensitivity_jobs, run_sensitivity_job,
-    mc.cores = min(N_CORES, length(sensitivity_jobs))
+    cores = min(SENS_CORES, length(sensitivity_jobs)),
+    label = "sensitivity"
   )
 } else {
   if ((TEST_MODE || QUICK_CHECK) && length(sensitivity_jobs) > 1) {
@@ -1462,6 +1556,8 @@ partition_results <- lapply(sapply(all_partitions, `[[`, "label"), function(lbl)
   sens_out[[idx[1]]]$out
 })
 names(partition_results) <- sapply(all_partitions, `[[`, "label")
+rm(sens_out)
+invisible(gc(verbose = FALSE))
 
 # ============================================================================
 # 5c. SEM diagnostic plots
@@ -1549,9 +1645,10 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
       c(c_count = length(c_sim$t), t_count = length(t_sim$t))
     }
     sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
-      parallel::mclapply(
-        seq_len(ATE_N_SIMS), run_one_sim,
-        mc.cores = min(N_CORES, ATE_N_SIMS)
+      run_parallel(
+        as.list(seq_len(ATE_N_SIMS)), run_one_sim,
+        cores = min(ATE_SIM_CORES, ATE_N_SIMS),
+        label = "ate-sim"
       )
     } else {
       lapply(seq_len(ATE_N_SIMS), run_one_sim)
@@ -1772,8 +1869,11 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   }
 
   boot_results <- if (BOOT_OUTER_CORES > 1L && BOOT_N_REPS > 1L) {
-    parallel::mclapply(seq_len(BOOT_N_REPS), run_boot_rep,
-                       mc.cores = min(BOOT_OUTER_CORES, BOOT_N_REPS))
+    run_parallel(
+      as.list(seq_len(BOOT_N_REPS)), run_boot_rep,
+      cores = min(BOOT_OUTER_CORES, BOOT_N_REPS),
+      label = "bootstrap"
+    )
   } else {
     lapply(seq_len(BOOT_N_REPS), run_boot_rep)
   }
@@ -1817,6 +1917,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   )
   if ("E" %in% boot_targets_run) bootstrap_ate$fit_E <- make_boot_block("E")
   if ("F" %in% boot_targets_run) bootstrap_ate$fit_F <- make_boot_block("F")
+rm(boot_results)
+invisible(gc(verbose = FALSE))
 
   if (!is.null(bootstrap_ate$fit_E)) {
     bE <- bootstrap_ate$fit_E$replicate_summary
@@ -1887,7 +1989,9 @@ ate_partitions <- lapply(partition_results, function(pr) {
                          part_info$state_spaces$treated, lambda_im)$new_df
   )
   pp_post_part_bg <- pp_post_part_bg[order(pp_post_part_bg$t), ]
-  pp_post_sem_part <- if (!is.null(pr$semF) && !is.null(pr$semF$adaptive$adaptive_labelling)) {
+  pp_post_sem_part <- if (!is.null(pr$pp_post_sem)) {
+    pr$pp_post_sem
+  } else if (!is.null(pr$semF) && !is.null(pr$semF$adaptive$adaptive_labelling)) {
     pr$semF$adaptive$adaptive_labelling
   } else {
     pp_post_part_bg
@@ -2034,6 +2138,10 @@ results <- list(
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
+    MEMORY_SAFE = MEMORY_SAFE,
+    TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
+    SENS_CORES = SENS_CORES,
+    ATE_SIM_CORES = ATE_SIM_CORES,
     DECODE_ITER = DECODE_ITER,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
