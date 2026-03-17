@@ -243,16 +243,31 @@ ensure_r_binaries() {
         return 0
     fi
 
-    echo "R binaries not found after R-Geo load; trying explicit R module fallbacks..."
+    echo "R binaries not found after initial R-Geo load; retrying with module chain fallbacks..."
     local target_r=""
+    local target_rgeo="$TARGET_R_GEO"
     if [[ "$TARGET_R_GEO" =~ ^R-Geo/(.+)$ ]]; then
         target_r="R/${BASH_REMATCH[1]}"
     else
         target_r="R/4.3.2-foss-2023a"
     fi
 
-    # Keep this order identical across launchers.
-    if module load "$target_r" >/dev/null 2>&1; then
+    # First, prefer a clean R-Geo stack so geospatial deps (e.g., terra) remain available.
+    if module --force purge >/dev/null 2>&1 \
+        && module load NeSI/zen3 >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    elif module --force purge >/dev/null 2>&1 \
+        && module load foss/2023a >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    elif module --force purge >/dev/null 2>&1 \
+        && module load NeSI/zen3 >/dev/null 2>&1 \
+        && module load foss/2023a >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    # If that still doesn't expose R binaries, fall back to explicit R module.
+    elif module load "$target_r" >/dev/null 2>&1; then
         :
     elif module load NeSI/zen3 >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
         :
@@ -286,12 +301,15 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-# ---- Install package if needed ----
-if ! "$RSCRIPT_BIN" -e 'library(PPDisentangle)' 2>/dev/null; then
-    echo "Installing PPDisentangle from source..."
-    "$R_BIN" CMD INSTALL --no-multiarch "$PKG_ROOT" 2>&1 | tail -5
-    echo ""
+# ---- Fresh install package every run ----
+if ! "$RSCRIPT_BIN" -e 'if (!requireNamespace("terra", quietly = TRUE)) quit(status = 1)' >/dev/null 2>&1; then
+    echo "Dependency 'terra' missing; attempting install from CRAN..."
+    "$RSCRIPT_BIN" -e 'install.packages("terra", repos = "https://cloud.r-project.org")'
 fi
+
+echo "Installing PPDisentangle from source (fresh install)..."
+"$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
+echo ""
 
 # ---- Run simulation study ----
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
