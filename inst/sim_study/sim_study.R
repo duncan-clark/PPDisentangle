@@ -531,8 +531,9 @@ if (N_CORES > 1 && !SMALL) {
 log_elapsed("Adaptive SEM", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 log_memory("post_EM")
 
-# Free heavy intermediate objects before ATE to reduce peak resident memory.
-rm(labelling_proposals, pp_labeled_best_proposal, EM_max_style)
+# Free heavy intermediates that are no longer needed before ATE.
+# Keep pp_labeled_best_proposal because it is still used in downstream summaries.
+rm(labelling_proposals, EM_max_style)
 gc(verbose = FALSE)
 
 # ------------------------------------------------------------------
