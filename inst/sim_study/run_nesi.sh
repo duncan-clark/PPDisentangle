@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time=72:00:00
-#SBATCH --mem=200G
+#SBATCH --mem=48G
 
 # ---- NeSI / Mahuika notes ----
 # Partition is auto-selected by Slurm based on resources requested.
@@ -28,10 +28,12 @@ set -euo pipefail
 # ---- Parse arguments ----
 PP_SIMS="${PP_SIMS:-}"
 PP_TEST=""
+PP_MEM="${PP_MEM:-}"
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --sims) PP_SIMS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
+        --mem) PP_MEM="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
@@ -55,6 +57,15 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     git pull origin main 2>/dev/null || true
 
     CPUS="$PP_SIMS"
+    MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-1}"
+    MEM_MAX_GB="${PP_MEM_MAX_GB:-48}"
+    MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
+    if [ -z "$PP_MEM" ]; then
+        MEM_GB=$(( CPUS * MEM_PER_CORE_GB ))
+        [ "$MEM_GB" -lt "$MEM_MIN_GB" ] && MEM_GB="$MEM_MIN_GB"
+        [ "$MEM_GB" -gt "$MEM_MAX_GB" ] && MEM_GB="$MEM_MAX_GB"
+        PP_MEM="${MEM_GB}G"
+    fi
     # Robust defaults for the heavy ATE stage.
     if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
         PP_SKIP_CRAZY_PARAMS=1
@@ -72,7 +83,10 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 
     # Test mode: minimal resources for fast scheduling
     if [ -n "$PP_TEST" ]; then
-        EXTRA_SBATCH="--time=00:15:00 --mem=4G"
+        EXTRA_SBATCH="--time=00:15:00"
+        if [ -z "${PP_MEM:-}" ]; then
+            PP_MEM="4G"
+        fi
     # large partition: max 72 CPUs/node; milan: up to 256 CPUs/node
     elif [ "$CPUS" -gt 72 ]; then
         if [ "$CPUS" -gt 256 ]; then
@@ -83,7 +97,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition (256 CPUs/node)"
     fi
 
-    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core)${PP_TEST:+, test mode (15 min, 4G)}"
+    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core), mem=$PP_MEM${PP_TEST:+, test mode (15 min)}"
     echo "Robust defaults: PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS  PP_ATE_WORKERS=$PP_ATE_WORKERS  PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
 
     mkdir -p "$PKG_ROOT/cluster_output"
@@ -95,6 +109,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
+        --mem="$PP_MEM" \
         $EXTRA_SBATCH \
         --export="$SBATCH_EXPORT" \
         --output="$PKG_ROOT/cluster_output/%j_slurm.out" \

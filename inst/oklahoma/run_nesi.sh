@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time=72:00:00
-#SBATCH --mem=200G
+#SBATCH --mem=48G
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ PP_SEM_INNER="${PP_SEM_INNER:-100}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
 PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
-PP_MEM="${PP_MEM:-200G}"
+PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
 
@@ -36,6 +36,16 @@ while [[ "$#" -gt 0 ]]; do
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-1}"
+MEM_MAX_GB="${PP_MEM_MAX_GB:-48}"
+MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
+if [ -z "$PP_MEM" ]; then
+  MEM_GB=$(( PP_CORES * MEM_PER_CORE_GB ))
+  [ "$MEM_GB" -lt "$MEM_MIN_GB" ] && MEM_GB="$MEM_MIN_GB"
+  [ "$MEM_GB" -gt "$MEM_MAX_GB" ] && MEM_GB="$MEM_MAX_GB"
+  PP_MEM="${MEM_GB}G"
+fi
 
 if [ -z "$PP_BOOT_REPS" ]; then
   PP_BOOT_REPS="$PP_CORES"
