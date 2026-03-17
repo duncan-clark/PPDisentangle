@@ -186,27 +186,23 @@ ensure_r_binaries() {
 
   echo "R binaries not found after R-Geo load; trying explicit R module fallbacks..."
   local target_r=""
-  local loaded=0
-  local cand
-
-  # Try exact toolchain-matched R module inferred from TARGET_R_GEO.
-  # Example: R-Geo/4.3.2-foss-2023a -> R/4.3.2-foss-2023a
-  if [[ "$TARGET_R_GEO" =~ ^R-Geo/([0-9]+\.[0-9]+\.[0-9]+-[^-]+-[0-9]{4}[a-z]?)$ ]]; then
+  if [[ "$TARGET_R_GEO" =~ ^R-Geo/(.+)$ ]]; then
     target_r="R/${BASH_REMATCH[1]}"
-    if module load "$target_r" >/dev/null 2>&1; then
-      loaded=1
-    fi
+  else
+    target_r="R/4.3.2-foss-2023a"
   fi
 
-  # Fall back to discovered R/* modules if still missing.
-  if [ "$loaded" -ne 1 ]; then
-    mapfile -t R_CANDIDATES < <(module -t avail R 2>&1 | awk '/^R\//{print $1}' | sort -Vr | uniq)
-    for cand in "${R_CANDIDATES[@]}"; do
-      if module load "$cand" >/dev/null 2>&1; then
-        loaded=1
-        break
-      fi
-    done
+  # Keep this order identical across launchers.
+  if module load "$target_r" >/dev/null 2>&1; then
+    :
+  elif module load NeSI/zen3 >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+    :
+  elif module load foss/2023a >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+    :
+  elif module load NeSI/zen3 >/dev/null 2>&1 && module load foss/2023a >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+    :
+  else
+    return 1
   fi
 
   command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1

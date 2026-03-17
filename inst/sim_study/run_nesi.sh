@@ -238,20 +238,63 @@ fi
 echo "R: $(which R) ($(R --version | head -1))"
 echo ""
 
+ensure_r_binaries() {
+    if command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "R binaries not found after R-Geo load; trying explicit R module fallbacks..."
+    local target_r=""
+    if [[ "$TARGET_R_GEO" =~ ^R-Geo/(.+)$ ]]; then
+        target_r="R/${BASH_REMATCH[1]}"
+    else
+        target_r="R/4.3.2-foss-2023a"
+    fi
+
+    # Keep this order identical across launchers.
+    if module load "$target_r" >/dev/null 2>&1; then
+        :
+    elif module load NeSI/zen3 >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+        :
+    elif module load foss/2023a >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+        :
+    elif module load NeSI/zen3 >/dev/null 2>&1 && module load foss/2023a >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
+        :
+    else
+        return 1
+    fi
+
+    command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1
+}
+
+if ! ensure_r_binaries; then
+    echo "ERROR: R and/or Rscript not found on PATH after module setup."
+    echo "Diagnostics:"
+    module list 2>&1 || true
+    module spider R 2>&1 || true
+    exit 1
+fi
+
+R_BIN="$(command -v R)"
+RSCRIPT_BIN="$(command -v Rscript)"
+echo "Resolved R: $R_BIN ($("$R_BIN" --version | head -1))"
+echo "Resolved Rscript: $RSCRIPT_BIN"
+echo ""
+
 # Prevent nested threading from stealing CPUs
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 # ---- Install package if needed ----
-if ! Rscript -e 'library(PPDisentangle)' 2>/dev/null; then
+if ! "$RSCRIPT_BIN" -e 'library(PPDisentangle)' 2>/dev/null; then
     echo "Installing PPDisentangle from source..."
-    R CMD INSTALL --no-multiarch "$PKG_ROOT" 2>&1 | tail -5
+    "$R_BIN" CMD INSTALL --no-multiarch "$PKG_ROOT" 2>&1 | tail -5
     echo ""
 fi
 
 # ---- Run simulation study ----
-Rscript "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
+"$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
 
 echo ""
 echo "=== Done $(date) ==="
