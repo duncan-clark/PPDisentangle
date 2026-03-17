@@ -42,7 +42,7 @@ if (TEST) {
   N_TAU_I      <- 3
   N_TAU_I_TRUE <- 5
   N_PROPOSALS  <- 5
-  SEM_EM_ADAPTIVE_ITER <- 250
+  SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 5
   OMEGA        <- c(0, 100, 0, 100)
@@ -58,7 +58,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 100
   N_PROPOSALS  <- 10
-  SEM_EM_ADAPTIVE_ITER <- 250
+  SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -74,7 +74,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 10
   N_PROPOSALS  <- 5
-  SEM_EM_ADAPTIVE_ITER <- 250
+  SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 10
   SEM_N_LABELLINGS <- 10
   OMEGA        <- c(0, 100, 0, 100)
@@ -90,7 +90,7 @@ if (TEST) {
   N_TAU_I      <- 10
   N_TAU_I_TRUE <- 10
   N_PROPOSALS  <- 100
-  SEM_EM_ADAPTIVE_ITER <- 250
+  SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER   <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
   OMEGA        <- c(0, 100, 0, 100)
