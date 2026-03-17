@@ -144,7 +144,7 @@ echo "Requested R-Geo module: $TARGET_R_GEO"
 
 try_load_rgeo() {
     local mod="$1"
-    if module load "$mod"; then
+    if module load "$mod" >/dev/null 2>&1; then
         echo "Loaded module: $mod"
         return 0
     fi
@@ -161,7 +161,7 @@ try_load_rgeo_with_toolchain() {
     tc_mod="${tc_name}/${tc_ver}"
     if [ -n "$tc_name" ] && [ -n "$tc_ver" ] && [ "$tc_name" != "$tc_ver" ]; then
         echo "Trying toolchain + R-Geo: $tc_mod -> $mod"
-        if module load "$tc_mod" && module load "$mod"; then
+        if module load "$tc_mod" >/dev/null 2>&1 && module load "$mod" >/dev/null 2>&1; then
             echo "Loaded module chain: $tc_mod + $mod"
             return 0
         fi

@@ -274,7 +274,10 @@ export_globals <- function(cl) {
     "TIME_INT", "state_spaces", "partition_processes",
     "treated_partitions", "treated_state_space",
     "control_state_space", "hawkes_par_1", "hawkes_par_2",
-    "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS"
+    "N_PROPOSALS", "EM_ITER", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
+    "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
+    "SEM_N_PROPS", "SEM_CHANGE_FACTOR",
+    "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS"
   ), envir = .GlobalEnv)
 }
 
