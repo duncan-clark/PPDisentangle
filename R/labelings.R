@@ -923,11 +923,8 @@ em_style_labelling <- function(pp_data,
             model_type = model_type, ...
           )
         })
-        labelling_proposals <- lapply(post_proposals, function(tmp) {
-          tmp <- as.data.frame(tmp)
-          tmp <- tmp[order(tmp$t), , drop = FALSE]
-          tmp
-        })
+        # Proposals preserve post_data ordering; avoid redundant per-proposal sort.
+        labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
     }
     include_starting_this_iter <- isTRUE(include_starting_data) && !isTRUE(trigger_explore)
@@ -944,9 +941,10 @@ em_style_labelling <- function(pp_data,
 
     current_post_ip <- post_data$inferred_process
     flips_per_proposal <- vapply(labelling_proposals, function(y) {
-      y_post <- y[order(y$t), , drop = FALSE]
-      sum(current_post_ip != y_post$inferred_process)
+      sum(current_post_ip != y$inferred_process)
     }, numeric(1))
+    proposal_ctrl_idx <- lapply(labelling_proposals, function(y) which(y$inferred_process == "control"))
+    proposal_treat_idx <- lapply(labelling_proposals, function(y) which(y$inferred_process == "treated"))
 
     class_results <- c(class_results, lapply(labelling_proposals, function(d) {
       class_func(d)
@@ -996,52 +994,53 @@ em_style_labelling <- function(pp_data,
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
       printed_metric_diag <- FALSE
-      eval_nonbiv <- function(realiz) {
-
-        ctrl_rows <- realiz$inferred_process == "control"
-        if (!any(ctrl_rows)) return(-Inf)
+      eval_nonbiv <- function(realiz, ctrl_idx, treat_idx) {
+        if (length(ctrl_idx) < 1L) return(-Inf)
         control_lik <- loglik_fn(
-          params = ctrl_params_vec, realiz = realiz[ctrl_rows, ],
+          params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
           windowT = time_window, windowS = statespace,
           precomp = list(active_area = pc_ctrl_all$active_area,
-                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_rows]), ...
+                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
         )
 
-        treat_rows <- !ctrl_rows
-        if (!any(treat_rows)) return(-Inf)
+        if (length(treat_idx) < 1L) return(-Inf)
         treat_lik <- loglik_fn(
-          params = treat_params_vec, realiz = realiz[treat_rows, ],
+          params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
           windowT = time_window, windowS = statespace,
           precomp = list(active_area = pc_treat_all$active_area,
-                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_rows]), ...
+                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
         )
         if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
-                      sum(ctrl_rows), sum(treat_rows), signif(control_lik, 6), signif(treat_lik, 6)))
+                      length(ctrl_idx), length(treat_idx), signif(control_lik, 6), signif(treat_lik, 6)))
           cat(sprintf("    ctrl params: %s\n", paste(names(ctrl_params_vec), signif(ctrl_params_vec, 5), sep="=", collapse="  ")))
           cat(sprintf("    treat params: %s\n", paste(names(treat_params_vec), signif(treat_params_vec, 5), sep="=", collapse="  ")))
           cat(sprintf("    pc_ctrl active_area=%.1f  pc_treat active_area=%.1f\n",
                       pc_ctrl_all$active_area, pc_treat_all$active_area))
           cat(sprintf("    in_zero_bg ctrl: %d of %d TRUE  treat: %d of %d TRUE\n",
-                      sum(pc_ctrl_all$in_zero_bg_all[ctrl_rows]), sum(ctrl_rows),
-                      sum(pc_treat_all$in_zero_bg_all[treat_rows]), sum(treat_rows)))
-          ctrl_sub <- realiz[ctrl_rows, ]
+                      sum(pc_ctrl_all$in_zero_bg_all[ctrl_idx]), length(ctrl_idx),
+                      sum(pc_treat_all$in_zero_bg_all[treat_idx]), length(treat_idx)))
+          ctrl_sub <- realiz[ctrl_idx, , drop = FALSE]
           cat(sprintf("    ctrl W range: [%s, %s]  treat W range: [%s, %s]\n",
                       signif(min(ctrl_sub$W, na.rm=TRUE), 4), signif(max(ctrl_sub$W, na.rm=TRUE), 4),
-                      signif(min(realiz[treat_rows, "W"], na.rm=TRUE), 4),
-                      signif(max(realiz[treat_rows, "W"], na.rm=TRUE), 4)))
+                      signif(min(realiz[treat_idx, "W"], na.rm=TRUE), 4),
+                      signif(max(realiz[treat_idx, "W"], na.rm=TRUE), 4)))
           printed_metric_diag <<- TRUE
         }
         control_lik + treat_lik
       }
       if (length(unchanged_idx) > 0) {
-        if (!is.finite(current_metric_cache)) current_metric_cache <- eval_nonbiv(ref_post)
+        if (!is.finite(current_metric_cache)) {
+          ref_ctrl_idx <- which(ref_post$inferred_process == "control")
+          ref_treat_idx <- which(ref_post$inferred_process == "treated")
+          current_metric_cache <- eval_nonbiv(ref_post, ref_ctrl_idx, ref_treat_idx)
+        }
         metric[unchanged_idx] <- current_metric_cache
       }
       if (length(changed_idx) > 0) {
         metric[changed_idx] <- vapply(changed_idx, function(j) {
           y <- labelling_proposals[[j]]
-          eval_nonbiv(y)
+          eval_nonbiv(y, proposal_ctrl_idx[[j]], proposal_treat_idx[[j]])
         }, numeric(1))
       }
       } # end non-bivariate metric
