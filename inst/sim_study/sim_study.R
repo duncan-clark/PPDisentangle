@@ -22,6 +22,8 @@ args <- commandArgs(trailingOnly = TRUE)
 SMALL <- "--small" %in% args
 FORCE_CLUSTER <- "--cluster" %in% args
 TEST <- "--test" %in% args
+MODE_ENV <- tolower(trimws(Sys.getenv("PP_MODE", "")))
+LONG_MODE <- MODE_ENV %in% c("long", "full", "big")
 
 sims_arg <- grep("^--sims$", args)
 N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
@@ -69,8 +71,8 @@ if (TEST) {
   N_TAU_I_TRUE <- 100
   N_PROPOSALS <- 10
   SEM_EM_ADAPTIVE_ITER <- 1000
-  SEM_N_ITER <- 3
-  SEM_N_LABELLINGS <- 10
+  SEM_N_ITER <- if (LONG_MODE) 10 else 3
+  SEM_N_LABELLINGS <- if (LONG_MODE) 20 else 10
   SAVE_DIR <- resolve_save_dir()
 } else if (SMALL) {
   N_CORES <- min(8L, local_core_default)
@@ -101,6 +103,21 @@ if (TEST) {
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
   SIM_SIZE <- N_SIMS_ARG
+}
+
+if (ON_CLUSTER) {
+  slurm_cores <- suppressWarnings(as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", NA_character_)))
+  if (is.finite(slurm_cores) && slurm_cores >= 1) {
+    if (!isTRUE(all.equal(SIM_SIZE, slurm_cores)) || !isTRUE(all.equal(N_CORES, slurm_cores))) {
+      message(sprintf(
+        "[sim_study] Aligning sims/cores to SLURM_CPUS_PER_TASK for efficiency: sims=%s, cores=%s, slurm=%s",
+        as.character(SIM_SIZE), as.character(N_CORES), as.character(slurm_cores)
+      ))
+    }
+    SIM_SIZE <- slurm_cores
+    N_SIMS <- slurm_cores
+    N_CORES <- slurm_cores
+  }
 }
 
 BASE_SEED <- 123L

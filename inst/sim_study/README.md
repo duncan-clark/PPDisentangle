@@ -3,12 +3,14 @@
 ## Entry points
 
 - **R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N`, `--test`.
-- **NeSI cluster:** `run_nesi.sh` — submits via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--sims 100` (default), `--sims 50`, or `--test --sims 2` for a quick check.
+- **NeSI cluster:** `run_nesi.sh` — submits via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--mode long` (default long profile) or `--mode test` (lightweight path check), and optionally override with `--sims N`.
 
 ```bash
 cd /path/to/PPDisentangle
 bash inst/sim_study/run_nesi.sh --sims 100
 bash inst/sim_study/run_nesi.sh --test --sims 2   # quick smoke test
+bash inst/sim_study/run_nesi.sh --mode test       # lightweight mode preset
+bash inst/sim_study/run_nesi.sh --mode long       # long-run mode preset
 ```
 
 ## Output layout

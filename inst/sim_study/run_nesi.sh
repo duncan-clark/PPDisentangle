@@ -12,18 +12,42 @@ set -euo pipefail
 
 PP_SIMS=100
 PP_TEST=""
+PP_MODE="${PP_MODE:-}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
+        --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
 
+if [ -n "$PP_MODE" ]; then
+    mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
+    case "$mode_norm" in
+        test|quick)
+            PP_TEST="--test"
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then
+                PP_SIMS=2
+            fi
+            ;;
+        long|full|big)
+            PP_TEST=""
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then
+                PP_SIMS=100
+            fi
+            ;;
+        *)
+            echo "Unknown --mode '$PP_MODE' (expected: test | long)"
+            exit 1
+            ;;
+    esac
+fi
+
 if [ -n "$PP_TEST" ] && [ "$HAVE_SIMS_ARG" -eq 0 ]; then
-    PP_SIMS=8
+    PP_SIMS=2
 fi
 
 if [ -n "${SLURM_JOB_ID:-}" ] && [ -n "${PKG_ROOT:-}" ] && [ -d "$PKG_ROOT" ]; then
@@ -49,13 +73,16 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     fi
 
     # Automatic resources.
+    MEM_PER_SIM_GB="${PP_MEM_PER_SIM_GB:-2}"
+    MEM_MAX_GB="${PP_MEM_MAX_GB:-200}"
+    MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
     if [ -n "$PP_TEST" ]; then
         SB_TIME="00:20:00"
-        SB_MEM="8G"
+        SB_MEM="16G"
     else
-        MEM_GB=$(( CPUS ))
-        [ "$MEM_GB" -lt 8 ] && MEM_GB=8
-        [ "$MEM_GB" -gt 48 ] && MEM_GB=48
+        MEM_GB=$(( CPUS * MEM_PER_SIM_GB ))
+        [ "$MEM_GB" -lt "$MEM_MIN_GB" ] && MEM_GB="$MEM_MIN_GB"
+        [ "$MEM_GB" -gt "$MEM_MAX_GB" ] && MEM_GB="$MEM_MAX_GB"
         SB_MEM="${MEM_GB}G"
         SB_TIME="72:00:00"
     fi
@@ -70,9 +97,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PKG_ROOT=$PKG_ROOT"
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PKG_ROOT=$PKG_ROOT"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -93,9 +120,15 @@ fi
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/inst/sim_study/output"
 
+if [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
+    echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
+    PP_SIMS="$SLURM_CPUS_PER_TASK"
+fi
+
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
+echo "Mode: ${PP_MODE:-manual}"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
