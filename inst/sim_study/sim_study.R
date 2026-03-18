@@ -227,6 +227,7 @@ ATE_N_SIMS <- if (TEST) 1L else as.integer(N_SIMS)
 ATE_N_TAU_SIMS <- if (TEST) 1L else as.integer(N_TAU_SIMS)
 ATE_N_TAU_I <- if (TEST) 1L else as.integer(N_TAU_I)
 ATE_MAXIT <- if (TEST) 300L else 1000L
+ATE_CONTROL_FILTRATION_AWARE <- tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
@@ -241,7 +242,8 @@ log_msg("ATE batch size=", ATE_BATCH_SIZE)
 log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | n_tau_sims=", ATE_N_TAU_SIMS,
         " | n_tau_i=", ATE_N_TAU_I,
-        " | maxit=", ATE_MAXIT)
+        " | maxit=", ATE_MAXIT,
+        " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
 log_msg("Base seed=", BASE_SEED)
 log_msg("Output: ", SAVE_DIR)
 
@@ -708,6 +710,7 @@ ATE_env$ATE_N_SIMS <- ATE_N_SIMS
 ATE_env$ATE_N_TAU_SIMS <- ATE_N_TAU_SIMS
 ATE_env$ATE_N_TAU_I <- ATE_N_TAU_I
 ATE_env$ATE_MAXIT <- ATE_MAXIT
+ATE_env$ATE_CONTROL_FILTRATION_AWARE <- ATE_CONTROL_FILTRATION_AWARE
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -722,7 +725,7 @@ task_function <- function(task) {
         statespace = OMEGA, partition = partition,
         observed_data = task$x,
         filtration_data = task$filtration_data,
-        control_filtration_aware = FALSE,
+        control_filtration_aware = ATE_CONTROL_FILTRATION_AWARE,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
         n_sims = ATE_N_SIMS, n_tau_sims = ATE_N_TAU_SIMS, n_tau_i = ATE_N_TAU_I,

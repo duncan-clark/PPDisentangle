@@ -155,13 +155,47 @@ fit_hawkes_with_filtration <- function(params_init,
     return(list(par = list(mu = mu_hat, alpha = 1, beta = 1, K = 0), converged = TRUE))
   }
 
-  W_vec <- if ("W" %in% names(realiz)) as.numeric(realiz$W) else rep(1, nrow(realiz))
-  W_vec[!is.finite(W_vec)] <- 0
-  W_vec[in_zero] <- 0
+  W_post <- if ("W" %in% names(realiz)) as.numeric(realiz$W) else rep(1, nrow(realiz))
+  W_post[!is.finite(W_post)] <- 0
+  W_post[in_zero] <- 0
 
-  parent_x <- c(filtration$x, realiz$x)
-  parent_y <- c(filtration$y, realiz$y)
-  parent_t <- c(filtration$t, realiz$t)
+  use_piecewise_bg <- (!is.null(zero_background_region) && nrow(filtration) > 0L)
+  if (use_piecewise_bg) {
+    pre_obs <- filtration[, c("x", "y", "t"), drop = FALSE]
+    pre_obs$W <- 1
+    post_obs <- realiz[, c("x", "y", "t"), drop = FALSE]
+    post_obs$W <- W_post
+    all_obs <- rbind(pre_obs, post_obs)
+    all_obs <- all_obs[order(all_obs$t), , drop = FALSE]
+
+    # For events that are explicitly observed in the likelihood, parent set is the same.
+    post_t_fit <- as.numeric(all_obs$t)
+    post_x_fit <- as.numeric(all_obs$x)
+    post_y_fit <- as.numeric(all_obs$y)
+    W_fit <- as.numeric(all_obs$W)
+    parent_t <- post_t_fit
+    parent_x <- post_x_fit
+    parent_y <- post_y_fit
+
+    t_start_fit <- min(post_t_fit, na.rm = TRUE)
+    t_end_fit <- windowT[2]
+    dt_total <- t_end_fit - t_start_fit
+    if (!is.finite(dt_total) || dt_total <= 0) dt_total <- 1
+    pre_dur <- max(0, windowT[1] - t_start_fit)
+    post_dur <- max(0, windowT[2] - windowT[1])
+    adjust_factor_fit <- (pre_dur + post_dur * adjust_factor) / dt_total
+  } else {
+    post_t_fit <- as.numeric(realiz$t)
+    post_x_fit <- as.numeric(realiz$x)
+    post_y_fit <- as.numeric(realiz$y)
+    W_fit <- as.numeric(W_post)
+    parent_x <- c(filtration$x, realiz$x)
+    parent_y <- c(filtration$y, realiz$y)
+    parent_t <- c(filtration$t, realiz$t)
+    t_start_fit <- windowT[1]
+    t_end_fit <- windowT[2]
+    adjust_factor_fit <- adjust_factor
+  }
 
   dt <- windowT[2] - windowT[1]
   min_trigger_sd <- 0.001 * sqrt(total_area)
@@ -174,10 +208,10 @@ fit_hawkes_with_filtration <- function(params_init,
     if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-1e15)
     if (alpha > alpha_max || beta < beta_min) return(-1e15)
     loglik <- hawkes_loglik_inhom_filtration_cpp(
-      post_t = realiz$t,
-      post_x = realiz$x,
-      post_y = realiz$y,
-      W_val = W_vec,
+      post_t = post_t_fit,
+      post_x = post_x_fit,
+      post_y = post_y_fit,
+      W_val = W_fit,
       parent_t = parent_t,
       parent_x = parent_x,
       parent_y = parent_y,
@@ -186,9 +220,9 @@ fit_hawkes_with_filtration <- function(params_init,
       beta = beta,
       K = K,
       areaS = total_area,
-      t_start = windowT[1],
-      t_end = windowT[2],
-      adjust_factor = adjust_factor,
+      t_start = t_start_fit,
+      t_end = t_end_fit,
+      adjust_factor = adjust_factor_fit,
       t_trunc = -1
     )
     if (!is.finite(loglik)) return(-1e15)
