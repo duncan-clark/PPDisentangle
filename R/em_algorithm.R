@@ -191,13 +191,13 @@ adaptive_SEM <- function(pp_data,
       in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_bg_region)
     }
 
-    W_vec <- if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(post_realiz)) {
+    W_post <- if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(post_realiz)) {
       as.numeric(post_realiz[[hawkes_bg_var]])
     } else {
       rep(1, nrow(post_realiz))
     }
-    W_vec[!is.finite(W_vec)] <- 0
-    W_vec[in_zero] <- 0
+    W_post[!is.finite(W_post)] <- 0
+    W_post[in_zero] <- 0
 
     if (!is.null(filt_realiz) && nrow(filt_realiz) > 0) {
       filt_realiz <- as.data.frame(filt_realiz)
@@ -207,16 +207,50 @@ adaptive_SEM <- function(pp_data,
       filt_realiz <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
     }
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
-    parent_x <- c(filt_realiz$x, post_realiz$x)
-    parent_y <- c(filt_realiz$y, post_realiz$y)
-    parent_t <- c(filt_realiz$t, post_realiz$t)
-    if (length(parent_t) < 1L || nrow(post_realiz) < 1L) return(-Inf)
+
+    use_piecewise_bg <- (!is.null(zero_bg_region) && nrow(filt_realiz) > 0L)
+    if (use_piecewise_bg) {
+      pre_obs <- filt_realiz[, c("x", "y", "t"), drop = FALSE]
+      pre_obs$W <- 1
+      post_obs <- post_realiz[, c("x", "y", "t"), drop = FALSE]
+      post_obs$W <- W_post
+      all_obs <- rbind(pre_obs, post_obs)
+      all_obs <- all_obs[order(all_obs$t), , drop = FALSE]
+
+      post_t_fit <- as.numeric(all_obs$t)
+      post_x_fit <- as.numeric(all_obs$x)
+      post_y_fit <- as.numeric(all_obs$y)
+      W_fit <- as.numeric(all_obs$W)
+      parent_t <- post_t_fit
+      parent_x <- post_x_fit
+      parent_y <- post_y_fit
+
+      t_start_fit <- min(post_t_fit, na.rm = TRUE)
+      t_end_fit <- max_data_t
+      dt_total <- t_end_fit - t_start_fit
+      if (!is.finite(dt_total) || dt_total <= 0) dt_total <- 1
+      pre_dur <- max(0, treatment_time - t_start_fit)
+      post_dur <- max(0, max_data_t - treatment_time)
+      adjust_factor_fit <- (pre_dur + post_dur * adjust_factor) / dt_total
+    } else {
+      post_t_fit <- as.numeric(post_realiz$t)
+      post_x_fit <- as.numeric(post_realiz$x)
+      post_y_fit <- as.numeric(post_realiz$y)
+      W_fit <- as.numeric(W_post)
+      parent_x <- c(filt_realiz$x, post_realiz$x)
+      parent_y <- c(filt_realiz$y, post_realiz$y)
+      parent_t <- c(filt_realiz$t, post_realiz$t)
+      t_start_fit <- treatment_time
+      t_end_fit <- max_data_t
+      adjust_factor_fit <- adjust_factor
+    }
+    if (length(parent_t) < 1L || length(post_t_fit) < 1L) return(-Inf)
 
     loglik <- hawkes_loglik_inhom_filtration_cpp(
-      post_t = post_realiz$t,
-      post_x = post_realiz$x,
-      post_y = post_realiz$y,
-      W_val = W_vec,
+      post_t = post_t_fit,
+      post_x = post_x_fit,
+      post_y = post_y_fit,
+      W_val = W_fit,
       parent_t = parent_t,
       parent_x = parent_x,
       parent_y = parent_y,
@@ -225,9 +259,9 @@ adaptive_SEM <- function(pp_data,
       beta = beta,
       K = K,
       areaS = total_area,
-      t_start = treatment_time,
-      t_end = max_data_t,
-      adjust_factor = adjust_factor,
+      t_start = t_start_fit,
+      t_end = t_end_fit,
+      adjust_factor = adjust_factor_fit,
       t_trunc = if (!is.null(t_trunc)) t_trunc else -1
     )
     if (!is.finite(loglik)) return(-Inf)
