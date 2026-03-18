@@ -68,6 +68,17 @@ for (d in c(OUT_DIR, PLOT_DIR)) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE)
 }
 if (!dir.exists(LEGACY_OUT_DIR)) dir.create(LEGACY_OUT_DIR, recursive = TRUE)
+SLURM_JOB_ID_RAW <- trimws(Sys.getenv("SLURM_JOB_ID", ""))
+FILE_TAG <- if (nzchar(SLURM_JOB_ID_RAW)) paste0("_job", SLURM_JOB_ID_RAW) else ""
+add_file_tag <- function(filename) {
+  if (!nzchar(FILE_TAG)) return(filename)
+  dot <- regexpr("\\.[^.]+$", filename, perl = TRUE)
+  if (dot[1] > 0L) {
+    paste0(substr(filename, 1L, dot[1] - 1L), FILE_TAG, substr(filename, dot[1], nchar(filename)))
+  } else {
+    paste0(filename, FILE_TAG)
+  }
+}
 
 # ---- Configuration ----
 DATA_DIR   <- file.path(SCRIPT_DIR, "oklahoma_induced_seismicity_data_regional20150318")
@@ -555,9 +566,10 @@ tryCatch({
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
           plot.subtitle = element_text(hjust = 0.5))
-  ggsave(file.path(PLOT_DIR, "partition_map.png"), p_partition,
+  partition_map_file <- add_file_tag("partition_map.png")
+  ggsave(file.path(PLOT_DIR, partition_map_file), p_partition,
          width = 12, height = 7, dpi = 150)
-  cat("  Saved partition_map.png\n")
+  cat(sprintf("  Saved %s\n", partition_map_file))
 }, error = function(e) cat("  Partition plot error:", e$message, "\n"))
 
 tryCatch({
@@ -567,9 +579,10 @@ tryCatch({
     labs(title = "Pre-treatment Events", x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  ggsave(file.path(PLOT_DIR, "pp_pre_treatment.png"), p_pre,
+  pre_treatment_file <- add_file_tag("pp_pre_treatment.png")
+  ggsave(file.path(PLOT_DIR, pre_treatment_file), p_pre,
          width = 12, height = 7, dpi = 150)
-  cat("  Saved pp_pre_treatment.png\n")
+  cat(sprintf("  Saved %s\n", pre_treatment_file))
 
   pp_post_plot <- pp_post
   pp_post_plot$Process <- factor(pp_post_plot$location_process,
@@ -582,9 +595,10 @@ tryCatch({
          x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  ggsave(file.path(PLOT_DIR, "pp_post_treatment.png"), p_post,
+  post_treatment_file <- add_file_tag("pp_post_treatment.png")
+  ggsave(file.path(PLOT_DIR, post_treatment_file), p_post,
          width = 12, height = 7, dpi = 150)
-  cat("  Saved pp_post_treatment.png\n")
+  cat(sprintf("  Saved %s\n", post_treatment_file))
 }, error = function(e) cat("  PP plot error:", e$message, "\n"))
 
 # ============================================================================
@@ -852,9 +866,10 @@ tryCatch({
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
           plot.subtitle = element_text(hjust = 0.5))
-  ggsave(file.path(PLOT_DIR, "background_rate_kde.png"), p_bg,
+  background_rate_file <- add_file_tag("background_rate_kde.png")
+  ggsave(file.path(PLOT_DIR, background_rate_file), p_bg,
          width = 10, height = 6, dpi = 150)
-  cat("  Saved background_rate_kde.png\n")
+  cat(sprintf("  Saved %s\n", background_rate_file))
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
 # ============================================================================
@@ -1505,14 +1520,15 @@ tryCatch({
   for (part_nm in names(all_partitions)) {
     part_info <- all_partitions[[part_nm]]
     tile_cols <- ifelse(part_info$processes == "treated", "#fc9272", "#deebf7")
-    outfile <- file.path(PLOT_DIR, sprintf("partition_map_%s.png", part_info$label))
+    outfile_name <- add_file_tag(sprintf("partition_map_%s.png", part_info$label))
+    outfile <- file.path(PLOT_DIR, outfile_name)
     png(outfile, width = 1400, height = 850, res = 150)
     plot(part_info$partition, col = tile_cols, border = "grey45", main = paste("Partition:", part_info$label))
     points(pp_post$x, pp_post$y, pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.35))
     legend("bottomleft", legend = c("Control", "Treated"),
            fill = c("#deebf7", "#fc9272"), bty = "n")
     dev.off()
-    cat(sprintf("  Saved partition_map_%s.png\n", part_info$label))
+    cat(sprintf("  Saved %s\n", outfile_name))
   }
 }, error = function(e) cat("  Partition plotting error:", e$message, "\n"))
 
@@ -1710,14 +1726,16 @@ for (nm in list(list(res = semD, label = "biv",   title = "SEM Bivariate"),
                x = "X (km)", y = "Y (km)") +
           theme_minimal() +
           theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-        ggsave(file.path(PLOT_DIR, sprintf("pp_post_sem_%s.png", nm$label)),
+        sem_post_file <- add_file_tag(sprintf("pp_post_sem_%s.png", nm$label))
+        ggsave(file.path(PLOT_DIR, sem_post_file),
                p_s, width = 12, height = 7, dpi = 150)
-        cat(sprintf("  Saved pp_post_sem_%s.png\n", nm$label))
+        cat(sprintf("  Saved %s\n", sem_post_file))
       }
       p_f <- plot_flips(nm$res)
-      ggsave(file.path(PLOT_DIR, sprintf("sem_flips_%s.png", nm$label)),
+      sem_flips_file <- add_file_tag(sprintf("sem_flips_%s.png", nm$label))
+      ggsave(file.path(PLOT_DIR, sem_flips_file),
              p_f, width = 8, height = 5, dpi = 150)
-      cat(sprintf("  Saved sem_flips_%s.png\n", nm$label))
+      cat(sprintf("  Saved %s\n", sem_flips_file))
     }
   }, error = function(e) cat(sprintf("  %s plot error: %s\n", nm$title, e$message)))
 }
@@ -1893,10 +1911,10 @@ results_pre_bootstrap <- list(
     BOOT_OUTER_CORES = BOOT_OUTER_CORES
   )
 )
-pre_bootstrap_out_file <- file.path(OUT_DIR, "oklahoma_results_pre_bootstrap.rds")
+pre_bootstrap_out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results_pre_bootstrap.rds"))
 saveRDS(results_pre_bootstrap, pre_bootstrap_out_file)
 cat(sprintf("Pre-bootstrap checkpoint saved to: %s\n", pre_bootstrap_out_file))
-legacy_pre_bootstrap_out_file <- file.path(LEGACY_OUT_DIR, "oklahoma_results_pre_bootstrap.rds")
+legacy_pre_bootstrap_out_file <- file.path(LEGACY_OUT_DIR, add_file_tag("oklahoma_results_pre_bootstrap.rds"))
 if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
                normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
   invisible(file.copy(pre_bootstrap_out_file, legacy_pre_bootstrap_out_file, overwrite = TRUE))
@@ -2409,13 +2427,13 @@ results <- list(
   )
 )
 
-out_file <- file.path(OUT_DIR, "oklahoma_results.rds")
+out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results.rds"))
 saveRDS(results, out_file)
 cat(sprintf("Results saved to: %s\n", out_file))
 cat(sprintf("Plots saved to:   %s\n", PLOT_DIR))
 
 # Mirror latest results into legacy output path so older workflows stay fresh.
-legacy_out_file <- file.path(LEGACY_OUT_DIR, "oklahoma_results.rds")
+legacy_out_file <- file.path(LEGACY_OUT_DIR, add_file_tag("oklahoma_results.rds"))
 if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
                normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
   copied <- file.copy(out_file, legacy_out_file, overwrite = TRUE)
@@ -2461,13 +2479,45 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
     } else {
       cat("Report render complete.\n")
       sync_stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+      report_html_rendered <- if ("html" %in% REPORT_FORMATS) {
+        file.path(SCRIPT_DIR, "oklahoma_report.html")
+      } else {
+        NA_character_
+      }
+      report_pdf_rendered <- if ("pdf" %in% REPORT_FORMATS) {
+        file.path(SCRIPT_DIR, "oklahoma_report.pdf")
+      } else {
+        NA_character_
+      }
+      report_html_target <- if (is.character(report_html_rendered) &&
+                                !is.na(report_html_rendered) && nzchar(FILE_TAG)) {
+        file.path(SCRIPT_DIR, add_file_tag("oklahoma_report.html"))
+      } else {
+        report_html_rendered
+      }
+      report_pdf_target <- if (is.character(report_pdf_rendered) &&
+                               !is.na(report_pdf_rendered) && nzchar(FILE_TAG)) {
+        file.path(SCRIPT_DIR, add_file_tag("oklahoma_report.pdf"))
+      } else {
+        report_pdf_rendered
+      }
+      if (is.character(report_html_rendered) && !is.na(report_html_rendered) &&
+          is.character(report_html_target) && !is.na(report_html_target) &&
+          !identical(report_html_rendered, report_html_target)) {
+        file.copy(report_html_rendered, report_html_target, overwrite = TRUE)
+      }
+      if (is.character(report_pdf_rendered) && !is.na(report_pdf_rendered) &&
+          is.character(report_pdf_target) && !is.na(report_pdf_target) &&
+          !identical(report_pdf_rendered, report_pdf_target)) {
+        file.copy(report_pdf_rendered, report_pdf_target, overwrite = TRUE)
+      }
       report_html_path <- if ("html" %in% REPORT_FORMATS) {
-        normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.html"), winslash = "/", mustWork = FALSE)
+        normalizePath(report_html_target, winslash = "/", mustWork = FALSE)
       } else {
         NA_character_
       }
       report_pdf_path <- if ("pdf" %in% REPORT_FORMATS) {
-        normalizePath(file.path(SCRIPT_DIR, "oklahoma_report.pdf"), winslash = "/", mustWork = FALSE)
+        normalizePath(report_pdf_target, winslash = "/", mustWork = FALSE)
       } else {
         NA_character_
       }
@@ -2477,11 +2527,11 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
         paste0("report_html: ", report_html_path),
         paste0("report_pdf: ", report_pdf_path)
       )
-      stamp_root <- file.path(OUT_DIR, "last_run_sync_stamp.txt")
+      stamp_root <- file.path(OUT_DIR, add_file_tag("last_run_sync_stamp.txt"))
       writeLines(stamp_lines, stamp_root)
       if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
                      normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
-        writeLines(stamp_lines, file.path(LEGACY_OUT_DIR, "last_run_sync_stamp.txt"))
+        writeLines(stamp_lines, file.path(LEGACY_OUT_DIR, add_file_tag("last_run_sync_stamp.txt")))
       }
       cat("Sync stamp written for Google Drive change detection.\n")
     }
