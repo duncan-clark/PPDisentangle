@@ -543,11 +543,20 @@ slim_for_ate <- function(df) {
 }
 
 tasks <- list()
+pre_histories <- lapply(obs_data, function(df) {
+  pre <- as.data.frame(df) %>% filter(.data$t < TREATMENT_TIME)
+  if (nrow(pre) > 0) {
+    pre$location_process <- "control"
+    pre$inferred_process <- "control"
+  }
+  slim_for_ate(pre)
+})
 for (nm in names(labellings)) {
   for (i in seq_along(labellings[[nm]])) {
     post_x <- labellings[[nm]][[i]] %>% filter(.data$t >= TREATMENT_TIME)
     tasks[[length(tasks) + 1]] <- list(
       x = slim_for_ate(post_x),
+      filtration_data = pre_histories[[i]],
       labelling_name = nm, hawkes_params = NULL
     )
   }
@@ -558,6 +567,7 @@ for (i in seq_along(EM_results)) {
   post_tmp <- tmp %>% filter(.data$t >= TREATMENT_TIME)
   tasks[[length(tasks) + 1]] <- list(
     x = slim_for_ate(post_tmp),
+    filtration_data = pre_histories[[i]],
     labelling_name = "SEM_full",
     hawkes_params = list(
       control = EM_results[[i]]$hawkes_params_control,
@@ -615,6 +625,7 @@ task_function <- function(task) {
       ATE_estim_hawkes(
         statespace = OMEGA, partition = partition,
         observed_data = task$x,
+        filtration_data = task$filtration_data,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
         n_sims = N_SIMS, n_tau_sims = N_TAU_SIMS, n_tau_i = N_TAU_I,

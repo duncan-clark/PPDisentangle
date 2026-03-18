@@ -49,6 +49,12 @@ adaptive_SEM <- function(pp_data,
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
+  use_pre_history_for_biv <- isTRUE(dots$use_pre_history_for_biv)
+  treated_background_zero_before <- if ("treated_background_zero_before" %in% names(dots)) {
+    as.numeric(dots$treated_background_zero_before)
+  } else {
+    NULL
+  }
   dots_no_trunc <- dots
   dots_no_trunc$t_trunc <- NULL
 
@@ -162,41 +168,138 @@ adaptive_SEM <- function(pp_data,
   pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
   post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
   post <- post[order(post$t), ]
+  hawkes_bg_var <- if (!is.null(background_rate_var)) background_rate_var else "W"
+
+  hawkes_loglik_with_filtration <- function(params, post_realiz, filt_realiz, zero_bg_region) {
+    p <- unlist(params)
+    mu <- p[1]; alpha <- p[2]; beta <- p[3]; K <- p[4]
+    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(beta) || !is.finite(K)) return(-Inf)
+    if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-Inf)
+    if (!inherits(statespace, "owin")) statespace <- as.owin(statespace)
+    total_area <- spatstat.geom::area(statespace)
+    dt <- max(starting_data$t) - treatment_time
+    if (!is.finite(dt) || dt <= 0) return(-Inf)
+
+    adjust_factor <- 1
+    in_zero <- rep(FALSE, nrow(post_realiz))
+    if (!is.null(zero_bg_region) && nrow(post_realiz) > 0) {
+      if (!inherits(zero_bg_region, "owin")) zero_bg_region <- as.owin(zero_bg_region)
+      zero_area <- spatstat.geom::area(zero_bg_region)
+      adjust_factor <- max(0, (total_area - zero_area) / total_area)
+      in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_bg_region)
+    }
+
+    W_vec <- if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(post_realiz)) {
+      as.numeric(post_realiz[[hawkes_bg_var]])
+    } else {
+      rep(1, nrow(post_realiz))
+    }
+    W_vec[!is.finite(W_vec)] <- 0
+    W_vec[in_zero] <- 0
+
+    if (!is.null(filt_realiz) && nrow(filt_realiz) > 0) {
+      filt_realiz <- as.data.frame(filt_realiz)
+      filt_realiz <- filt_realiz[filt_realiz$t < treatment_time, , drop = FALSE]
+      filt_realiz <- filt_realiz[order(filt_realiz$t), , drop = FALSE]
+    } else {
+      filt_realiz <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
+    }
+    post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
+
+    parent_x <- c(filt_realiz$x, post_realiz$x)
+    parent_y <- c(filt_realiz$y, post_realiz$y)
+    parent_t <- c(filt_realiz$t, post_realiz$t)
+    if (length(parent_t) < 1L || nrow(post_realiz) < 1L) return(-Inf)
+
+    t_diff <- outer(post_realiz$t, parent_t, "-")
+    dx <- outer(post_realiz$x, parent_x, "-")
+    dy <- outer(post_realiz$y, parent_y, "-")
+    d_space <- sqrt(dx * dx + dy * dy)
+    valid_parent <- t_diff > 0
+
+    trigger_sum <- rowSums(exp(-beta * t_diff - alpha * d_space) * valid_parent)
+    lam <- (mu / total_area) * W_vec + (K * alpha * beta / pi) * trigger_sum
+    if (any(!is.finite(lam)) || any(lam <= 0)) return(-Inf)
+
+    parent_weight <- numeric(length(parent_t))
+    pre_idx <- parent_t < treatment_time
+    post_idx <- parent_t >= treatment_time & parent_t <= max(starting_data$t)
+    if (any(pre_idx)) {
+      parent_weight[pre_idx] <-
+        exp(-beta * (treatment_time - parent_t[pre_idx])) -
+        exp(-beta * (max(starting_data$t) - parent_t[pre_idx]))
+    }
+    if (any(post_idx)) {
+      parent_weight[post_idx] <- 1 - exp(-beta * (max(starting_data$t) - parent_t[post_idx]))
+    }
+
+    loglik <- sum(log(lam)) - (mu * adjust_factor * dt) - (K * sum(parent_weight))
+    if (!is.finite(loglik)) return(-Inf)
+    loglik
+  }
 
   calculate_weights <- function(labellings, treat_par, control_par, ...) {
     sapply(labellings, function(y) {
-      realiz <- y %>% dplyr::filter(.data$t >= treatment_time)
+      realiz <- if (is_biv_etas && use_pre_history_for_biv) {
+        y
+      } else {
+        y %>% dplyr::filter(.data$t >= treatment_time)
+      }
       if (is_biv_etas) {
         biv_par <- if (is.null(dots$etas_bivariate_params)) {
           init_bivariate_from_independent(control_par, treat_par)
         } else {
           dots$etas_bivariate_params
         }
+        biv_wT <- if (use_pre_history_for_biv) {
+          c(min(starting_data$t), max(starting_data$t))
+        } else {
+          c(treatment_time, max(starting_data$t))
+        }
         return(loglik_etas_bivariate(
           params = biv_par, realiz = realiz,
-          windowT = c(treatment_time, max(starting_data$t)),
+          windowT = biv_wT,
           windowS = statespace,
           control_state_space = control_state_space,
           treated_state_space = treated_state_space,
+          treated_background_zero_before = treated_background_zero_before,
           t_trunc = t_trunc
         ))
       }
       include <- which(realiz$inferred_process == "control")
       if (length(include) == 0) return(-Inf)
-      control_lik <- loglik_fn(
-        params = control_par, realiz = realiz[include, ],
-        windowT = c(treatment_time, max(starting_data$t)),
-        windowS = statespace, zero_background_region = treated_state_space,
-        t_trunc = t_trunc, ...
-      )
+      if (!is_etas) {
+        control_lik <- hawkes_loglik_with_filtration(
+          params = control_par,
+          post_realiz = realiz[include, , drop = FALSE],
+          filt_realiz = realiz[realiz$t < treatment_time & realiz$inferred_process == "control", , drop = FALSE],
+          zero_bg_region = treated_state_space
+        )
+      } else {
+        control_lik <- loglik_fn(
+          params = control_par, realiz = realiz[include, ],
+          windowT = c(treatment_time, max(starting_data$t)),
+          windowS = statespace, zero_background_region = treated_state_space,
+          t_trunc = t_trunc, ...
+        )
+      }
       include <- which(realiz$inferred_process == "treated")
       if (length(include) == 0) return(-Inf)
-      treat_lik <- loglik_fn(
-        params = treat_par, realiz = realiz[include, ],
-        windowT = c(treatment_time, max(starting_data$t)),
-        windowS = statespace, zero_background_region = control_state_space,
-        t_trunc = t_trunc, ...
-      )
+      if (!is_etas) {
+        treat_lik <- hawkes_loglik_with_filtration(
+          params = treat_par,
+          post_realiz = realiz[include, , drop = FALSE],
+          filt_realiz = realiz[realiz$t < treatment_time & realiz$inferred_process == "treated", , drop = FALSE],
+          zero_bg_region = control_state_space
+        )
+      } else {
+        treat_lik <- loglik_fn(
+          params = treat_par, realiz = realiz[include, ],
+          windowT = c(treatment_time, max(starting_data$t)),
+          windowS = statespace, zero_background_region = control_state_space,
+          t_trunc = t_trunc, ...
+        )
+      }
       return(control_lik + treat_lik)
     })
   }
@@ -296,9 +399,13 @@ adaptive_SEM <- function(pp_data,
       }
       if (is.null(names(biv_par))) names(biv_par) <- biv_names
 
-      biv_wT <- c(treatment_time, max(starting_data$t))
+      biv_wT <- if (use_pre_history_for_biv) {
+        c(min(starting_data$t), max(starting_data$t))
+      } else {
+        c(treatment_time, max(starting_data$t))
+      }
       biv_precomps <- lapply(labellings[keepers], function(y) {
-        r <- y[y$t >= treatment_time, ]
+        r <- if (use_pre_history_for_biv) y else y[y$t >= treatment_time, ]
         r <- r[order(r$t), ]
         nn <- nrow(r)
         W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
@@ -306,6 +413,9 @@ adaptive_SEM <- function(pp_data,
         aS1 <- spatstat.geom::area(treated_state_space)
         W0[inside.owin(r$x, r$y, treated_state_space)] <- 0
         W1[inside.owin(r$x, r$y, control_state_space)] <- 0
+        if (!is.null(treated_background_zero_before)) {
+          W1[r$t < treated_background_zero_before] <- 0
+        }
         if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
         list(realiz = r, precomp = list(W_0 = W0, W_1 = W1,
                                         areaS_0 = aS0, areaS_1 = aS1))
@@ -317,6 +427,7 @@ adaptive_SEM <- function(pp_data,
             windowT = biv_wT, windowS = statespace,
             control_state_space = control_state_space,
             treated_state_space = treated_state_space,
+            treated_background_zero_before = treated_background_zero_before,
             t_trunc = t_trunc, precomp = pc$precomp
           )
         })
@@ -385,15 +496,27 @@ adaptive_SEM <- function(pp_data,
     run_outer_optim <- function(process_label, zero_bg_region, par_list) {
       obj_fn <- function(params) {
         liks <- sapply(labellings[keepers], function(y) {
-          loglik_fn(
-            params = params,
-            realiz = y %>% dplyr::filter(.data$t >= treatment_time,
-                                         .data$inferred_process == process_label),
-            windowT = c(treatment_time, max(starting_data$t)),
-            windowS = statespace, zero_background_region = zero_bg_region,
-            background_rate_var = "W",
-            t_trunc = t_trunc
-          )
+          post_part <- y %>% dplyr::filter(.data$t >= treatment_time,
+                                           .data$inferred_process == process_label)
+          if (!is_etas) {
+            filt_part <- y %>% dplyr::filter(.data$t < treatment_time,
+                                             .data$inferred_process == process_label)
+            hawkes_loglik_with_filtration(
+              params = params,
+              post_realiz = as.data.frame(post_part),
+              filt_realiz = as.data.frame(filt_part),
+              zero_bg_region = zero_bg_region
+            )
+          } else {
+            loglik_fn(
+              params = params,
+              realiz = post_part,
+              windowT = c(treatment_time, max(starting_data$t)),
+              windowS = statespace, zero_background_region = zero_bg_region,
+              background_rate_var = "W",
+              t_trunc = t_trunc
+            )
+          }
         })
         return(sum(liks * weights))
       }

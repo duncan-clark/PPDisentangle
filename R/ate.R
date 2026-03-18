@@ -102,12 +102,129 @@ ATE_estim <- function(statespace, partition, observed_data, treated_partitions,
 #' @param windowS Observation window for fitting
 #' @param maxit Max optim iterations
 #' @param poisson_flags List with control and treated Poisson flags
+#' @param filtration_data Optional pre-treatment history rows used as Hawkes
+#'   filtration when fitting control/treated parameters from labeled post data.
 #' @return List with all-or-nothing sims, tau estimates, and decomposed ATEs
 #' @export
+fit_hawkes_with_filtration <- function(params_init,
+                                       realiz,
+                                       filtration = NULL,
+                                       windowT = c(0, 1),
+                                       windowS = c(0, 1, 0, 1),
+                                       maxit = 1000,
+                                       poisson_flag = FALSE,
+                                       zero_background_region = NULL) {
+  if (!inherits(windowS, "owin")) windowS <- as.owin(windowS)
+  if (inherits(params_init, "list")) params_init <- unlist(params_init)
+  params_init <- as.numeric(params_init[c("mu", "alpha", "beta", "K")])
+  names(params_init) <- c("mu", "alpha", "beta", "K")
+  params_init[!is.finite(params_init)] <- c(1, 0.01, 1, 0.01)[!is.finite(params_init)]
+
+  realiz <- as.data.frame(realiz)
+  if (nrow(realiz) > 0) {
+    realiz <- realiz[realiz$t >= windowT[1] & realiz$t <= windowT[2], , drop = FALSE]
+    realiz <- realiz[order(realiz$t), , drop = FALSE]
+  }
+  if (nrow(realiz) < 1L) {
+    return(list(par = list(mu = 0, alpha = 0.01, beta = 1, K = 0), converged = TRUE))
+  }
+
+  if (is.null(filtration)) {
+    filtration <- realiz[0, c("x", "y", "t"), drop = FALSE]
+  } else {
+    filtration <- as.data.frame(filtration)
+    filtration <- filtration[filtration$t < windowT[1], , drop = FALSE]
+    filtration <- filtration[order(filtration$t), , drop = FALSE]
+  }
+
+  total_area <- spatstat.geom::area(windowS)
+  adjust_factor <- 1
+  in_zero <- rep(FALSE, nrow(realiz))
+  if (!is.null(zero_background_region)) {
+    if (!inherits(zero_background_region, "owin")) {
+      zero_background_region <- as.owin(zero_background_region)
+    }
+    zero_area <- spatstat.geom::area(zero_background_region)
+    adjust_factor <- max(0, (total_area - zero_area) / total_area)
+    in_zero <- inside.owin(realiz$x, realiz$y, w = zero_background_region)
+  }
+
+  if (isTRUE(poisson_flag)) {
+    dt <- windowT[2] - windowT[1]
+    mu_hat <- if (dt > 0 && adjust_factor > 0) nrow(realiz) / (dt * adjust_factor) else 0
+    return(list(par = list(mu = mu_hat, alpha = 1, beta = 1, K = 0), converged = TRUE))
+  }
+
+  W_vec <- if ("W" %in% names(realiz)) as.numeric(realiz$W) else rep(1, nrow(realiz))
+  W_vec[!is.finite(W_vec)] <- 0
+  W_vec[in_zero] <- 0
+
+  parent_x <- c(filtration$x, realiz$x)
+  parent_y <- c(filtration$y, realiz$y)
+  parent_t <- c(filtration$t, realiz$t)
+
+  t_diff <- outer(realiz$t, parent_t, "-")
+  dx <- outer(realiz$x, parent_x, "-")
+  dy <- outer(realiz$y, parent_y, "-")
+  d_space <- sqrt(dx * dx + dy * dy)
+  valid_parent <- t_diff > 0
+
+  dt <- windowT[2] - windowT[1]
+  min_trigger_sd <- 0.001 * sqrt(total_area)
+  alpha_max <- 1 / min_trigger_sd^2
+  beta_min <- if (dt > 0) 0.1 / dt else 0
+
+  obj_fn <- function(par4) {
+    mu <- par4[1]; alpha <- par4[2]; beta <- par4[3]; K <- par4[4]
+    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(beta) || !is.finite(K)) return(-1e15)
+    if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-1e15)
+    if (alpha > alpha_max || beta < beta_min) return(-1e15)
+
+    trigger_sum <- rowSums(exp(-beta * t_diff - alpha * d_space) * valid_parent)
+    bg <- (mu / total_area) * W_vec
+    lam <- bg + (K * alpha * beta / pi) * trigger_sum
+    if (any(!is.finite(lam)) || any(lam <= 0)) return(-1e15)
+
+    parent_weight <- numeric(length(parent_t))
+    pre_idx <- parent_t < windowT[1]
+    post_idx <- parent_t >= windowT[1] & parent_t <= windowT[2]
+    if (any(pre_idx)) {
+      parent_weight[pre_idx] <-
+        exp(-beta * (windowT[1] - parent_t[pre_idx])) -
+        exp(-beta * (windowT[2] - parent_t[pre_idx]))
+    }
+    if (any(post_idx)) {
+      parent_weight[post_idx] <- 1 - exp(-beta * (windowT[2] - parent_t[post_idx]))
+    }
+
+    loglik <- sum(log(lam)) - (mu * adjust_factor * dt) - (K * sum(parent_weight))
+    if (!is.finite(loglik)) return(-1e15)
+    loglik
+  }
+
+  fit <- tryCatch(
+    optim(
+      par = params_init,
+      fn = obj_fn,
+      method = "Nelder-Mead",
+      control = list(fnscale = -1, trace = 0, maxit = maxit)
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit) || is.null(fit$par) || any(!is.finite(fit$par))) {
+    return(list(par = as.list(params_init), converged = FALSE))
+  }
+  pv <- as.numeric(fit$par)
+  names(pv) <- c("mu", "alpha", "beta", "K")
+  list(par = as.list(pv), converged = is.null(fit$convergence) || fit$convergence == 0)
+}
+
 ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_partitions,
                              hawkes_params = NULL, n_tau_sims = 10, n_tau_i = 10,
                              n_sims = 100, windowT = c(0, 1), windowS = c(0, 1, 0, 1),
-                             maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE)) {
+                             maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE),
+                             filtration_data = NULL) {
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -123,29 +240,56 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
   ATE_naive <- ATE_treatment
 
   if (is.null(hawkes_params)) {
-    control_pp <- fit_hawkes(
-      unlist(list(mu = (sum(observed_data$location_process == "control")) / (windowT[2] - windowT[1]),
-                  alpha = 0, beta = (windowT[2] - windowT[1]) / 100, K = 0.01)),
-      realiz = observed_data[observed_data$inferred_process == "control", ],
-      zero_background_region = treated_state_space,
-      windowT = windowT, windowS = windowS, trace = 0, maxit = maxit,
-      density_approx = FALSE, numeric_integral = FALSE,
-      poisson_flag = poisson_flags$control
-    )$par
-    control_pp <- as.list(control_pp)
-    names(control_pp) <- c("mu", "alpha", "beta", "K")
+    filt <- if (is.null(filtration_data)) {
+      observed_data[0, , drop = FALSE]
+    } else {
+      as.data.frame(filtration_data)
+    }
+    if (!("inferred_process" %in% names(filt)) && ("location_process" %in% names(filt))) {
+      filt$inferred_process <- filt$location_process
+    }
+    if (!("inferred_process" %in% names(filt)) && nrow(filt) > 0) {
+      filt$inferred_process <- "control"
+    }
 
-    treated_pp <- fit_hawkes(
-      unlist(list(mu = (sum(observed_data$location_process == "treated")) / (windowT[2] - windowT[1]),
-                  alpha = 0, beta = (windowT[2] - windowT[1]) / 100, K = 0.01)),
-      realiz = observed_data[observed_data$inferred_process == "treated", ],
-      zero_background_region = control_state_space,
-      windowT = windowT, windowS = windowS, trace = 0, maxit = maxit,
-      density_approx = FALSE, numeric_integral = FALSE,
-      poisson_flag = poisson_flags$treated
+    ctrl_realiz <- observed_data[observed_data$inferred_process == "control", , drop = FALSE]
+    treat_realiz <- observed_data[observed_data$inferred_process == "treated", , drop = FALSE]
+    ctrl_filt <- filt[filt$inferred_process == "control", , drop = FALSE]
+    treat_filt <- filt[filt$inferred_process == "treated", , drop = FALSE]
+
+    ctrl_init <- list(
+      mu = (sum(observed_data$location_process == "control")) / (windowT[2] - windowT[1]),
+      alpha = 0,
+      beta = (windowT[2] - windowT[1]) / 100,
+      K = 0.01
+    )
+    treat_init <- list(
+      mu = (sum(observed_data$location_process == "treated")) / (windowT[2] - windowT[1]),
+      alpha = 0,
+      beta = (windowT[2] - windowT[1]) / 100,
+      K = 0.01
+    )
+
+    control_pp <- fit_hawkes_with_filtration(
+      params_init = ctrl_init,
+      realiz = ctrl_realiz,
+      filtration = ctrl_filt,
+      windowT = windowT,
+      windowS = windowS,
+      maxit = maxit,
+      poisson_flag = poisson_flags$control,
+      zero_background_region = treated_state_space
     )$par
-    treated_pp <- as.list(treated_pp)
-    names(treated_pp) <- c("mu", "alpha", "beta", "K")
+    treated_pp <- fit_hawkes_with_filtration(
+      params_init = treat_init,
+      realiz = treat_realiz,
+      filtration = treat_filt,
+      windowT = windowT,
+      windowS = windowS,
+      maxit = maxit,
+      poisson_flag = poisson_flags$treated,
+      zero_background_region = control_state_space
+    )$par
   } else {
     control_pp <- hawkes_params$control
     treated_pp <- hawkes_params$treated
