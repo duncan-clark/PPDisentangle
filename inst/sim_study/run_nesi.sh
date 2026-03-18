@@ -179,7 +179,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 echo "Verifying geospatial toolchain from module stack..."
-"$RSCRIPT_BIN" -e 'if (!nzchar(Sys.which("gdal-config")) || !nzchar(Sys.which("pkg-config"))) stop("Missing gdal-config/pkg-config on PATH after module load."); req <- c("sf","terra","units"); miss <- req[!vapply(req, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) stop(sprintf("Missing required spatial packages from R-Geo stack: %s", paste(miss, collapse=", "))); cat("Spatial stack OK (sf/terra/units available).\n")'
+"$RSCRIPT_BIN" -e 'req <- c("sf","terra","units"); miss <- req[!vapply(req, requireNamespace, logical(1), quietly = TRUE)]; gdal <- Sys.which("gdal-config"); pkgc <- Sys.which("pkg-config"); cat(sprintf("gdal-config in R: %s\n", ifelse(nzchar(gdal), gdal, "<missing>"))); cat(sprintf("pkg-config in R: %s\n", ifelse(nzchar(pkgc), pkgc, "<missing>"))); if (length(miss) < 1L) { cat("Spatial stack OK (sf/terra/units available).\n"); quit(status = 0L) }; if (!nzchar(gdal) || !nzchar(pkgc)) stop(sprintf("Missing required spatial packages (%s) and missing gdal-config/pkg-config on PATH after module load.", paste(miss, collapse=", "))); stop(sprintf("Missing required spatial packages from R-Geo stack: %s", paste(miss, collapse=", ")))'
 
 echo "Checking/installing non-spatial sim-study runtime packages if missing..."
 "$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = NA)'
