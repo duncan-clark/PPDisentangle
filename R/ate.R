@@ -217,7 +217,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              hawkes_params = NULL, n_tau_sims = 10, n_tau_i = 10,
                              n_sims = 100, windowT = c(0, 1), windowS = c(0, 1, 0, 1),
                              maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE),
-                             filtration_data = NULL) {
+                             filtration_data = NULL, explosive_K_threshold = 0.98) {
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -286,6 +286,25 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
   } else {
     control_pp <- hawkes_params$control
     treated_pp <- hawkes_params$treated
+  }
+
+  is_explosive <- function(pp, k_thr) {
+    if (is.null(pp) || is.null(pp$K) || !is.finite(pp$K)) return(TRUE)
+    as.numeric(pp$K) > as.numeric(k_thr)
+  }
+  if (is_explosive(control_pp, explosive_K_threshold) ||
+      is_explosive(treated_pp, explosive_K_threshold)) {
+    all_nothing_theory <- data.frame(c_mean = NA_real_, t_mean = NA_real_, ATE = NA_real_)
+    return(list(
+      all_nothing_sim = NULL,
+      all_nothing_theory = all_nothing_theory,
+      tau_1_estim = NA_real_,
+      ATE_total = ATE_total, ATE_treatment = ATE_treatment,
+      ATE_spillover = ATE_spillover, ATE_naive = ATE_naive,
+      treated_pp = treated_pp, control_pp = control_pp,
+      skipped_explosive = TRUE,
+      explosive_K_threshold = explosive_K_threshold
+    ))
   }
 
   partition_process <- rep("control", partition$n)

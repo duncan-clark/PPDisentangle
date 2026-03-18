@@ -205,7 +205,7 @@ log_memory <- function(phase = "") {
   log_msg(sprintf("[MEM %s] used=%.0f Mb  max=%.0f Mb", phase, sum(g[, "used"]), sum(g[, "max used"])))
 }
 
-params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5) {
+params_are_crazy <- function(control_pp, treated_pp, K_max = 0.98, mu_max = 1e5) {
   check_one <- function(pp) {
     if (is.null(pp)) return(FALSE)
     K <- if (is.list(pp)) pp$K else pp[4]
@@ -217,11 +217,16 @@ params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5)
 
 MODE <- if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL" else "LOCAL"
 ATE_WORKERS <- if (ON_CLUSTER) {
-  min(12L, max(4L, as.integer(floor(N_CORES / 8))))
+  # Keep ATE parallelism conservative on cluster to avoid memory spikes.
+  max(1L, min(as.integer(N_CORES), as.integer(floor(N_CORES / 8))))
 } else {
   N_CORES
 }
 ATE_BATCH_SIZE <- max(ATE_WORKERS, 2L * ATE_WORKERS)
+ATE_N_SIMS <- if (TEST) 1L else as.integer(N_SIMS)
+ATE_N_TAU_SIMS <- if (TEST) 1L else as.integer(N_TAU_SIMS)
+ATE_N_TAU_I <- if (TEST) 1L else as.integer(N_TAU_I)
+ATE_MAXIT <- if (TEST) 300L else 1000L
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
@@ -233,6 +238,10 @@ log_msg("SEM spec: n_props=", SEM_N_PROPS,
         " | update_control_params=", SEM_UPDATE_CONTROL_PARAMS)
 log_msg("ATE workers=", ATE_WORKERS)
 log_msg("ATE batch size=", ATE_BATCH_SIZE)
+log_msg("ATE config: n_sims=", ATE_N_SIMS,
+        " | n_tau_sims=", ATE_N_TAU_SIMS,
+        " | n_tau_i=", ATE_N_TAU_I,
+        " | maxit=", ATE_MAXIT)
 log_msg("Base seed=", BASE_SEED)
 log_msg("Output: ", SAVE_DIR)
 
@@ -676,7 +685,7 @@ for (k in seq_along(tasks)) {
   }
 }
 if (length(crazy_idx) > 0) {
-  log_msg(sprintf("[CRAZY PARAMS] %d tasks with explosive params (K>=0.95 or mu>1e5)", length(crazy_idx)))
+  log_msg(sprintf("[CRAZY PARAMS] %d tasks with explosive params (K>0.98 or mu>1e5)", length(crazy_idx)))
   if (SKIP_CRAZY) {
     tasks <- tasks[-crazy_idx]
     log_msg("[CRAZY PARAMS] Skipping explosive tasks")
@@ -695,6 +704,10 @@ ATE_env$treated_partitions <- treated_partitions
 ATE_env$N_SIMS <- N_SIMS
 ATE_env$N_TAU_SIMS <- N_TAU_SIMS
 ATE_env$N_TAU_I <- N_TAU_I
+ATE_env$ATE_N_SIMS <- ATE_N_SIMS
+ATE_env$ATE_N_TAU_SIMS <- ATE_N_TAU_SIMS
+ATE_env$ATE_N_TAU_I <- ATE_N_TAU_I
+ATE_env$ATE_MAXIT <- ATE_MAXIT
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -711,15 +724,17 @@ task_function <- function(task) {
         filtration_data = task$filtration_data,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
-        n_sims = N_SIMS, n_tau_sims = N_TAU_SIMS, n_tau_i = N_TAU_I,
+        n_sims = ATE_N_SIMS, n_tau_sims = ATE_N_TAU_SIMS, n_tau_i = ATE_N_TAU_I,
         windowT = c(TREATMENT_TIME, END_TIME), windowS = OMEGA,
-        maxit = 1000,
+        maxit = ATE_MAXIT,
+        explosive_K_threshold = 0.98,
         poisson_flags = list(control = FALSE, treated = FALSE)
       ),
       timeout = MAX_TIME, onTimeout = "error"
     ),
     error = function(e) NULL
   )
+  if (!is.null(r) && isTRUE(r$skipped_explosive)) return(NULL)
   if (!is.null(r)) r$all_nothing_sim <- NULL
   r
 }
@@ -1087,6 +1102,7 @@ sim_study_results <- list(
   sem_diagnostics = sem_diagnostics_df,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
+    ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
