@@ -144,8 +144,29 @@ ensure_r_binaries() {
     if command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
         return 0
     fi
+    echo "R binaries not found after initial R-Geo load; retrying module chain fallbacks..."
+    local target_rgeo="$TARGET_R_GEO"
     local target_r="R/4.3.2-foss-2023a"
-    if module load "$target_r" >/dev/null 2>&1; then
+    if [[ "$target_rgeo" =~ ^R-Geo/(.+)$ ]]; then
+        target_r="R/${BASH_REMATCH[1]}"
+    fi
+
+    # Prefer restoring a clean R-Geo stack first so sf/terra/system deps stay consistent.
+    if module --force purge >/dev/null 2>&1 \
+        && module load NeSI/zen3 >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    elif module --force purge >/dev/null 2>&1 \
+        && module load foss/2023a >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    elif module --force purge >/dev/null 2>&1 \
+        && module load NeSI/zen3 >/dev/null 2>&1 \
+        && module load foss/2023a >/dev/null 2>&1 \
+        && module load "$target_rgeo" >/dev/null 2>&1; then
+        :
+    # If R-Geo still doesn't expose binaries, fall back to explicit R module.
+    elif module load "$target_r" >/dev/null 2>&1; then
         :
     elif module load NeSI/zen3 >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
         :

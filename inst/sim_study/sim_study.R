@@ -77,7 +77,7 @@ if (TEST) {
   N_TAU_I <- 10
   N_TAU_I_TRUE <- 10
   N_PROPOSALS <- 5
-  SEM_EM_ADAPTIVE_ITER <- 1000
+  SEM_EM_ADAPTIVE_ITER <- 100
   SEM_N_ITER <- 10
   SEM_N_LABELLINGS <- 10
   SAVE_DIR <- resolve_save_dir(FALSE)
