@@ -104,26 +104,13 @@ if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
   SIM_SIZE <- N_SIMS_ARG
 }
-if (nzchar(Sys.getenv("CORES_OVERRIDE"))) {
-  N_CORES <- as.numeric(Sys.getenv("CORES_OVERRIDE"))
-}
-if (nzchar(Sys.getenv("N_SIMS_OVERRIDE"))) {
-  n_ov <- as.numeric(Sys.getenv("N_SIMS_OVERRIDE"))
-  N_SIMS <- n_ov
-  SIM_SIZE <- n_ov
-}
-if (nzchar(Sys.getenv("SIM_SIZE_OVERRIDE"))) {
-  SIM_SIZE <- as.numeric(Sys.getenv("SIM_SIZE_OVERRIDE"))
-}
 
-env_base_seed <- suppressWarnings(as.integer(Sys.getenv("PP_BASE_SEED", "123")))
-if (!is.finite(env_base_seed) || is.na(env_base_seed)) env_base_seed <- 123L
-BASE_SEED <- as.integer(env_base_seed)
+BASE_SEED <- 123L
 stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
   as.integer(BASE_SEED + as.integer(stage_offset) * 100000L + as.integer(sim_id) * 1000L + as.integer(extra))
 }
 
-# SEM/adaptive configuration (env-overridable so cluster tuning does not need code edits)
+# SEM/adaptive configuration
 SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
 SEM_N_PROPS <- 10L
@@ -131,48 +118,6 @@ SEM_CHANGE_FACTOR <- 0.01
 SEM_INCLUDE_STARTING <- TRUE
 SEM_UPDATE_STARTING <- TRUE
 SEM_UPDATE_CONTROL_PARAMS <- TRUE
-
-if (nzchar(Sys.getenv("PP_SEM_INNER_ITER"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_INNER_ITER")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_EM_ADAPTIVE_ITER <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_OUTER_ITER"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_OUTER_ITER")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_ITER <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_N_LABELLINGS"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_N_LABELLINGS")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_LABELLINGS <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_N_PROPS"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_N_PROPS")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_N_PROPS <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_PARAM_CADENCE"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PARAM_CADENCE")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_PARAM_UPDATE_CADENCE <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_PROPOSAL_CADENCE"))) {
-  v <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PROPOSAL_CADENCE")))
-  if (is.finite(v) && !is.na(v) && v > 0L) SEM_PROPOSAL_UPDATE_CADENCE <- v
-}
-if (nzchar(Sys.getenv("PP_SEM_CHANGE_FACTOR"))) {
-  v <- suppressWarnings(as.numeric(Sys.getenv("PP_SEM_CHANGE_FACTOR")))
-  if (is.finite(v) && !is.na(v) && v > 0) SEM_CHANGE_FACTOR <- v
-}
-# Outer SEM should always include starting data for stability/consistency.
-if (nzchar(Sys.getenv("PP_SEM_INCLUDE_STARTING"))) {
-  env_inc <- tolower(Sys.getenv("PP_SEM_INCLUDE_STARTING")) %in% c("1", "true", "yes")
-  if (!env_inc) {
-    warning("PP_SEM_INCLUDE_STARTING=FALSE requested, but include_starting_data is enforced TRUE for adaptive SEM.")
-  }
-}
-if (nzchar(Sys.getenv("PP_SEM_UPDATE_STARTING"))) {
-  SEM_UPDATE_STARTING <- tolower(Sys.getenv("PP_SEM_UPDATE_STARTING")) %in% c("1", "true", "yes")
-}
-if (nzchar(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS"))) {
-  SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS")) %in% c("1", "true", "yes")
-}
 
 TREAT_PROP <- 0.5
 TIME_INT   <- END_TIME - TREATMENT_TIME
@@ -204,8 +149,9 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
   }
 }
 
+LOG_MEMORY <- FALSE
 log_memory <- function(phase = "") {
-  if (Sys.getenv("PP_LOG_MEMORY") != "1") return(invisible(NULL))
+  if (!LOG_MEMORY) return(invisible(NULL))
   g <- gc(verbose = FALSE)
   log_msg(sprintf("[MEM %s] used=%.0f Mb  max=%.0f Mb", phase, sum(g[, "used"]), sum(g[, "max used"])))
 }
@@ -221,20 +167,12 @@ params_are_crazy <- function(control_pp, treated_pp, K_max = 0.95, mu_max = 1e5)
 }
 
 MODE <- if (TEST) "TEST" else if (ON_CLUSTER) "CLUSTER" else if (SMALL) "SMALL" else "LOCAL"
-env_ate_workers <- suppressWarnings(as.integer(Sys.getenv("PP_ATE_WORKERS", "")))
-ATE_WORKERS <- if (!is.na(env_ate_workers) && env_ate_workers > 0L) {
-  env_ate_workers
-} else if (ON_CLUSTER) {
+ATE_WORKERS <- if (ON_CLUSTER) {
   min(12L, max(4L, as.integer(floor(N_CORES / 8))))
 } else {
   N_CORES
 }
-env_ate_batch <- suppressWarnings(as.integer(Sys.getenv("PP_ATE_BATCH_SIZE", "")))
-ATE_BATCH_SIZE <- if (!is.na(env_ate_batch) && env_ate_batch > 0L) {
-  env_ate_batch
-} else {
-  max(ATE_WORKERS, 2L * ATE_WORKERS)
-}
+ATE_BATCH_SIZE <- max(ATE_WORKERS, 2L * ATE_WORKERS)
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
@@ -621,16 +559,8 @@ for (i in seq_along(EM_results)) {
   )
 }
 
-skip_env_raw <- Sys.getenv("PP_SKIP_CRAZY_PARAMS")
-skip_env_set <- nzchar(skip_env_raw)
-SKIP_CRAZY <- if (skip_env_set) {
-  tolower(skip_env_raw) %in% c("1", "true", "yes")
-} else {
-  ON_CLUSTER
-}
-log_msg(sprintf("[CRAZY PARAMS] skip mode: %s (%s)",
-  ifelse(SKIP_CRAZY, "ON", "OFF"),
-  ifelse(skip_env_set, "from PP_SKIP_CRAZY_PARAMS", "default")))
+SKIP_CRAZY <- ON_CLUSTER
+log_msg(sprintf("[CRAZY PARAMS] skip mode: %s (mode default)", ifelse(SKIP_CRAZY, "ON", "OFF")))
 crazy_idx <- integer(0)
 for (k in seq_along(tasks)) {
   tsk <- tasks[[k]]
@@ -649,7 +579,7 @@ if (length(crazy_idx) > 0) {
   log_msg(sprintf("[CRAZY PARAMS] %d tasks with explosive params (K>=0.95 or mu>1e5)", length(crazy_idx)))
   if (SKIP_CRAZY) {
     tasks <- tasks[-crazy_idx]
-    log_msg("[CRAZY PARAMS] Skipping these tasks (PP_SKIP_CRAZY_PARAMS=1)")
+    log_msg("[CRAZY PARAMS] Skipping explosive tasks")
   } else {
     log_msg("[CRAZY PARAMS] Retaining tasks in queue, but worker-side guard still returns NULL for explosive params")
   }
@@ -695,9 +625,9 @@ task_function <- function(task) {
 environment(task_function) <- ATE_env
 
 if (N_CORES > 1 && !SMALL) gc(verbose = FALSE)
-ATE_SEQUENTIAL <- TEST || (nzchar(Sys.getenv("ATE_SEQUENTIAL")) && tolower(Sys.getenv("ATE_SEQUENTIAL")) %in% c("1", "true", "yes"))
+ATE_SEQUENTIAL <- TEST
 if (ATE_SEQUENTIAL) {
-  log_msg("ATE estimation: sequential (ATE_SEQUENTIAL=1)")
+  log_msg("ATE estimation: sequential (TEST mode)")
   stopCluster(cl)
   results_flat <- lapply(tasks, task_function)
 } else {

@@ -3,47 +3,31 @@
 #SBATCH --account=uoo04008
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --time=72:00:00
-#SBATCH --mem=48G
-
-# ---- NeSI / Mahuika notes ----
-# Partition is auto-selected by Slurm based on resources requested.
-#   large:  max 3 days,  72 CPUs/node, 1500 MB/CPU (~108 GB/node)
-#   long:   max 3 weeks, 72 CPUs/node
-#   milan:  max 7 days, 256 CPUs/node (opt-in: --partition=milan)
-#   bigmem: max 7 days,  72 CPUs/node, 6300 MB/CPU (~453 GB/node)
-#
-# Tune --cpus-per-task and --mem for your sim count:
-#   50 sims  → --cpus-per-task=50  --mem=64G   --time=24:00:00
-#   100 sims → --cpus-per-task=72  --mem=140G  --time=48:00:00  (or use milan)
-#
-# Submit from the package root:
-#   cd /path/to/PPDisentangle
-#   sbatch inst/sim_study/run_nesi.sh [--sims 50] [--test]
-#
-#   --test: uses minimal resources (15 min, 4G) for fast scheduling
 
 set -euo pipefail
 
-# ---- Parse arguments ----
-PP_SIMS="${PP_SIMS:-}"
+# Minimal interface:
+#   --sims N    number of simulations / cores
+#   --test      quick test profile
+
+PP_SIMS=100
 PP_TEST=""
-PP_MEM="${PP_MEM:-}"
+HAVE_SIMS_ARG=0
+
 while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --sims) PP_SIMS="$2"; shift 2 ;;
+    case "$1" in
+        --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
-        --mem) PP_MEM="$2"; shift 2 ;;
-        *) shift ;;
+        *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
-PP_SIMS="${PP_SIMS:-100}"
 
-# ---- Resolve paths ----
-# When running under SLURM, BASH_SOURCE points to the copied script in /var/spool,
-# so we use PKG_ROOT from --export (set at submit time) or SLURM_SUBMIT_DIR.
+if [ -n "$PP_TEST" ] && [ "$HAVE_SIMS_ARG" -eq 0 ]; then
+    PP_SIMS=8
+fi
+
 if [ -n "${SLURM_JOB_ID:-}" ] && [ -n "${PKG_ROOT:-}" ] && [ -d "$PKG_ROOT" ]; then
-    :  # PKG_ROOT already set by sbatch --export
+    :
 elif [ -n "${SLURM_JOB_ID:-}" ] && [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "$SLURM_SUBMIT_DIR" ]; then
     PKG_ROOT="$SLURM_SUBMIT_DIR"
 else
@@ -51,65 +35,47 @@ else
     PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
 
-# ---- If on login node (no SLURM_JOB_ID), submit via sbatch ----
 if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
     git pull origin main 2>/dev/null || true
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    mkdir -p "$PKG_ROOT/cluster_output"
 
     CPUS="$PP_SIMS"
-    MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-1}"
-    MEM_MAX_GB="${PP_MEM_MAX_GB:-48}"
-    MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
-    if [ -z "$PP_MEM" ]; then
-        MEM_GB=$(( CPUS * MEM_PER_CORE_GB ))
-        [ "$MEM_GB" -lt "$MEM_MIN_GB" ] && MEM_GB="$MEM_MIN_GB"
-        [ "$MEM_GB" -gt "$MEM_MAX_GB" ] && MEM_GB="$MEM_MAX_GB"
-        PP_MEM="${MEM_GB}G"
+    if [ "$CPUS" -lt 1 ]; then
+        echo "ERROR: --sims must be >= 1"
+        exit 1
     fi
-    # Robust defaults for the heavy ATE stage.
-    if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
-        PP_SKIP_CRAZY_PARAMS=1
-    fi
-    if [ -z "${PP_ATE_WORKERS:-}" ]; then
-        # Conservative default for memory-heavy ATE fitting.
-        PP_ATE_WORKERS=$(( CPUS / 8 ))
-        [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
-        [ "$PP_ATE_WORKERS" -gt 12 ] && PP_ATE_WORKERS=12
-    fi
-    if [ -z "${PP_ATE_BATCH_SIZE:-}" ]; then
-        PP_ATE_BATCH_SIZE=$(( PP_ATE_WORKERS * 2 ))
-    fi
-    EXTRA_SBATCH=""
 
-    # Test mode: minimal resources for fast scheduling
+    # Automatic resources.
     if [ -n "$PP_TEST" ]; then
-        EXTRA_SBATCH="--time=00:15:00"
-        if [ -z "${PP_MEM:-}" ]; then
-            PP_MEM="4G"
-        fi
-    # large partition: max 72 CPUs/node; milan: up to 256 CPUs/node
-    elif [ "$CPUS" -gt 72 ]; then
+        SB_TIME="00:20:00"
+        SB_MEM="8G"
+    else
+        MEM_GB=$(( CPUS ))
+        [ "$MEM_GB" -lt 8 ] && MEM_GB=8
+        [ "$MEM_GB" -gt 48 ] && MEM_GB=48
+        SB_MEM="${MEM_GB}G"
+        SB_TIME="72:00:00"
+    fi
+
+    EXTRA_SBATCH=""
+    if [ "$CPUS" -gt 72 ]; then
         if [ "$CPUS" -gt 256 ]; then
             echo "ERROR: max 256 CPUs per node (milan). Reduce --sims or split jobs."
             exit 1
         fi
         EXTRA_SBATCH="--partition=milan"
-        echo "Note: >72 CPUs requested, using Milan partition (256 CPUs/node)"
+        echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: $PP_SIMS sims, $CPUS CPUs (1 sim/core), mem=$PP_MEM${PP_TEST:+, test mode (15 min)}"
-    echo "Robust defaults: PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS  PP_ATE_WORKERS=$PP_ATE_WORKERS  PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
-
-    mkdir -p "$PKG_ROOT/cluster_output"
+    echo "Submitting to NeSI: sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME ${PP_TEST:+(test)}"
 
     SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PKG_ROOT=$PKG_ROOT"
-    [ -n "${ATE_SEQUENTIAL:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},ATE_SEQUENTIAL=$ATE_SEQUENTIAL"
-    [ -n "${PP_LOG_MEMORY:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_LOG_MEMORY=$PP_LOG_MEMORY"
-    SBATCH_EXPORT="${SBATCH_EXPORT},PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS,PP_ATE_WORKERS=$PP_ATE_WORKERS,PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
-
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
-        --mem="$PP_MEM" \
+        --mem="$SB_MEM" \
+        --time="$SB_TIME" \
         $EXTRA_SBATCH \
         --export="$SBATCH_EXPORT" \
         --output="$PKG_ROOT/cluster_output/%j_slurm.out" \
@@ -123,47 +89,17 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     exit 0
 fi
 
-# ---- Inside SLURM job ----
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/cluster_output"
-
-# Re-apply robust defaults inside allocation if not exported explicitly.
-if [ -z "${PP_SKIP_CRAZY_PARAMS:-}" ]; then
-    PP_SKIP_CRAZY_PARAMS=1
-fi
-if [ -z "${PP_ATE_WORKERS:-}" ]; then
-    PP_ATE_WORKERS=$(( SLURM_CPUS_PER_TASK / 8 ))
-    [ "$PP_ATE_WORKERS" -lt 4 ] && PP_ATE_WORKERS=4
-    [ "$PP_ATE_WORKERS" -gt 12 ] && PP_ATE_WORKERS=12
-fi
-if [ -z "${PP_ATE_BATCH_SIZE:-}" ]; then
-    PP_ATE_BATCH_SIZE=$(( PP_ATE_WORKERS * 2 ))
-fi
-export PP_SKIP_CRAZY_PARAMS PP_ATE_WORKERS PP_ATE_BATCH_SIZE
 
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
-echo "PP_SKIP_CRAZY_PARAMS=$PP_SKIP_CRAZY_PARAMS | PP_ATE_WORKERS=$PP_ATE_WORKERS | PP_ATE_BATCH_SIZE=$PP_ATE_BATCH_SIZE"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
-# Isolate package installs per job to avoid 00LOCK collisions across jobs.
-SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
-JOB_LIB_TAG="${SLURM_JOB_ID:-manual}_$$"
-JOB_R_LIBS_USER="${SHARED_R_LIBS_USER}/jobs/${JOB_LIB_TAG}"
-mkdir -p "$JOB_R_LIBS_USER" "$SHARED_R_LIBS_USER"
-export R_LIBS_USER="${JOB_R_LIBS_USER}:${SHARED_R_LIBS_USER}"
-echo "R_LIBS_USER=$R_LIBS_USER"
-rm -rf "${JOB_R_LIBS_USER}/00LOCK-PPDisentangle" 2>/dev/null || true
-
-# ---- Load modules ----
-# R-Geo bundles R + GDAL + GEOS + PROJ + UDUNITS (required for sf, terra, spatstat)
 module --force purge
-
-# Some NeSI stacks require architecture/compiler parents (e.g., NeSI/zen3)
-# before R-Geo can be loaded. Try robust fallbacks in order.
-TARGET_R_GEO="${PP_R_GEO_MODULE:-R-Geo/4.3.2-foss-2023a}"
+TARGET_R_GEO="R-Geo/4.3.2-foss-2023a"
 echo "Requested R-Geo module: $TARGET_R_GEO"
 
 try_load_rgeo() {
@@ -177,14 +113,12 @@ try_load_rgeo() {
 
 try_load_rgeo_with_toolchain() {
     local mod="$1"
-    # Example: R-Geo/4.3.2-foss-2023a -> toolchain foss/2023a
     local tail tc_name tc_ver tc_mod
     tail="$(echo "$mod" | awk -F'-' '{print $(NF-1) "-" $NF}')"
     tc_name="${tail%-*}"
     tc_ver="${tail#*-}"
     tc_mod="${tc_name}/${tc_ver}"
     if [ -n "$tc_name" ] && [ -n "$tc_ver" ] && [ "$tc_name" != "$tc_ver" ]; then
-        echo "Trying toolchain + R-Geo: $tc_mod -> $mod"
         if module load "$tc_mod" >/dev/null 2>&1 && module load "$mod" >/dev/null 2>&1; then
             echo "Loaded module chain: $tc_mod + $mod"
             return 0
@@ -194,89 +128,24 @@ try_load_rgeo_with_toolchain() {
 }
 
 if ! try_load_rgeo "$TARGET_R_GEO"; then
-    echo "Primary load failed: $TARGET_R_GEO"
-    echo "Trying toolchain-matched load for $TARGET_R_GEO ..."
     module --force purge
-    if try_load_rgeo_with_toolchain "$TARGET_R_GEO"; then
-        :
-    else
-    echo "Trying NeSI/zen3 -> $TARGET_R_GEO ..."
-    module --force purge
-    if module load NeSI/zen3 && try_load_rgeo "$TARGET_R_GEO"; then
-        :
-    else
-        echo "Trying discovered R-Geo/* modules from module avail ..."
+    if ! try_load_rgeo_with_toolchain "$TARGET_R_GEO"; then
         module --force purge
-        mapfile -t R_GEO_CANDIDATES < <(module -t avail R-Geo 2>&1 | awk '/^R-Geo\//{print $1}' | sort -Vr | uniq)
-        LOADED=0
-        for cand in "${R_GEO_CANDIDATES[@]}"; do
-            if try_load_rgeo "$cand"; then
-                LOADED=1
-                break
-            fi
+        if ! (module load NeSI/zen3 >/dev/null 2>&1 && try_load_rgeo "$TARGET_R_GEO"); then
             module --force purge
-            if try_load_rgeo_with_toolchain "$cand"; then
-                LOADED=1
-                break
-            fi
-            module --force purge
-            if module load NeSI/zen3 && try_load_rgeo "$cand"; then
-                LOADED=1
-                break
-            fi
-            module --force purge
-        done
-        if [ "$LOADED" -ne 1 ]; then
-            echo "Trying generic R-Geo module ..."
-            if ! try_load_rgeo R-Geo; then
-                module --force purge
-                if ! (module load NeSI/zen3 && try_load_rgeo R-Geo); then
-                    echo "ERROR: Failed to load any R-Geo module."
-                    echo "Set PP_R_GEO_MODULE explicitly, e.g."
-                    echo "  sbatch --export=ALL,PP_R_GEO_MODULE=R-Geo/<version> inst/sim_study/run_nesi.sh --sims 32"
-                    echo "Diagnostics:"
-                    module spider R-Geo || true
-                    exit 1
-                fi
-            fi
+            echo "ERROR: Failed to load $TARGET_R_GEO."
+            module spider R-Geo || true
+            exit 1
         fi
     fi
-    fi
 fi
-
-echo "R: $(which R) ($(R --version | head -1))"
-echo ""
 
 ensure_r_binaries() {
     if command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1; then
         return 0
     fi
-
-    echo "R binaries not found after initial R-Geo load; retrying with module chain fallbacks..."
-    local target_r=""
-    local target_rgeo="$TARGET_R_GEO"
-    if [[ "$TARGET_R_GEO" =~ ^R-Geo/(.+)$ ]]; then
-        target_r="R/${BASH_REMATCH[1]}"
-    else
-        target_r="R/4.3.2-foss-2023a"
-    fi
-
-    # First, prefer a clean R-Geo stack so geospatial deps (e.g., terra) remain available.
-    if module --force purge >/dev/null 2>&1 \
-        && module load NeSI/zen3 >/dev/null 2>&1 \
-        && module load "$target_rgeo" >/dev/null 2>&1; then
-        :
-    elif module --force purge >/dev/null 2>&1 \
-        && module load foss/2023a >/dev/null 2>&1 \
-        && module load "$target_rgeo" >/dev/null 2>&1; then
-        :
-    elif module --force purge >/dev/null 2>&1 \
-        && module load NeSI/zen3 >/dev/null 2>&1 \
-        && module load foss/2023a >/dev/null 2>&1 \
-        && module load "$target_rgeo" >/dev/null 2>&1; then
-        :
-    # If that still doesn't expose R binaries, fall back to explicit R module.
-    elif module load "$target_r" >/dev/null 2>&1; then
+    local target_r="R/4.3.2-foss-2023a"
+    if module load "$target_r" >/dev/null 2>&1; then
         :
     elif module load NeSI/zen3 >/dev/null 2>&1 && module load "$target_r" >/dev/null 2>&1; then
         :
@@ -287,13 +156,11 @@ ensure_r_binaries() {
     else
         return 1
     fi
-
     command -v R >/dev/null 2>&1 && command -v Rscript >/dev/null 2>&1
 }
 
 if ! ensure_r_binaries; then
     echo "ERROR: R and/or Rscript not found on PATH after module setup."
-    echo "Diagnostics:"
     module list 2>&1 || true
     module spider R 2>&1 || true
     exit 1
@@ -305,25 +172,17 @@ echo "Resolved R: $R_BIN ($("$R_BIN" --version | head -1))"
 echo "Resolved Rscript: $RSCRIPT_BIN"
 echo ""
 
-# Prevent nested threading from stealing CPUs
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-# ---- Fresh install package every run ----
-if ! "$RSCRIPT_BIN" -e 'if (!requireNamespace("terra", quietly = TRUE)) quit(status = 1)' >/dev/null 2>&1; then
-    echo "Dependency 'terra' missing; attempting install from CRAN..."
-    "$RSCRIPT_BIN" -e 'install.packages("terra", repos = "https://cloud.r-project.org")'
-fi
-
-echo "Ensuring sim-study runtime packages are installed..."
-"$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","sf","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = TRUE)'
+echo "Checking/installing sim-study runtime packages if missing..."
+"$RSCRIPT_BIN" -e 'pkgs <- c("terra","spatstat","sf","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = TRUE)'
 
 echo "Installing PPDisentangle from source (fresh install)..."
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
 echo ""
 
-# ---- Run simulation study ----
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
 
 echo ""
