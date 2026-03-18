@@ -103,7 +103,7 @@ ATE_estim <- function(statespace, partition, observed_data, treated_partitions,
 #' @param maxit Max optim iterations
 #' @param poisson_flags List with control and treated Poisson flags
 #' @param filtration_data Optional pre-treatment history rows used as Hawkes
-#'   filtration when fitting control/treated parameters from labeled post data.
+#'   filtration for control-parameter fitting from labeled post data.
 #' @return List with all-or-nothing sims, tau estimates, and decomposed ATEs
 #' @export
 fit_hawkes_with_filtration <- function(params_init,
@@ -247,19 +247,22 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
 
     ctrl_realiz <- observed_data[observed_data$inferred_process == "control", , drop = FALSE]
     treat_realiz <- observed_data[observed_data$inferred_process == "treated", , drop = FALSE]
-    ctrl_filt <- filt[filt$inferred_process == "control", , drop = FALSE]
-    treat_filt <- filt[filt$inferred_process == "treated", , drop = FALSE]
+    # Control fit is filtration-aware and uses the full pre-treatment history.
+    ctrl_filt <- filt
+
+    dt_fit <- windowT[2] - windowT[1]
+    if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
 
     ctrl_init <- list(
-      mu = (sum(observed_data$location_process == "control")) / (windowT[2] - windowT[1]),
+      mu = max(1e-8, nrow(ctrl_realiz) / dt_fit),
       alpha = 0,
-      beta = (windowT[2] - windowT[1]) / 100,
+      beta = dt_fit / 100,
       K = 0.01
     )
     treat_init <- list(
-      mu = (sum(observed_data$location_process == "treated")) / (windowT[2] - windowT[1]),
+      mu = max(1e-8, nrow(treat_realiz) / dt_fit),
       alpha = 0,
-      beta = (windowT[2] - windowT[1]) / 100,
+      beta = dt_fit / 100,
       K = 0.01
     )
 
@@ -273,16 +276,23 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       poisson_flag = poisson_flags$control,
       zero_background_region = treated_state_space
     )$par
-    treated_pp <- fit_hawkes_with_filtration(
-      params_init = treat_init,
+
+    # Keep treated fitting behavior aligned with the historical (pre-filtration) path.
+    treated_pp <- fit_hawkes(
+      unlist(treat_init),
       realiz = treat_realiz,
-      filtration = treat_filt,
+      zero_background_region = control_state_space,
       windowT = windowT,
       windowS = windowS,
+      trace = 0,
       maxit = maxit,
+      density_approx = FALSE,
+      numeric_integral = FALSE,
       poisson_flag = poisson_flags$treated,
-      zero_background_region = control_state_space
+      t_trunc = -1
     )$par
+    treated_pp <- as.list(treated_pp)
+    names(treated_pp) <- c("mu", "alpha", "beta", "K")
   } else {
     control_pp <- hawkes_params$control
     treated_pp <- hawkes_params$treated
