@@ -275,6 +275,23 @@ cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
 
+analysis_start_time <- Sys.time()
+analysis_start_elapsed <- proc.time()[["elapsed"]]
+timing_rows <- list()
+timing_row_idx <- 0L
+add_timing_row <- function(stage, elapsed_sec, status = "ok", detail = NA_character_) {
+  timing_row_idx <<- timing_row_idx + 1L
+  timing_rows[[timing_row_idx]] <<- data.frame(
+    order = timing_row_idx,
+    stage = as.character(stage),
+    elapsed_sec = as.numeric(elapsed_sec),
+    elapsed_min = as.numeric(elapsed_sec) / 60,
+    status = as.character(status),
+    detail = as.character(detail),
+    stringsAsFactors = FALSE
+  )
+}
+
 # ============================================================================
 # 1. Data loading
 # ============================================================================
@@ -715,7 +732,14 @@ fit_d <- function() {
   }, error = function(e) { cat("  SEM-biv error:", e$message, "\n"); NULL })
 }
 
+t_fit_B <- proc.time()[["elapsed"]]
 fitB <- fit_b()
+fit_B_elapsed <- proc.time()[["elapsed"]] - t_fit_B
+add_timing_row(
+  stage = "fit_B_naive_bivariate",
+  elapsed_sec = fit_B_elapsed,
+  status = if (!is.null(fitB)) "ok" else "failed"
+)
 semD <- NULL
 
 B_params <- if (!is.null(fitB)) fitB$par else biv_init
@@ -867,7 +891,14 @@ fit_f <- function() {
   }, error = function(e) { cat("  SEM-biv+KDE error:", e$message, "\n"); NULL })
 }
 
+t_fit_E <- proc.time()[["elapsed"]]
 fitE <- fit_e()
+fit_E_elapsed <- proc.time()[["elapsed"]] - t_fit_E
+add_timing_row(
+  stage = "fit_E_naive_bivariate_kde",
+  elapsed_sec = fit_E_elapsed,
+  status = if (!is.null(fitE)) "ok" else "failed"
+)
 semF <- NULL
 
 E_params <- if (!is.null(fitE)) fitE$par else biv_init_E
@@ -1198,6 +1229,13 @@ if (!is.null(semD)) {
   D_treat <- A_treat
   cat("  SEM-biv failed, falling back to naive.\n")
 }
+fit_D_elapsed <- get_fit_elapsed("D")
+add_timing_row(
+  stage = "fit_D_sem_bivariate",
+  elapsed_sec = fit_D_elapsed,
+  status = if (!is.null(semD)) "ok" else "failed",
+  detail = "elapsed from joint fit dispatch"
+)
 
 if (!is.null(semF)) {
   F_params <- semF$etas_bivariate_params
@@ -1211,6 +1249,13 @@ if (!is.null(semF)) {
   F_treat <- A_treat
   cat("  SEM-biv+KDE failed, falling back to naive.\n")
 }
+fit_F_elapsed <- get_fit_elapsed("F")
+add_timing_row(
+  stage = "fit_F_sem_bivariate_kde",
+  elapsed_sec = fit_F_elapsed,
+  status = if (!is.null(semF)) "ok" else "failed",
+  detail = "elapsed from joint fit dispatch"
+)
 
 if (RUN_DECODE) {
   decode_D_time <- get_fit_elapsed("G")
@@ -1221,6 +1266,18 @@ if (RUN_DECODE) {
   H_params <- if (!is.null(decode_F)) decode_F$params else NULL
   pp_post_decode_G <- if (!is.null(decode_D)) decode_D$labelling[decode_D$labelling$t >= 0, ] else NULL
   pp_post_decode_H <- if (!is.null(decode_F)) decode_F$labelling[decode_F$labelling$t >= 0, ] else NULL
+  add_timing_row(
+    stage = "fit_G_decode_bivariate",
+    elapsed_sec = decode_D_time,
+    status = if (!is.null(decode_D)) "ok" else "failed",
+    detail = "elapsed from joint fit dispatch"
+  )
+  add_timing_row(
+    stage = "fit_H_decode_bivariate_kde",
+    elapsed_sec = decode_F_time,
+    status = if (!is.null(decode_F)) "ok" else "failed",
+    detail = "elapsed from joint fit dispatch"
+  )
 }
 
 # ============================================================================
@@ -1587,17 +1644,27 @@ run_sensitivity_job <- function(job) {
 }
 
 if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(sensitivity_jobs) > 1) {
+  t_sensitivity_dispatch <- proc.time()[["elapsed"]]
   sens_out <- run_parallel(
     sensitivity_jobs, run_sensitivity_job,
     cores = min(SENS_CORES, length(sensitivity_jobs)),
     label = "sensitivity"
   )
+  sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
 } else {
+  t_sensitivity_dispatch <- proc.time()[["elapsed"]]
   if ((TEST_MODE || QUICK_CHECK) && length(sensitivity_jobs) > 1) {
     cat("  TEST/QUICK mode: running sensitivity jobs sequentially for stability.\n")
   }
   sens_out <- lapply(sensitivity_jobs, run_sensitivity_job)
+  sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
 }
+add_timing_row(
+  stage = "sensitivity_dispatch_total",
+  elapsed_sec = sensitivity_dispatch_elapsed,
+  status = "ok",
+  detail = sprintf("jobs=%d", length(sensitivity_jobs))
+)
 
 kde_bandwidth_fits <- lapply(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), function(lbl) {
   idx <- which(vapply(sens_out, function(z) identical(z$type, "bandwidth") && identical(z$id, lbl), logical(1)))
@@ -1750,22 +1817,48 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
   }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
 }
 
+t_ate_B <- proc.time()[["elapsed"]]
 ate_B <- ate_estim_fast(B_marginals$ctrl, B_marginals$treat, pp_post,
                         "Fit B (naive bivariate)")
+ate_B_elapsed <- proc.time()[["elapsed"]] - t_ate_B
+add_timing_row("ate_B", ate_B_elapsed, if (!is.null(ate_B)) "ok" else "failed")
+t_ate_D <- proc.time()[["elapsed"]]
 ate_D <- ate_estim_fast(D_marginals$ctrl, D_marginals$treat, pp_post_sem_D,
                         "Fit D (SEM bivariate)")
+ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
+add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
+t_ate_E <- proc.time()[["elapsed"]]
 ate_E <- ate_estim_fast(E_marginals$ctrl, E_marginals$treat, pp_post_bg,
                         "Fit E (naive biv+KDE)")
+ate_E_elapsed <- proc.time()[["elapsed"]] - t_ate_E
+add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else "failed")
+t_ate_F <- proc.time()[["elapsed"]]
 ate_F <- ate_estim_fast(F_marginals$ctrl, F_marginals$treat, pp_post_sem_F,
                         "Fit F (SEM biv+KDE)")
+ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
+add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
 ate_G <- if (RUN_DECODE && !is.null(G_marginals) && !is.null(pp_post_decode_G)) {
+  t_ate_G <- proc.time()[["elapsed"]]
   ate_estim_fast(G_marginals$ctrl, G_marginals$treat, pp_post_decode_G,
                  "Fit G (Decode biv)")
 } else NULL
+if (exists("t_ate_G", inherits = FALSE)) {
+  ate_G_elapsed <- proc.time()[["elapsed"]] - t_ate_G
+  add_timing_row("ate_G", ate_G_elapsed, if (!is.null(ate_G)) "ok" else "failed")
+} else {
+  add_timing_row("ate_G", NA_real_, "skipped", "decode disabled or unavailable")
+}
 ate_H <- if (RUN_DECODE && !is.null(H_marginals) && !is.null(pp_post_decode_H)) {
+  t_ate_H <- proc.time()[["elapsed"]]
   ate_estim_fast(H_marginals$ctrl, H_marginals$treat, pp_post_decode_H,
                  "Fit H (Decode biv+KDE)")
 } else NULL
+if (exists("t_ate_H", inherits = FALSE)) {
+  ate_H_elapsed <- proc.time()[["elapsed"]] - t_ate_H
+  add_timing_row("ate_H", ate_H_elapsed, if (!is.null(ate_H)) "ok" else "failed")
+} else {
+  add_timing_row("ate_H", NA_real_, "skipped", "decode disabled or unavailable")
+}
 
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
 # even if bootstrap gets interrupted or OOM-killed.
@@ -1808,7 +1901,9 @@ invisible(gc(verbose = FALSE))
 # Parametric bootstrap ATEs (supports E and F currently).
 bootstrap_ate <- NULL
 boot_targets_run <- intersect(BOOT_TARGETS, c("E", "F"))
+bootstrap_elapsed <- NA_real_
 if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
+  t_bootstrap <- proc.time()[["elapsed"]]
   cat(sprintf("\n--- Step 6b: Parametric bootstrap ATEs (targets=%s, reps=%d, scope=%s, outer cores=%d, boot SEM inner=%d) ---\n",
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
 
@@ -2056,6 +2151,16 @@ invisible(gc(verbose = FALSE))
     unlink(legacy_pre_bootstrap_out_file, force = TRUE)
     cat(sprintf("Deleted legacy pre-bootstrap checkpoint: %s\n", legacy_pre_bootstrap_out_file))
   }
+  bootstrap_elapsed <- proc.time()[["elapsed"]] - t_bootstrap
+}
+if (is.finite(bootstrap_elapsed)) {
+  add_timing_row("bootstrap_ate_total", bootstrap_elapsed, "ok",
+                 sprintf("targets=%s reps=%d", paste(boot_targets_run, collapse = ","), BOOT_N_REPS))
+} else if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L) {
+  add_timing_row("bootstrap_ate_total", NA_real_, "skipped",
+                 "requested but no eligible targets")
+} else {
+  add_timing_row("bootstrap_ate_total", NA_real_, "skipped", "disabled")
 }
 
 # ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
@@ -2216,6 +2321,24 @@ louis_F <- NULL
 # ============================================================================
 cat("\n--- Saving results ---\n")
 
+analysis_elapsed_pre_save <- proc.time()[["elapsed"]] - analysis_start_elapsed
+add_timing_row("analysis_total_pre_save", analysis_elapsed_pre_save, "ok")
+timing_df <- if (length(timing_rows) > 0L) {
+  do.call(rbind, timing_rows)
+} else {
+  data.frame(
+    order = integer(0),
+    stage = character(0),
+    elapsed_sec = numeric(0),
+    elapsed_min = numeric(0),
+    status = character(0),
+    detail = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+timing_df <- timing_df[order(timing_df$order), , drop = FALSE]
+rownames(timing_df) <- NULL
+
 results <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D, louis = louis_D),
@@ -2233,6 +2356,11 @@ results <- list(
                   n_pre_used = nrow(pp_pre),
                   trigger_range_km = trigger_range_km),
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
+  timing_df = timing_df,
+  timing_info = list(
+    analysis_start = as.character(analysis_start_time),
+    analysis_end_pre_save = as.character(Sys.time())
+  ),
   counties = list(
     names = counties_sf_valid$NAME,
     treated_names = treated_names,

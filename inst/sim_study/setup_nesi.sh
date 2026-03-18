@@ -54,7 +54,7 @@ cat("PPDisentangle loaded successfully.\n")
 cat("Functions available:", length(ls("package:PPDisentangle")), "\n")
 '
 
-mkdir -p "$PKG_ROOT/cluster_output"
+mkdir -p "$PKG_ROOT/inst/sim_study/output"
 
 echo ""
 echo "=== Setup complete ==="
@@ -64,4 +64,4 @@ echo "  1. Test:   bash inst/sim_study/run_nesi.sh --test --sims 2"
 echo "  2. Run:    bash inst/sim_study/run_nesi.sh --sims 50"
 echo ""
 echo "Monitor:  squeue -u \$USER"
-echo "Output:   cluster_output/<JOB_ID>.rds  cluster_output/<JOB_ID>.log"
+echo "Output:   inst/sim_study/output/<JOB_ID>.rds  inst/sim_study/output/<JOB_ID>.log"

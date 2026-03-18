@@ -6,7 +6,7 @@
 #   Rscript sim_study.R --small          # local, reduced
 #   sbatch run_nesi.sh --sims 100        # NeSI cluster
 #
-# Output: cluster_output/{JOB_ID}.rds  cluster_output/{JOB_ID}.log
+# Output: inst/sim_study/output/{JOB_ID}.rds  inst/sim_study/output/{JOB_ID}.log
 
 library(PPDisentangle)
 library(spatstat)
@@ -29,12 +29,15 @@ N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
 
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
-resolve_save_dir <- function(on_cluster_runtime) {
-  if (on_cluster_runtime) {
-    file.path(Sys.getenv("SLURM_SUBMIT_DIR", getwd()), "cluster_output")
+resolve_save_dir <- function() {
+  args_full <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args_full, value = TRUE)
+  script_dir <- if (length(file_arg) > 0L) {
+    dirname(normalizePath(sub("^--file=", "", file_arg[[1]]), mustWork = FALSE))
   } else {
-    file.path(getwd(), "cluster_output")
+    file.path(getwd(), "inst", "sim_study")
   }
+  file.path(script_dir, "output")
 }
 
 OMEGA <- c(0, 100, 0, 100)
@@ -56,7 +59,7 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 100
   SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- 5
-  SAVE_DIR <- resolve_save_dir(nzchar(Sys.getenv("SLURM_JOB_ID")))
+  SAVE_DIR <- resolve_save_dir()
 } else if (ON_CLUSTER) {
   N_CORES <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "100"))
   SIM_SIZE <- 100
@@ -68,7 +71,7 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- 10
-  SAVE_DIR <- resolve_save_dir(TRUE)
+  SAVE_DIR <- resolve_save_dir()
 } else if (SMALL) {
   N_CORES <- min(8L, local_core_default)
   SIM_SIZE <- N_CORES
@@ -80,7 +83,7 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 100
   SEM_N_ITER <- 10
   SEM_N_LABELLINGS <- 10
-  SAVE_DIR <- resolve_save_dir(FALSE)
+  SAVE_DIR <- resolve_save_dir()
 } else {
   N_CORES <- local_core_default
   SIM_SIZE <- N_CORES
@@ -92,7 +95,7 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
-  SAVE_DIR <- resolve_save_dir(FALSE)
+  SAVE_DIR <- resolve_save_dir()
 }
 
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
@@ -373,7 +376,7 @@ gen_proposals <- function(job) {
     }, error = function(e) NULL)
   }))
 }
-if (N_CORES > 1 && !SMALL) {
+if (N_CORES > 1) {
   labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, TRUE)
 } else {
   labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, FALSE)
@@ -442,7 +445,10 @@ run_sem <- function(job) {
   )
 }
 is_sem_error <- function(x) inherits(x, "ppdis_sem_error")
-if (N_CORES > 1 && !SMALL) {
+if (N_CORES > 1) {
+  # PSOCK workers need these helpers explicitly exported because `run_sem`
+  # resolves `run_sem_core` in the worker global environment.
+  clusterExport(cl, c("run_sem_core", "run_sem", "is_sem_error"), envir = .GlobalEnv)
   EM_results <- run_maybe_parallel(cl, sem_jobs, run_sem, TRUE)
   failed <- which(vapply(EM_results, is_sem_error, logical(1)))
   if (length(failed) > 0L) {
@@ -625,7 +631,7 @@ task_function <- function(task) {
 }
 environment(task_function) <- ATE_env
 
-if (N_CORES > 1 && !SMALL) gc(verbose = FALSE)
+if (N_CORES > 1) gc(verbose = FALSE)
 ATE_SEQUENTIAL <- TEST
 if (ATE_SEQUENTIAL) {
   log_msg("ATE estimation: sequential (TEST mode)")

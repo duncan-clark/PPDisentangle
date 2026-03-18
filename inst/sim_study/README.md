@@ -16,7 +16,7 @@ bash inst/sim_study/run_nesi.sh --test --sims 2   # quick smoke test
 Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs):
 
 ```
-cluster_output/
+inst/sim_study/output/
   <JOB_ID>.rds           # full results and plots
   <JOB_ID>.log           # R log
   <JOB_ID>_slurm.out     # SLURM stdout
@@ -49,4 +49,4 @@ PP_LOG_MEMORY=1 bash inst/sim_study/run_nesi.sh --test
 PP_SKIP_CRAZY_PARAMS=1 bash inst/sim_study/run_nesi.sh --test
 ```
 
-Check `cluster_output/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.
+Check `inst/sim_study/output/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.

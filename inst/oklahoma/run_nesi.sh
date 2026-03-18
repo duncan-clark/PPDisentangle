@@ -85,7 +85,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   cd "$PKG_ROOT"
   git pull origin main 2>/dev/null || true
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  mkdir -p "$PKG_ROOT/cluster_output"
+  OUTPUT_DIR="$PKG_ROOT/inst/oklahoma/output"
+  mkdir -p "$OUTPUT_DIR"
 
   EXTRA_SBATCH=""
   if [ "$PP_CORES" -gt 72 ]; then
@@ -109,13 +110,13 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     --time="$PP_TIME" \
     $EXTRA_SBATCH \
     --export="$SBATCH_EXPORT" \
-    --output="$PKG_ROOT/cluster_output/%j_oklahoma_slurm.out" \
-    --error="$PKG_ROOT/cluster_output/%j_oklahoma_slurm.err" \
+    --output="$OUTPUT_DIR/%j_oklahoma_slurm.out" \
+    --error="$OUTPUT_DIR/%j_oklahoma_slurm.err" \
     "$SCRIPT_DIR/run_nesi.sh")
 
   echo "Job $JOB_ID submitted"
-  echo "SLURM out: cluster_output/${JOB_ID}_oklahoma_slurm.out"
-  echo "SLURM err: cluster_output/${JOB_ID}_oklahoma_slurm.err"
+  echo "SLURM out: inst/oklahoma/output/${JOB_ID}_oklahoma_slurm.out"
+  echo "SLURM err: inst/oklahoma/output/${JOB_ID}_oklahoma_slurm.err"
   exit 0
 fi
 
@@ -123,7 +124,7 @@ fi
 # Job mode
 # ----------------------------
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/cluster_output"
+mkdir -p "$PKG_ROOT/inst/oklahoma/output"
 
 echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"

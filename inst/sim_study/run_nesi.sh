@@ -39,7 +39,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
     git pull origin main 2>/dev/null || true
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    mkdir -p "$PKG_ROOT/cluster_output"
+    OUTPUT_DIR="$PKG_ROOT/inst/sim_study/output"
+    mkdir -p "$OUTPUT_DIR"
 
     CPUS="$PP_SIMS"
     if [ "$CPUS" -lt 1 ]; then
@@ -78,19 +79,19 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         --time="$SB_TIME" \
         $EXTRA_SBATCH \
         --export="$SBATCH_EXPORT" \
-        --output="$PKG_ROOT/cluster_output/%j_slurm.out" \
-        --error="$PKG_ROOT/cluster_output/%j_slurm.err" \
+        --output="$OUTPUT_DIR/%j_slurm.out" \
+        --error="$OUTPUT_DIR/%j_slurm.err" \
         "$SCRIPT_DIR/run_nesi.sh")
 
     echo "Job $JOB_ID submitted"
-    echo "  Results: cluster_output/$JOB_ID.rds"
-    echo "  Log:     cluster_output/$JOB_ID.log"
-    echo "  SLURM:   cluster_output/${JOB_ID}_slurm.out"
+    echo "  Results: inst/sim_study/output/$JOB_ID.rds"
+    echo "  Log:     inst/sim_study/output/$JOB_ID.log"
+    echo "  SLURM:   inst/sim_study/output/${JOB_ID}_slurm.out"
     exit 0
 fi
 
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/cluster_output"
+mkdir -p "$PKG_ROOT/inst/sim_study/output"
 
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
