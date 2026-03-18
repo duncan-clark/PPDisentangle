@@ -722,6 +722,7 @@ task_function <- function(task) {
         statespace = OMEGA, partition = partition,
         observed_data = task$x,
         filtration_data = task$filtration_data,
+        control_filtration_aware = FALSE,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
         n_sims = ATE_N_SIMS, n_tau_sims = ATE_N_TAU_SIMS, n_tau_i = ATE_N_TAU_I,

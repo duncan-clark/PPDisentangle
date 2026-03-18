@@ -217,7 +217,8 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              hawkes_params = NULL, n_tau_sims = 10, n_tau_i = 10,
                              n_sims = 100, windowT = c(0, 1), windowS = c(0, 1, 0, 1),
                              maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE),
-                             filtration_data = NULL, explosive_K_threshold = 0.98) {
+                             filtration_data = NULL, explosive_K_threshold = 0.98,
+                             control_filtration_aware = TRUE) {
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -247,9 +248,6 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
 
     ctrl_realiz <- observed_data[observed_data$inferred_process == "control", , drop = FALSE]
     treat_realiz <- observed_data[observed_data$inferred_process == "treated", , drop = FALSE]
-    # Control fit is filtration-aware and uses the full pre-treatment history.
-    ctrl_filt <- filt
-
     dt_fit <- windowT[2] - windowT[1]
     if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
 
@@ -266,16 +264,36 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       K = 0.01
     )
 
-    control_pp <- fit_hawkes_with_filtration(
-      params_init = ctrl_init,
-      realiz = ctrl_realiz,
-      filtration = ctrl_filt,
-      windowT = windowT,
-      windowS = windowS,
-      maxit = maxit,
-      poisson_flag = poisson_flags$control,
-      zero_background_region = treated_state_space
-    )$par
+    if (isTRUE(control_filtration_aware)) {
+      # Control fit can optionally use full pre-treatment filtration.
+      control_pp <- fit_hawkes_with_filtration(
+        params_init = ctrl_init,
+        realiz = ctrl_realiz,
+        filtration = filt,
+        windowT = windowT,
+        windowS = windowS,
+        maxit = maxit,
+        poisson_flag = poisson_flags$control,
+        zero_background_region = treated_state_space
+      )$par
+    } else {
+      # Legacy behavior: control fit uses only post-treatment observed control points.
+      control_pp <- fit_hawkes(
+        unlist(ctrl_init),
+        realiz = ctrl_realiz,
+        zero_background_region = treated_state_space,
+        windowT = windowT,
+        windowS = windowS,
+        trace = 0,
+        maxit = maxit,
+        density_approx = FALSE,
+        numeric_integral = FALSE,
+        poisson_flag = poisson_flags$control,
+        t_trunc = -1
+      )$par
+      control_pp <- as.list(control_pp)
+      names(control_pp) <- c("mu", "alpha", "beta", "K")
+    }
 
     # Keep treated fitting behavior aligned with the historical (pre-filtration) path.
     treated_pp <- fit_hawkes(
