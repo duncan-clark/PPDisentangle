@@ -15,10 +15,6 @@ library(dplyr)
 library(data.table)
 library(parallel)
 library(doParallel)
-library(R.utils)
-library(reshape2)
-library(gridExtra)
-library(scales)
 
 time_start_global <- proc.time()[3]
 
@@ -33,71 +29,70 @@ N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
 
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
+resolve_save_dir <- function(on_cluster_runtime) {
+  if (on_cluster_runtime) {
+    file.path(Sys.getenv("SLURM_SUBMIT_DIR", getwd()), "cluster_output")
+  } else {
+    file.path(getwd(), "cluster_output")
+  }
+}
+
+OMEGA <- c(0, 100, 0, 100)
+END_TIME <- 110
+TREATMENT_TIME <- 10
+NX <- 10
+NY <- 10
+
+local_core_default <- max(1L, parallel::detectCores() - 1L)
 if (TEST) {
   n_test <- if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) N_SIMS_ARG else 2L
-  N_CORES      <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
-  SIM_SIZE     <- n_test
-  N_SIMS       <- n_test
-  N_TAU_SIMS   <- 3
-  N_TAU_I      <- 3
+  N_CORES <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
+  SIM_SIZE <- n_test
+  N_SIMS <- n_test
+  N_TAU_SIMS <- 3
+  N_TAU_I <- 3
   N_TAU_I_TRUE <- 5
-  N_PROPOSALS  <- 5
+  N_PROPOSALS <- 5
   SEM_EM_ADAPTIVE_ITER <- 100
-  SEM_N_ITER   <- 3
+  SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- 5
-  OMEGA        <- c(0, 100, 0, 100)
-  END_TIME     <- 110
-  TREATMENT_TIME <- 10
-  NX <- 10; NY <- 10
-  SAVE_DIR     <- file.path(if (nzchar(Sys.getenv("SLURM_JOB_ID"))) Sys.getenv("SLURM_SUBMIT_DIR", getwd()) else getwd(), "cluster_output")
+  SAVE_DIR <- resolve_save_dir(nzchar(Sys.getenv("SLURM_JOB_ID")))
 } else if (ON_CLUSTER) {
-  N_CORES      <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "100"))
-  SIM_SIZE     <- 100
-  N_SIMS       <- 100
-  N_TAU_SIMS   <- 10
-  N_TAU_I      <- 10
+  N_CORES <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "100"))
+  SIM_SIZE <- 100
+  N_SIMS <- 100
+  N_TAU_SIMS <- 10
+  N_TAU_I <- 10
   N_TAU_I_TRUE <- 100
-  N_PROPOSALS  <- 10
+  N_PROPOSALS <- 10
   SEM_EM_ADAPTIVE_ITER <- 1000
-  SEM_N_ITER   <- 3
+  SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- 10
-  OMEGA        <- c(0, 100, 0, 100)
-  END_TIME     <- 110
-  TREATMENT_TIME <- 10
-  NX <- 10; NY <- 10
-  SAVE_DIR     <- file.path(Sys.getenv("SLURM_SUBMIT_DIR", getwd()), "cluster_output")
+  SAVE_DIR <- resolve_save_dir(TRUE)
 } else if (SMALL) {
-  N_CORES      <- max(1, parallel::detectCores() - 1)
-  SIM_SIZE     <- N_CORES
-  N_SIMS       <- 10
-  N_TAU_SIMS   <- 10
-  N_TAU_I      <- 10
+  N_CORES <- min(8L, local_core_default)
+  SIM_SIZE <- N_CORES
+  N_SIMS <- 10
+  N_TAU_SIMS <- 10
+  N_TAU_I <- 10
   N_TAU_I_TRUE <- 10
-  N_PROPOSALS  <- 5
+  N_PROPOSALS <- 5
   SEM_EM_ADAPTIVE_ITER <- 1000
-  SEM_N_ITER   <- 10
+  SEM_N_ITER <- 10
   SEM_N_LABELLINGS <- 10
-  OMEGA        <- c(0, 100, 0, 100)
-  END_TIME     <- 110
-  TREATMENT_TIME <- 10
-  NX <- 10; NY <- 10
-  SAVE_DIR     <- file.path(getwd(), "cluster_output")
+  SAVE_DIR <- resolve_save_dir(FALSE)
 } else {
-  N_CORES      <- max(1, parallel::detectCores() - 1)
-  SIM_SIZE     <- N_CORES
-  N_SIMS       <- 10
-  N_TAU_SIMS   <- 10
-  N_TAU_I      <- 10
+  N_CORES <- local_core_default
+  SIM_SIZE <- N_CORES
+  N_SIMS <- 10
+  N_TAU_SIMS <- 10
+  N_TAU_I <- 10
   N_TAU_I_TRUE <- 10
-  N_PROPOSALS  <- 100
+  N_PROPOSALS <- 100
   SEM_EM_ADAPTIVE_ITER <- 1000
-  SEM_N_ITER   <- 3
+  SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
-  OMEGA        <- c(0, 100, 0, 100)
-  END_TIME     <- 110
-  TREATMENT_TIME <- 10
-  NX <- 10; NY <- 10
-  SAVE_DIR     <- file.path(getwd(), "cluster_output")
+  SAVE_DIR <- resolve_save_dir(FALSE)
 }
 
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
@@ -206,6 +201,21 @@ make_cluster <- function(n_cores) {
     library(R.utils)
   })
   return(cl)
+}
+
+run_maybe_parallel <- function(cl, jobs, fun, use_parallel) {
+  if (use_parallel) {
+    parLapply(cl = cl, X = jobs, fun = fun)
+  } else {
+    lapply(jobs, fun)
+  }
+}
+
+format_sem_error_message <- function(err_list) {
+  paste(
+    vapply(err_list, function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
+    collapse = " | "
+  )
 }
 
 export_globals <- function(cl) {
@@ -364,9 +374,9 @@ gen_proposals <- function(job) {
   }))
 }
 if (N_CORES > 1 && !SMALL) {
-  labelling_proposals <- parLapply(cl = cl, X = proposal_jobs, fun = gen_proposals)
+  labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, TRUE)
 } else {
-  labelling_proposals <- lapply(proposal_jobs, gen_proposals)
+  labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, FALSE)
 }
 log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
 
@@ -433,34 +443,25 @@ run_sem <- function(job) {
 }
 is_sem_error <- function(x) inherits(x, "ppdis_sem_error")
 if (N_CORES > 1 && !SMALL) {
-  EM_results <- parLapply(cl = cl, X = sem_jobs, fun = run_sem)
+  EM_results <- run_maybe_parallel(cl, sem_jobs, run_sem, TRUE)
   failed <- which(vapply(EM_results, is_sem_error, logical(1)))
   if (length(failed) > 0L) {
-    fail_msg <- paste(
-      vapply(EM_results[failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
-      collapse = " | "
-    )
+    fail_msg <- format_sem_error_message(EM_results[failed])
     log_msg("[SEM PARALLEL ERROR] ", fail_msg)
     log_msg("Retrying failed SEM jobs sequentially: ", paste(failed, collapse = ","))
-    retry <- lapply(sem_jobs[failed], run_sem)
+    retry <- run_maybe_parallel(cl, sem_jobs[failed], run_sem, FALSE)
     retry_failed <- which(vapply(retry, is_sem_error, logical(1)))
     if (length(retry_failed) > 0L) {
-      retry_msg <- paste(
-        vapply(retry[retry_failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
-        collapse = " | "
-      )
+      retry_msg <- format_sem_error_message(retry[retry_failed])
       stop("Adaptive SEM failed after sequential retry: ", retry_msg)
     }
     EM_results[failed] <- retry
   }
 } else {
-  EM_results <- lapply(sem_jobs, run_sem)
+  EM_results <- run_maybe_parallel(cl, sem_jobs, run_sem, FALSE)
   failed <- which(vapply(EM_results, is_sem_error, logical(1)))
   if (length(failed) > 0L) {
-    fail_msg <- paste(
-      vapply(EM_results[failed], function(x) sprintf("sim %d: %s", x$sim_id, x$message), character(1)),
-      collapse = " | "
-    )
+    fail_msg <- format_sem_error_message(EM_results[failed])
     stop("Adaptive SEM failed: ", fail_msg)
   }
 }
@@ -743,73 +744,56 @@ if (length(obs_data) > 0) {
 }
 
 # Control and treated parameter estimates from results_flat
-control_param_rows <- lapply(seq_along(results_flat), function(k) {
-  r <- results_flat[[k]]
-  if (is.null(r) || is.null(r$control_pp)) return(NULL)
-  data.frame(
-    labelling = tasks[[k]]$labelling_name,
-    sim_id = ((k - 1) %% SIM_SIZE) + 1,
-    mu = r$control_pp$mu, alpha = r$control_pp$alpha,
-    beta = r$control_pp$beta, K = r$control_pp$K,
-    stringsAsFactors = FALSE
+extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
+  lapply(seq_along(results_flat), function(k) {
+    r <- results_flat[[k]]
+    par_obj <- r[[field_name]]
+    if (is.null(r) || is.null(par_obj)) return(NULL)
+    data.frame(
+      labelling = tasks[[k]]$labelling_name,
+      sim_id = ((k - 1) %% sim_size) + 1,
+      mu = par_obj$mu, alpha = par_obj$alpha,
+      beta = par_obj$beta, K = par_obj$K,
+      stringsAsFactors = FALSE
+    )
+  })
+}
+build_param_boxplots <- function(params_df, truth_params) {
+  if (is.null(params_df) || nrow(params_df) < 1) return(NULL)
+  params_long <- reshape2::melt(
+    params_df,
+    id.vars = c("labelling", "sim_id"),
+    variable.name = "param",
+    value.name = "value"
   )
-})
-treated_param_rows <- lapply(seq_along(results_flat), function(k) {
-  r <- results_flat[[k]]
-  if (is.null(r) || is.null(r$treated_pp)) return(NULL)
-  data.frame(
-    labelling = tasks[[k]]$labelling_name,
-    sim_id = ((k - 1) %% SIM_SIZE) + 1,
-    mu = r$treated_pp$mu, alpha = r$treated_pp$alpha,
-    beta = r$treated_pp$beta, K = r$treated_pp$K,
-    stringsAsFactors = FALSE
-  )
-})
+  plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
+    tmp <- params_long %>% filter(.data$param == p)
+    if (nrow(tmp) == 0) return(NULL)
+    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
+    ggplot(tmp) +
+      geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
+      geom_hline(yintercept = truth_params[[p]], linetype = "dashed", color = "red") +
+      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
+      labs(x = "Method", y = paste0(p, " estimate")) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  Filter(Negate(is.null), plots)
+}
+
+control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp")
+treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp")
 control_params_df <- do.call(rbind, control_param_rows)
 treated_params_df <- do.call(rbind, treated_param_rows)
 
-if (!is.null(control_params_df) && nrow(control_params_df) > 0) {
-  control_params_long <- reshape2::melt(control_params_df,
-    id.vars = c("labelling", "sim_id"),
-    variable.name = "param", value.name = "value")
-  control_param_plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
-    tmp <- control_params_long %>% filter(.data$param == p)
-    if (nrow(tmp) == 0) return(NULL)
-    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
-    ggplot(tmp) +
-      geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
-      geom_hline(yintercept = hawkes_par_1[[p]], linetype = "dashed", color = "red") +
-      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
-      labs(x = "Method", y = paste0(p, " estimate")) +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  })
-  control_param_plots <- Filter(Negate(is.null), control_param_plots)
-  if (length(control_param_plots) > 0) {
-    sim_study_plots$plot_control_params <- control_param_plots
-  }
+control_param_plots <- build_param_boxplots(control_params_df, hawkes_par_1)
+if (!is.null(control_param_plots) && length(control_param_plots) > 0) {
+  sim_study_plots$plot_control_params <- control_param_plots
 }
 
-if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
-  treated_params_long <- reshape2::melt(treated_params_df,
-    id.vars = c("labelling", "sim_id"),
-    variable.name = "param", value.name = "value")
-  treated_param_plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
-    tmp <- treated_params_long %>% filter(.data$param == p)
-    if (nrow(tmp) == 0) return(NULL)
-    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
-    ggplot(tmp) +
-      geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
-      geom_hline(yintercept = hawkes_par_2[[p]], linetype = "dashed", color = "red") +
-      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
-      labs(x = "Method", y = paste0(p, " estimate")) +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  })
-  treated_param_plots <- Filter(Negate(is.null), treated_param_plots)
-  if (length(treated_param_plots) > 0) {
-    sim_study_plots$plot_treated_params <- treated_param_plots
-  }
+treated_param_plots <- build_param_boxplots(treated_params_df, hawkes_par_2)
+if (!is.null(treated_param_plots) && length(treated_param_plots) > 0) {
+  sim_study_plots$plot_treated_params <- treated_param_plots
 }
 
 # All-nothing ATE boxplot

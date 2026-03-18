@@ -170,14 +170,19 @@ R_BIN="$(command -v R)"
 RSCRIPT_BIN="$(command -v Rscript)"
 echo "Resolved R: $R_BIN ($("$R_BIN" --version | head -1))"
 echo "Resolved Rscript: $RSCRIPT_BIN"
+echo "gdal-config: $(command -v gdal-config || echo 'not found')"
+echo "pkg-config: $(command -v pkg-config || echo 'not found')"
 echo ""
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-echo "Checking/installing sim-study runtime packages if missing..."
-"$RSCRIPT_BIN" -e 'pkgs <- c("terra","spatstat","sf","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = TRUE)'
+echo "Verifying geospatial toolchain from module stack..."
+"$RSCRIPT_BIN" -e 'if (!nzchar(Sys.which("gdal-config")) || !nzchar(Sys.which("pkg-config"))) stop("Missing gdal-config/pkg-config on PATH after module load."); req <- c("sf","terra","units"); miss <- req[!vapply(req, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) stop(sprintf("Missing required spatial packages from R-Geo stack: %s", paste(miss, collapse=", "))); cat("Spatial stack OK (sf/terra/units available).\n")'
+
+echo "Checking/installing non-spatial sim-study runtime packages if missing..."
+"$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = NA)'
 
 echo "Installing PPDisentangle from source (fresh install)..."
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
