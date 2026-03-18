@@ -158,6 +158,10 @@ BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) 1L else N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
 BOOT_OUTER_CORES <- max(1L, min(BOOT_OUTER_CORES, N_CORES))
+if (MEMORY_SAFE && RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && BOOT_OUTER_CORES > 1L) {
+  cat(sprintf("Memory-safe bootstrap override: forcing BOOT_OUTER_CORES from %d to 1\n", BOOT_OUTER_CORES))
+  BOOT_OUTER_CORES <- 1L
+}
 SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
 SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
 if (!is.finite(SENS_CORES) || is.na(SENS_CORES) || SENS_CORES < 1L) SENS_CORES <- 1L

@@ -18,20 +18,28 @@ PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
 PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
+PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
+BOOT_REPS_EXPLICIT=0
+BOOT_OUTER_CORES_EXPLICIT=0
+RUN_SENS_EXPLICIT=0
+if [ -n "$PP_BOOT_REPS" ]; then BOOT_REPS_EXPLICIT=1; fi
+if [ -n "$PP_BOOT_OUTER_CORES" ]; then BOOT_OUTER_CORES_EXPLICIT=1; fi
+if [ "$PP_RUN_SENSITIVITY" != "auto" ]; then RUN_SENS_EXPLICIT=1; fi
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --cores) PP_CORES="$2"; shift 2 ;;
     --sims) PP_CORES="$2"; shift 2 ;;  # alias: match sim_study launcher UX
-    --boot-reps) PP_BOOT_REPS="$2"; shift 2 ;;
+    --boot-reps) PP_BOOT_REPS="$2"; BOOT_REPS_EXPLICIT=1; shift 2 ;;
     --sem-inner) PP_SEM_INNER="$2"; shift 2 ;;
     --sens-sem-inner) PP_SENS_SEM_INNER="$2"; shift 2 ;;
     --boot-sem-inner) PP_BOOT_SEM_INNER="$2"; shift 2 ;;
     --boot-targets) PP_BOOT_TARGETS="$2"; shift 2 ;;
-    --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; shift 2 ;;
+    --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
+    --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
     --setup-test) PP_SETUP_TEST=1; shift ;;
     --mem) PP_MEM="$2"; shift 2 ;;
     --time) PP_TIME="$2"; shift 2 ;;
@@ -39,8 +47,8 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-1}"
-MEM_MAX_GB="${PP_MEM_MAX_GB:-48}"
+MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-2}"
+MEM_MAX_GB="${PP_MEM_MAX_GB:-200}"
 MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
 if [ -z "$PP_MEM" ]; then
   MEM_GB=$(( PP_CORES * MEM_PER_CORE_GB ))
@@ -59,11 +67,11 @@ if [ -z "$PP_BOOT_SEM_INNER" ]; then
   PP_BOOT_SEM_INNER="$PP_SEM_INNER"
 fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
-  if [ "$PP_SETUP_TEST" = "1" ]; then
-    PP_BOOT_OUTER_CORES=1
-  else
-    PP_BOOT_OUTER_CORES=$(( PP_CORES < 2 ? PP_CORES : 2 ))
-  fi
+  PP_BOOT_OUTER_CORES=1
+fi
+
+if [ "$PP_RUN_SENSITIVITY" = "auto" ]; then
+  PP_RUN_SENSITIVITY=1
 fi
 
 # ----------------------------
@@ -98,7 +106,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     echo "Note: using milan partition for >72 cores."
   fi
 
-  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
+  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
@@ -314,7 +322,11 @@ export OK_ATE_SIM_CORES="${SAFE_SHARED_CORES}"
 export OK_RUN_DECODE=false
 export OK_SEM_INNER_ITER="$PP_SEM_INNER"
 export OK_SENS_SEM_INNER_ITER="$PP_SENS_SEM_INNER"
-export OK_RUN_SENSITIVITY=true
+if [ "$PP_RUN_SENSITIVITY" = "1" ] || [ "$PP_RUN_SENSITIVITY" = "true" ] || [ "$PP_RUN_SENSITIVITY" = "yes" ]; then
+  export OK_RUN_SENSITIVITY=true
+else
+  export OK_RUN_SENSITIVITY=false
+fi
 export OK_RUN_BOOTSTRAP_ATE=true
 export OK_BOOT_N_REPS="$PP_BOOT_REPS"
 export OK_BOOT_TARGETS="$PP_BOOT_TARGETS"
@@ -323,7 +335,7 @@ export OK_BOOT_OUTER_CORES="$PP_BOOT_OUTER_CORES"
 export OK_REPORT_FORMATS=html
 
 if [ "$PP_SETUP_TEST" = "1" ]; then
-  echo "Applying setup-test profile: main SEM inner=100, decode inner=2, sensitivity inner=2, bootstrap inner=2."
+  echo "Applying setup-test profile: main SEM inner=100, decode inner=2, sensitivity inner=2, bootstrap inner=2, sequential bootstrap."
   export OK_SEM_INNER_ITER=100
   export OK_DECODE_ITER=2
   export OK_SENS_SEM_INNER_ITER=2
@@ -331,9 +343,14 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   export OK_SENS_CORES=1
   export OK_ATE_SIM_CORES=1
   export OK_BOOT_OUTER_CORES=1
+  if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then
+    export OK_BOOT_N_REPS=2
+  fi
+  if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then
+    export OK_RUN_SENSITIVITY=false
+  fi
   export OK_BOOT_TARGETS="E,F"
   export OK_RUN_DECODE=true
-  export OK_RUN_SENSITIVITY=true
   export OK_RUN_BOOTSTRAP_ATE=true
 fi
 
