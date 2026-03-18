@@ -111,6 +111,7 @@ if (!is.na(env_decode_iter) && env_decode_iter > 0L) {
 RUN_DECODE <- tolower(Sys.getenv("OK_RUN_DECODE", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
+OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 # Oklahoma fits now estimate all ETAS parameters freely.
@@ -278,6 +279,7 @@ cat(sprintf("Memory safe: %s | Sens cores: %d | ATE sim cores: %d | Boot outer c
 cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
+cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 
 analysis_start_time <- Sys.time()
 analysis_start_elapsed <- proc.time()[["elapsed"]]
@@ -652,7 +654,7 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 1
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -730,7 +732,7 @@ fit_d <- function() {
       state_spaces_in = state_spaces,
       init_params_in = biv_init_D,
       background_rate_var_in = NULL,
-      verbose_in = TRUE,
+      verbose_in = OK_VERBOSE,
       label = "Fit D"
     )
   }, error = function(e) { cat("  SEM-biv error:", e$message, "\n"); NULL })
@@ -869,7 +871,7 @@ fit_e <- function() {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 1
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate+KDE fit error:", e$message, "\n"); NULL })
 }
@@ -889,7 +891,7 @@ fit_f <- function() {
       state_spaces_in = state_spaces,
       init_params_in = biv_init_F,
       background_rate_var_in = "W",
-      verbose_in = TRUE,
+      verbose_in = OK_VERBOSE,
       label = "Fit F"
     )
   }, error = function(e) { cat("  SEM-biv+KDE error:", e$message, "\n"); NULL })

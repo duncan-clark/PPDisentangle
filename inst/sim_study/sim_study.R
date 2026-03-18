@@ -8,14 +8,40 @@
 #
 # Output: inst/sim_study/output/{JOB_ID}.rds  inst/sim_study/output/{JOB_ID}.log
 
-user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
-if (nzchar(user_lib)) {
+prepend_user_lib_paths <- function() {
+  user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
+  if (!nzchar(user_lib)) return(invisible(NULL))
   extra_libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]
   extra_libs <- extra_libs[nzchar(extra_libs)]
   if (length(extra_libs) > 0L) {
     .libPaths(c(extra_libs, .libPaths()))
   }
 }
+
+wait_for_namespace <- function(pkg, timeout_s = 180L, sleep_s = 5L) {
+  prepend_user_lib_paths()
+  lock_dir <- file.path(Sys.getenv("R_LIBS_USER", unset = ""), paste0("00LOCK-", pkg))
+  start_time <- Sys.time()
+  repeat {
+    prepend_user_lib_paths()
+    if (requireNamespace(pkg, quietly = TRUE)) return(invisible(TRUE))
+    waited_s <- as.integer(difftime(Sys.time(), start_time, units = "secs"))
+    if (waited_s >= timeout_s) {
+      stop(sprintf(
+        "Package '%s' not visible after %ds. .libPaths()=%s",
+        pkg, timeout_s, paste(.libPaths(), collapse = " | ")
+      ))
+    }
+    if (nzchar(lock_dir) && dir.exists(lock_dir)) {
+      message(sprintf("Waiting for package '%s' while lock exists (%s); waited %ds...", pkg, lock_dir, waited_s))
+    } else {
+      message(sprintf("Waiting for package '%s' to become visible; waited %ds...", pkg, waited_s))
+    }
+    Sys.sleep(sleep_s)
+  }
+}
+
+wait_for_namespace("PPDisentangle")
 library(PPDisentangle)
 library(spatstat)
 library(ggplot2)
@@ -217,6 +243,37 @@ make_cluster <- function(n_cores) {
   cl <- makeCluster(n_cores)
   registerDoParallel(cl)
   clusterEvalQ(cl, {
+    prepend_user_lib_paths <- function() {
+      user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
+      if (!nzchar(user_lib)) return(invisible(NULL))
+      extra_libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]
+      extra_libs <- extra_libs[nzchar(extra_libs)]
+      if (length(extra_libs) > 0L) {
+        .libPaths(c(extra_libs, .libPaths()))
+      }
+    }
+    wait_for_namespace <- function(pkg, timeout_s = 180L, sleep_s = 5L) {
+      prepend_user_lib_paths()
+      lock_dir <- file.path(Sys.getenv("R_LIBS_USER", unset = ""), paste0("00LOCK-", pkg))
+      start_time <- Sys.time()
+      repeat {
+        prepend_user_lib_paths()
+        if (requireNamespace(pkg, quietly = TRUE)) return(invisible(TRUE))
+        waited_s <- as.integer(difftime(Sys.time(), start_time, units = "secs"))
+        if (waited_s >= timeout_s) {
+          stop(sprintf(
+            "Worker could not load '%s' after %ds. .libPaths()=%s",
+            pkg, timeout_s, paste(.libPaths(), collapse = " | ")
+          ))
+        }
+        if (nzchar(lock_dir) && dir.exists(lock_dir)) {
+          message(sprintf("Worker waiting for '%s' lock (%s); waited %ds...", pkg, lock_dir, waited_s))
+        } else {
+          message(sprintf("Worker waiting for '%s' visibility; waited %ds...", pkg, waited_s))
+        }
+        Sys.sleep(sleep_s)
+      }
+    }
     user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
     if (nzchar(user_lib)) {
       extra_libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]
@@ -225,6 +282,7 @@ make_cluster <- function(n_cores) {
         .libPaths(c(extra_libs, .libPaths()))
       }
     }
+    wait_for_namespace("PPDisentangle")
     library(PPDisentangle)
     library(R.utils)
   })

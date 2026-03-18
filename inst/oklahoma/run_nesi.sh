@@ -362,6 +362,7 @@ export OK_CORES="${JOB_CORES}"
 export OK_SENS_CORES="${SAFE_SHARED_CORES}"
 export OK_ATE_SIM_CORES="${SAFE_SHARED_CORES}"
 export OK_RUN_DECODE=false
+export OK_VERBOSE=false
 export OK_SEM_INNER_ITER="$PP_SEM_INNER"
 export OK_SENS_SEM_INNER_ITER="$PP_SENS_SEM_INNER"
 if [ "$PP_RUN_SENSITIVITY" = "1" ] || [ "$PP_RUN_SENSITIVITY" = "true" ] || [ "$PP_RUN_SENSITIVITY" = "yes" ]; then
