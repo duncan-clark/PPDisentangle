@@ -8,6 +8,14 @@
 #
 # Output: inst/sim_study/output/{JOB_ID}.rds  inst/sim_study/output/{JOB_ID}.log
 
+user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
+if (nzchar(user_lib)) {
+  extra_libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]
+  extra_libs <- extra_libs[nzchar(extra_libs)]
+  if (length(extra_libs) > 0L) {
+    .libPaths(c(extra_libs, .libPaths()))
+  }
+}
 library(PPDisentangle)
 library(spatstat)
 library(ggplot2)

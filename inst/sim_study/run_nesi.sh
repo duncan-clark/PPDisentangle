@@ -136,6 +136,8 @@ echo ""
 SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
 mkdir -p "$SHARED_R_LIBS_USER"
 export R_LIBS_USER="$SHARED_R_LIBS_USER"
+# Also expose the same path via R_LIBS so non-interactive calls consistently see it.
+export R_LIBS="${R_LIBS_USER}${R_LIBS:+:${R_LIBS}}"
 PP_LOCK_DIR="${SHARED_R_LIBS_USER}/00LOCK-PPDisentangle"
 echo "R_LIBS_USER=$R_LIBS_USER"
 
@@ -277,6 +279,8 @@ wait_for_pp_lock_clear "$PP_LOCK_DIR"
 cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
 cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
+echo "Verifying PPDisentangle is visible in runtime library paths..."
+"$RSCRIPT_BIN" -e 'user_lib <- Sys.getenv("R_LIBS_USER", ""); if (nzchar(user_lib)) { libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]; libs <- libs[nzchar(libs)]; if (length(libs) > 0L) .libPaths(c(libs, .libPaths())) }; cat(".libPaths()=", paste(.libPaths(), collapse=" | "), "\n", sep=""); if (!requireNamespace("PPDisentangle", quietly = TRUE)) stop("PPDisentangle not visible after install."); library(PPDisentangle); cat("PPDisentangle load check OK.\n")'
 echo ""
 
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
