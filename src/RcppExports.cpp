@@ -164,6 +164,32 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// hawkes_loglik_inhom_filtration_cpp
+double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t, NumericVector post_x, NumericVector post_y, NumericVector W_val, NumericVector parent_t, NumericVector parent_x, NumericVector parent_y, double mu, double alpha, double beta, double K, double areaS, double t_start, double t_end, double adjust_factor, double t_trunc);
+RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_filtration_cpp(SEXP post_tSEXP, SEXP post_xSEXP, SEXP post_ySEXP, SEXP W_valSEXP, SEXP parent_tSEXP, SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_startSEXP, SEXP t_endSEXP, SEXP adjust_factorSEXP, SEXP t_truncSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type post_t(post_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type post_x(post_xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type post_y(post_ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val(W_valSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_t(parent_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_x(parent_xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parent_y(parent_ySEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< double >::type K(KSEXP);
+    Rcpp::traits::input_parameter< double >::type areaS(areaSSEXP);
+    Rcpp::traits::input_parameter< double >::type t_start(t_startSEXP);
+    Rcpp::traits::input_parameter< double >::type t_end(t_endSEXP);
+    Rcpp::traits::input_parameter< double >::type adjust_factor(adjust_factorSEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    rcpp_result_gen = Rcpp::wrap(hawkes_loglik_inhom_filtration_cpp(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor, t_trunc));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sim_hawkes_children_cpp
 DataFrame sim_hawkes_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, double alpha, double beta, double K, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc);
 RcppExport SEXP _PPDisentangle_sim_hawkes_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP) {
@@ -194,6 +220,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
     {"_PPDisentangle_sim_etas_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_children_cpp, 21},
     {"_PPDisentangle_hawkes_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_cpp, 11},
+    {"_PPDisentangle_hawkes_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_filtration_cpp, 16},
     {"_PPDisentangle_sim_hawkes_children_cpp", (DL_FUNC) &_PPDisentangle_sim_hawkes_children_cpp, 13},
     {NULL, NULL, 0}
 };

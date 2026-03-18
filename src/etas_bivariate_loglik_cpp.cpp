@@ -81,6 +81,26 @@ double etas_bivariate_loglik_cpp(
   A_mat[1][1] = A_11;   alpha_mat[1][1] = alpha_m_11;
 
   double loglik = 0.0;
+  NumericVector dm(n), d_parent(n), inv_d_parent(n);
+  NumericMatrix kappa_mat(2, n);
+  NumericMatrix comp_mat(2, n);
+  for (int j = 0; j < n; ++j) {
+    dm[j] = mag[j] - m0;
+    d_parent[j] = D * std::exp(gamma_par * dm[j]);
+    inv_d_parent[j] = 1.0 / d_parent[j];
+    int l = process_id[j];
+    for (int k = 0; k < 2; ++k) {
+      double A_kl = A_mat[k][l];
+      if (A_kl < 1e-20) {
+        kappa_mat(k, j) = 0.0;
+        comp_mat(k, j) = 0.0;
+      } else {
+        double exp_part = std::exp(alpha_mat[k][l] * dm[j]);
+        kappa_mat(k, j) = A_kl * exp_part;
+        comp_mat(k, j) = A_kl * exp_part;
+      }
+    }
+  }
 
   // --- Sum of log-intensities ---
   for (int i = 0; i < n; ++i) {
@@ -94,21 +114,16 @@ double etas_bivariate_loglik_cpp(
       if (dt <= 0.0) continue;
       if (do_trunc && dt > t_trunc) continue;
 
-      int l = process_id[j];
-      double A_kl = A_mat[k][l];
-      if (A_kl < 1e-20) continue;
-      double alpha_kl = alpha_mat[k][l];
-
-      double dm_j = mag[j] - m0;
-      double kappa_j = A_kl * std::exp(alpha_kl * dm_j);
-      double d_j = D * std::exp(gamma_par * dm_j);
+      double kappa_j = kappa_mat(k, j);
+      if (kappa_j < 1e-20) continue;
+      double d_j = d_parent[j];
 
       double temporal = std::pow(1.0 + dt / cc, -p);
 
       double dx = x[i] - x[j];
       double dy = y[i] - y[j];
       double r2 = dx * dx + dy * dy;
-      double spatial = std::pow(1.0 + r2 / d_j, -q) / d_j;
+      double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
 
       lambda_i += base_const * kappa_j * temporal * spatial;
     }
@@ -123,17 +138,15 @@ double etas_bivariate_loglik_cpp(
   //   child 1: A_{1l} * exp(alpha_{1l} * dm_j) * G(h_j)
   double comp_trig = 0.0;
   for (int j = 0; j < n; ++j) {
-    double dm_j = mag[j] - m0;
     double horizon = t_max - t[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
     double G_h = 1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0));
 
-    int l = process_id[j];
     for (int k = 0; k < 2; ++k) {
-      double A_kl = A_mat[k][l];
-      if (A_kl < 1e-20) continue;
-      comp_trig += A_kl * std::exp(alpha_mat[k][l] * dm_j) * G_h;
+      double comp_j = comp_mat(k, j);
+      if (comp_j < 1e-20) continue;
+      comp_trig += comp_j * G_h;
     }
   }
 

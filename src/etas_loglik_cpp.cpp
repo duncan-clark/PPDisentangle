@@ -88,6 +88,14 @@ double etas_loglik_inhom_cpp(NumericVector t,
   //   A * (p-1) * (q-1) / (pi * c * temporal_norm)
   // The magnitude-dependent terms kappa(m_j)/d(m_j) are applied per parent.
   double base_const = A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  NumericVector dm(n), kappa_factor(n), d_parent(n), inv_d_parent(n), comp_kappa(n);
+  for (int j = 0; j < n; ++j) {
+    dm[j] = mag[j] - m0;
+    kappa_factor[j] = std::exp(alpha_m * dm[j]);
+    d_parent[j] = D * std::exp(gamma_par * dm[j]);
+    inv_d_parent[j] = 1.0 / d_parent[j];
+    comp_kappa[j] = A * kappa_factor[j];
+  }
 
   // --- Sum of log-intensities ---
   for (int i = 0; i < n; ++i) {
@@ -100,9 +108,8 @@ double etas_loglik_inhom_cpp(NumericVector t,
       if (do_trunc && dt > t_trunc) continue;
 
       // Magnitude-dependent quantities for parent j
-      double dm_j = mag[j] - m0;
-      double kappa_j = std::exp(alpha_m * dm_j);  // productivity
-      double d_j = D * std::exp(gamma_par * dm_j); // spatial spread
+      double kappa_j = kappa_factor[j];
+      double d_j = d_parent[j];
 
       // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
       double temporal = std::pow(1.0 + dt / cc, -p);
@@ -111,7 +118,7 @@ double etas_loglik_inhom_cpp(NumericVector t,
       double dx = x[i] - x[j];
       double dy = y[i] - y[j];
       double r2 = dx * dx + dy * dy;
-      double spatial = std::pow(1.0 + r2 / d_j, -q) / d_j;
+      double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
 
       lambda_i += base_const * kappa_j * temporal * spatial;
     }
@@ -125,8 +132,7 @@ double etas_loglik_inhom_cpp(NumericVector t,
   // Contribution from parent i: kappa(m_i) * G(horizon_i)
   double triggering_integral = 0.0;
   for (int i = 0; i < n; ++i) {
-    double dm_i = mag[i] - m0;
-    double kappa_i = A * std::exp(alpha_m * dm_i);
+    double kappa_i = comp_kappa[i];
     double horizon = t_max - t[i];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;

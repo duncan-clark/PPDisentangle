@@ -168,6 +168,8 @@ adaptive_SEM <- function(pp_data,
   pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
   post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
   post <- post[order(post$t), ]
+  max_data_t <- max(starting_data$t)
+  sem_windowT <- c(treatment_time, max_data_t)
   hawkes_bg_var <- if (!is.null(background_rate_var)) background_rate_var else "W"
 
   hawkes_loglik_with_filtration <- function(params, post_realiz, filt_realiz, zero_bg_region) {
@@ -177,7 +179,7 @@ adaptive_SEM <- function(pp_data,
     if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-Inf)
     if (!inherits(statespace, "owin")) statespace <- as.owin(statespace)
     total_area <- spatstat.geom::area(statespace)
-    dt <- max(starting_data$t) - treatment_time
+    dt <- max_data_t - treatment_time
     if (!is.finite(dt) || dt <= 0) return(-Inf)
 
     adjust_factor <- 1
@@ -205,45 +207,43 @@ adaptive_SEM <- function(pp_data,
       filt_realiz <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
     }
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
-
     parent_x <- c(filt_realiz$x, post_realiz$x)
     parent_y <- c(filt_realiz$y, post_realiz$y)
     parent_t <- c(filt_realiz$t, post_realiz$t)
     if (length(parent_t) < 1L || nrow(post_realiz) < 1L) return(-Inf)
 
-    t_diff <- outer(post_realiz$t, parent_t, "-")
-    dx <- outer(post_realiz$x, parent_x, "-")
-    dy <- outer(post_realiz$y, parent_y, "-")
-    d_space <- sqrt(dx * dx + dy * dy)
-    valid_parent <- t_diff > 0
-
-    trigger_sum <- rowSums(exp(-beta * t_diff - alpha * d_space) * valid_parent)
-    lam <- (mu / total_area) * W_vec + (K * alpha * beta / pi) * trigger_sum
-    if (any(!is.finite(lam)) || any(lam <= 0)) return(-Inf)
-
-    parent_weight <- numeric(length(parent_t))
-    pre_idx <- parent_t < treatment_time
-    post_idx <- parent_t >= treatment_time & parent_t <= max(starting_data$t)
-    if (any(pre_idx)) {
-      parent_weight[pre_idx] <-
-        exp(-beta * (treatment_time - parent_t[pre_idx])) -
-        exp(-beta * (max(starting_data$t) - parent_t[pre_idx]))
-    }
-    if (any(post_idx)) {
-      parent_weight[post_idx] <- 1 - exp(-beta * (max(starting_data$t) - parent_t[post_idx]))
-    }
-
-    loglik <- sum(log(lam)) - (mu * adjust_factor * dt) - (K * sum(parent_weight))
+    loglik <- hawkes_loglik_inhom_filtration_cpp(
+      post_t = post_realiz$t,
+      post_x = post_realiz$x,
+      post_y = post_realiz$y,
+      W_val = W_vec,
+      parent_t = parent_t,
+      parent_x = parent_x,
+      parent_y = parent_y,
+      mu = mu,
+      alpha = alpha,
+      beta = beta,
+      K = K,
+      areaS = total_area,
+      t_start = treatment_time,
+      t_end = max_data_t,
+      adjust_factor = adjust_factor,
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1
+    )
     if (!is.finite(loglik)) return(-Inf)
     loglik
   }
 
   calculate_weights <- function(labellings, treat_par, control_par, ...) {
     sapply(labellings, function(y) {
+      post_idx <- y$t >= treatment_time
+      pre_idx <- !post_idx
       realiz <- if (is_biv_etas && use_pre_history_for_biv) {
         y
+      } else if (is_etas) {
+        y[post_idx, , drop = FALSE]
       } else {
-        y %>% dplyr::filter(.data$t >= treatment_time)
+        y
       }
       if (is_biv_etas) {
         biv_par <- if (is.null(dots$etas_bivariate_params)) {
@@ -252,9 +252,9 @@ adaptive_SEM <- function(pp_data,
           dots$etas_bivariate_params
         }
         biv_wT <- if (use_pre_history_for_biv) {
-          c(min(starting_data$t), max(starting_data$t))
+          c(min(starting_data$t), max_data_t)
         } else {
-          c(treatment_time, max(starting_data$t))
+          sem_windowT
         }
         return(loglik_etas_bivariate(
           params = biv_par, realiz = realiz,
@@ -266,36 +266,44 @@ adaptive_SEM <- function(pp_data,
           t_trunc = t_trunc
         ))
       }
-      include <- which(realiz$inferred_process == "control")
+      include <- if (is_etas) {
+        which(realiz$inferred_process == "control")
+      } else {
+        which(post_idx & y$inferred_process == "control")
+      }
       if (length(include) == 0) return(-Inf)
       if (!is_etas) {
         control_lik <- hawkes_loglik_with_filtration(
           params = control_par,
-          post_realiz = realiz[include, , drop = FALSE],
-          filt_realiz = realiz[realiz$t < treatment_time & realiz$inferred_process == "control", , drop = FALSE],
+          post_realiz = y[include, , drop = FALSE],
+          filt_realiz = y[pre_idx & y$inferred_process == "control", , drop = FALSE],
           zero_bg_region = treated_state_space
         )
       } else {
         control_lik <- loglik_fn(
           params = control_par, realiz = realiz[include, ],
-          windowT = c(treatment_time, max(starting_data$t)),
+          windowT = sem_windowT,
           windowS = statespace, zero_background_region = treated_state_space,
           t_trunc = t_trunc, ...
         )
       }
-      include <- which(realiz$inferred_process == "treated")
+      include <- if (is_etas) {
+        which(realiz$inferred_process == "treated")
+      } else {
+        which(post_idx & y$inferred_process == "treated")
+      }
       if (length(include) == 0) return(-Inf)
       if (!is_etas) {
         treat_lik <- hawkes_loglik_with_filtration(
           params = treat_par,
-          post_realiz = realiz[include, , drop = FALSE],
-          filt_realiz = realiz[realiz$t < treatment_time & realiz$inferred_process == "treated", , drop = FALSE],
+          post_realiz = y[include, , drop = FALSE],
+          filt_realiz = y[pre_idx & y$inferred_process == "treated", , drop = FALSE],
           zero_bg_region = control_state_space
         )
       } else {
         treat_lik <- loglik_fn(
           params = treat_par, realiz = realiz[include, ],
-          windowT = c(treatment_time, max(starting_data$t)),
+          windowT = sem_windowT,
           windowS = statespace, zero_background_region = control_state_space,
           t_trunc = t_trunc, ...
         )
@@ -376,6 +384,19 @@ adaptive_SEM <- function(pp_data,
       cat("  normalized weights: ", paste(signif(weights, 4), collapse = ", "), "\n")
     }
 
+    # Cache process/time splits once per labelling to avoid repeated filtering
+    # inside objective function evaluations.
+    prepared_labellings <- lapply(labellings[keepers], function(y) {
+      post_idx <- y$t >= treatment_time
+      pre_idx <- !post_idx
+      list(
+        post_control = y[post_idx & y$inferred_process == "control", , drop = FALSE],
+        post_treated = y[post_idx & y$inferred_process == "treated", , drop = FALSE],
+        filt_control = y[pre_idx & y$inferred_process == "control", , drop = FALSE],
+        filt_treated = y[pre_idx & y$inferred_process == "treated", , drop = FALSE]
+      )
+    })
+
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
     outer_maxit <- adaptive_control$outer_maxit
     outer_maxit_biv <- if (!is.null(adaptive_control$outer_maxit_biv)) {
@@ -400,17 +421,19 @@ adaptive_SEM <- function(pp_data,
       if (is.null(names(biv_par))) names(biv_par) <- biv_names
 
       biv_wT <- if (use_pre_history_for_biv) {
-        c(min(starting_data$t), max(starting_data$t))
+        c(min(starting_data$t), max_data_t)
       } else {
-        c(treatment_time, max(starting_data$t))
+        sem_windowT
       }
+      area_control <- spatstat.geom::area(control_state_space)
+      area_treated <- spatstat.geom::area(treated_state_space)
       biv_precomps <- lapply(labellings[keepers], function(y) {
         r <- if (use_pre_history_for_biv) y else y[y$t >= treatment_time, ]
         r <- r[order(r$t), ]
         nn <- nrow(r)
         W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
-        aS0 <- spatstat.geom::area(control_state_space)
-        aS1 <- spatstat.geom::area(treated_state_space)
+        aS0 <- area_control
+        aS1 <- area_treated
         W0[inside.owin(r$x, r$y, treated_state_space)] <- 0
         W1[inside.owin(r$x, r$y, control_state_space)] <- 0
         if (!is.null(treated_background_zero_before)) {
@@ -448,7 +471,7 @@ adaptive_SEM <- function(pp_data,
         }
         biv_res <- tryCatch(
           optim(par = biv_par[biv_fr_idx], fn = biv_wrap, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit_biv)),
+                control = list(fnscale = -1, trace = 0, maxit = outer_maxit_biv)),
           error = function(e) {
             cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
             list(par = biv_par[biv_fr_idx], convergence = -99)
@@ -458,7 +481,7 @@ adaptive_SEM <- function(pp_data,
       } else {
         biv_res <- tryCatch(
           optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit_biv)),
+                control = list(fnscale = -1, trace = 0, maxit = outer_maxit_biv)),
           error = function(e) {
             cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
             list(par = biv_par, convergence = -99)
@@ -494,13 +517,13 @@ adaptive_SEM <- function(pp_data,
     fr_idx <- setdiff(seq_along(all_names), fp_idx)
 
     run_outer_optim <- function(process_label, zero_bg_region, par_list) {
+      split_key <- if (process_label == "control") "post_control" else "post_treated"
+      filt_key <- if (process_label == "control") "filt_control" else "filt_treated"
       obj_fn <- function(params) {
-        liks <- sapply(labellings[keepers], function(y) {
-          post_part <- y %>% dplyr::filter(.data$t >= treatment_time,
-                                           .data$inferred_process == process_label)
+        liks <- sapply(prepared_labellings, function(parts) {
+          post_part <- parts[[split_key]]
           if (!is_etas) {
-            filt_part <- y %>% dplyr::filter(.data$t < treatment_time,
-                                             .data$inferred_process == process_label)
+            filt_part <- parts[[filt_key]]
             hawkes_loglik_with_filtration(
               params = params,
               post_realiz = as.data.frame(post_part),
@@ -511,7 +534,7 @@ adaptive_SEM <- function(pp_data,
             loglik_fn(
               params = params,
               realiz = post_part,
-              windowT = c(treatment_time, max(starting_data$t)),
+              windowT = sem_windowT,
               windowS = statespace, zero_background_region = zero_bg_region,
               background_rate_var = "W",
               t_trunc = t_trunc
@@ -536,7 +559,7 @@ adaptive_SEM <- function(pp_data,
         }
         res <- tryCatch(
           optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit)),
+                control = list(fnscale = -1, trace = 0, maxit = outer_maxit)),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec[fr_idx], convergence = -99) }
         )
         out_par <- full_vec; out_par[fr_idx] <- res$par
@@ -544,7 +567,7 @@ adaptive_SEM <- function(pp_data,
       } else {
         res <- tryCatch(
           optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 1 * verbose, maxit = outer_maxit)),
+                control = list(fnscale = -1, trace = 0, maxit = outer_maxit)),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec, convergence = -99) }
         )
       }

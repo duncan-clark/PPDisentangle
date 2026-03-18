@@ -163,12 +163,6 @@ fit_hawkes_with_filtration <- function(params_init,
   parent_y <- c(filtration$y, realiz$y)
   parent_t <- c(filtration$t, realiz$t)
 
-  t_diff <- outer(realiz$t, parent_t, "-")
-  dx <- outer(realiz$x, parent_x, "-")
-  dy <- outer(realiz$y, parent_y, "-")
-  d_space <- sqrt(dx * dx + dy * dy)
-  valid_parent <- t_diff > 0
-
   dt <- windowT[2] - windowT[1]
   min_trigger_sd <- 0.001 * sqrt(total_area)
   alpha_max <- 1 / min_trigger_sd^2
@@ -179,25 +173,24 @@ fit_hawkes_with_filtration <- function(params_init,
     if (!is.finite(mu) || !is.finite(alpha) || !is.finite(beta) || !is.finite(K)) return(-1e15)
     if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-1e15)
     if (alpha > alpha_max || beta < beta_min) return(-1e15)
-
-    trigger_sum <- rowSums(exp(-beta * t_diff - alpha * d_space) * valid_parent)
-    bg <- (mu / total_area) * W_vec
-    lam <- bg + (K * alpha * beta / pi) * trigger_sum
-    if (any(!is.finite(lam)) || any(lam <= 0)) return(-1e15)
-
-    parent_weight <- numeric(length(parent_t))
-    pre_idx <- parent_t < windowT[1]
-    post_idx <- parent_t >= windowT[1] & parent_t <= windowT[2]
-    if (any(pre_idx)) {
-      parent_weight[pre_idx] <-
-        exp(-beta * (windowT[1] - parent_t[pre_idx])) -
-        exp(-beta * (windowT[2] - parent_t[pre_idx]))
-    }
-    if (any(post_idx)) {
-      parent_weight[post_idx] <- 1 - exp(-beta * (windowT[2] - parent_t[post_idx]))
-    }
-
-    loglik <- sum(log(lam)) - (mu * adjust_factor * dt) - (K * sum(parent_weight))
+    loglik <- hawkes_loglik_inhom_filtration_cpp(
+      post_t = realiz$t,
+      post_x = realiz$x,
+      post_y = realiz$y,
+      W_val = W_vec,
+      parent_t = parent_t,
+      parent_x = parent_x,
+      parent_y = parent_y,
+      mu = mu,
+      alpha = alpha,
+      beta = beta,
+      K = K,
+      areaS = total_area,
+      t_start = windowT[1],
+      t_end = windowT[2],
+      adjust_factor = adjust_factor,
+      t_trunc = -1
+    )
     if (!is.finite(loglik)) return(-1e15)
     loglik
   }
