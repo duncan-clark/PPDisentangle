@@ -22,6 +22,14 @@ PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
+PP_MODE="${PP_MODE:-}"
+CORES_EXPLICIT=0
+MEM_EXPLICIT=0
+SEM_INNER_EXPLICIT=0
+SENS_SEM_INNER_EXPLICIT=0
+BOOT_SEM_INNER_EXPLICIT=0
+BOOT_TARGETS_EXPLICIT=0
+SETUP_TEST_EXPLICIT=0
 BOOT_REPS_EXPLICIT=0
 BOOT_OUTER_CORES_EXPLICIT=0
 RUN_SENS_EXPLICIT=0
@@ -31,21 +39,55 @@ if [ "$PP_RUN_SENSITIVITY" != "auto" ]; then RUN_SENS_EXPLICIT=1; fi
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --cores) PP_CORES="$2"; shift 2 ;;
-    --sims) PP_CORES="$2"; shift 2 ;;  # alias: match sim_study launcher UX
+    --mode) PP_MODE="$2"; shift 2 ;;
+    --cores) PP_CORES="$2"; CORES_EXPLICIT=1; shift 2 ;;
+    --sims) PP_CORES="$2"; CORES_EXPLICIT=1; shift 2 ;;  # alias: match sim_study launcher UX
     --boot-reps) PP_BOOT_REPS="$2"; BOOT_REPS_EXPLICIT=1; shift 2 ;;
-    --sem-inner) PP_SEM_INNER="$2"; shift 2 ;;
-    --sens-sem-inner) PP_SENS_SEM_INNER="$2"; shift 2 ;;
-    --boot-sem-inner) PP_BOOT_SEM_INNER="$2"; shift 2 ;;
-    --boot-targets) PP_BOOT_TARGETS="$2"; shift 2 ;;
+    --sem-inner) PP_SEM_INNER="$2"; SEM_INNER_EXPLICIT=1; shift 2 ;;
+    --sens-sem-inner) PP_SENS_SEM_INNER="$2"; SENS_SEM_INNER_EXPLICIT=1; shift 2 ;;
+    --boot-sem-inner) PP_BOOT_SEM_INNER="$2"; BOOT_SEM_INNER_EXPLICIT=1; shift 2 ;;
+    --boot-targets) PP_BOOT_TARGETS="$2"; BOOT_TARGETS_EXPLICIT=1; shift 2 ;;
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
     --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
-    --setup-test) PP_SETUP_TEST=1; shift ;;
-    --mem) PP_MEM="$2"; shift 2 ;;
+    --setup-test) PP_SETUP_TEST=1; SETUP_TEST_EXPLICIT=1; shift ;;
+    --mem) PP_MEM="$2"; MEM_EXPLICIT=1; shift 2 ;;
     --time) PP_TIME="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+if [ -n "$PP_MODE" ]; then
+  mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
+  case "$mode_norm" in
+    test|setup-test)
+      if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=1; fi
+      if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=2; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=100; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=64G; fi
+      ;;
+    long|full|big)
+      if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
+      if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=32; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
+      ;;
+    *)
+      echo "Unknown --mode '$PP_MODE' (expected: test | long)"
+      exit 1
+      ;;
+  esac
+fi
 
 MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-2}"
 MEM_MAX_GB="${PP_MEM_MAX_GB:-200}"
@@ -110,7 +152,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
-  echo "Submitting Oklahoma job: cores=$PP_CORES boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -139,7 +181,7 @@ echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS"
-echo "setup_test=$PP_SETUP_TEST"
+echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
 echo ""
 
 # Shared library path only; guard package install lock collisions.
