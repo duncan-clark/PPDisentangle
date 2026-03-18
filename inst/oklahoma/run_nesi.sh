@@ -134,14 +134,38 @@ echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_IN
 echo "setup_test=$PP_SETUP_TEST"
 echo ""
 
-# Isolate package installs per job to avoid 00LOCK collisions across jobs.
+# Shared library path only; guard package install lock collisions.
 SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
-JOB_LIB_TAG="${SLURM_JOB_ID:-manual}_$$"
-JOB_R_LIBS_USER="${SHARED_R_LIBS_USER}/jobs/${JOB_LIB_TAG}"
-mkdir -p "$JOB_R_LIBS_USER" "$SHARED_R_LIBS_USER"
-export R_LIBS_USER="${JOB_R_LIBS_USER}:${SHARED_R_LIBS_USER}"
+mkdir -p "$SHARED_R_LIBS_USER"
+export R_LIBS_USER="$SHARED_R_LIBS_USER"
+PP_LOCK_DIR="${SHARED_R_LIBS_USER}/00LOCK-PPDisentangle"
 echo "R_LIBS_USER=$R_LIBS_USER"
-rm -rf "${JOB_R_LIBS_USER}/00LOCK-PPDisentangle" 2>/dev/null || true
+
+wait_for_pp_lock_clear() {
+  local lock_dir="$1"
+  local waited_s=0
+  local sleep_s=5
+  while [ -d "$lock_dir" ]; do
+    echo "Waiting for lock release: $lock_dir (waited ${waited_s}s)..."
+    sleep "$sleep_s"
+    waited_s=$(( waited_s + sleep_s ))
+  done
+}
+
+cleanup_pp_lock_if_safe() {
+  local lock_dir="$1"
+  if [ ! -d "$lock_dir" ]; then
+    return 0
+  fi
+  if pgrep -u "${USER:-$(id -un)}" -f "R CMD INSTALL.*PPDisentangle" >/dev/null 2>&1; then
+    echo "Lock present but PPDisentangle install still active; leaving lock in place."
+    return 0
+  fi
+  echo "Removing stale lock: $lock_dir"
+  rm -rf "$lock_dir" 2>/dev/null || true
+}
+
+trap 'cleanup_pp_lock_if_safe "$PP_LOCK_DIR"' EXIT
 
 module --force purge
 
@@ -273,7 +297,10 @@ else
 fi
 
 echo "Installing PPDisentangle from source (fresh install)..."
+wait_for_pp_lock_clear "$PP_LOCK_DIR"
+cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
+cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
 echo ""
 
 # Oklahoma run config.

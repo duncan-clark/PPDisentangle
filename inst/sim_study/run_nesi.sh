@@ -99,6 +99,39 @@ echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
+# Shared library path only; guard package install lock collisions.
+SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"
+mkdir -p "$SHARED_R_LIBS_USER"
+export R_LIBS_USER="$SHARED_R_LIBS_USER"
+PP_LOCK_DIR="${SHARED_R_LIBS_USER}/00LOCK-PPDisentangle"
+echo "R_LIBS_USER=$R_LIBS_USER"
+
+wait_for_pp_lock_clear() {
+    local lock_dir="$1"
+    local waited_s=0
+    local sleep_s=5
+    while [ -d "$lock_dir" ]; do
+        echo "Waiting for lock release: $lock_dir (waited ${waited_s}s)..."
+        sleep "$sleep_s"
+        waited_s=$(( waited_s + sleep_s ))
+    done
+}
+
+cleanup_pp_lock_if_safe() {
+    local lock_dir="$1"
+    if [ ! -d "$lock_dir" ]; then
+        return 0
+    fi
+    if pgrep -u "${USER:-$(id -un)}" -f "R CMD INSTALL.*PPDisentangle" >/dev/null 2>&1; then
+        echo "Lock present but PPDisentangle install still active; leaving lock in place."
+        return 0
+    fi
+    echo "Removing stale lock: $lock_dir"
+    rm -rf "$lock_dir" 2>/dev/null || true
+}
+
+trap 'cleanup_pp_lock_if_safe "$PP_LOCK_DIR"' EXIT
+
 module --force purge
 TARGET_R_GEO="R-Geo/4.3.2-foss-2023a"
 echo "Requested R-Geo module: $TARGET_R_GEO"
@@ -207,7 +240,10 @@ echo "Checking/installing non-spatial sim-study runtime packages if missing..."
 "$RSCRIPT_BIN" -e 'pkgs <- c("spatstat","data.table","dplyr","ggplot2","foreach","doParallel","R.utils","reshape2","gridExtra","scales"); miss <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]; if (length(miss)) install.packages(miss, repos = "https://cloud.r-project.org", dependencies = NA)'
 
 echo "Installing PPDisentangle from source (fresh install)..."
+wait_for_pp_lock_clear "$PP_LOCK_DIR"
+cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
 "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
+cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
 echo ""
 
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
