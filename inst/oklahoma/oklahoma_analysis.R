@@ -122,10 +122,10 @@ ATE_WINDOW_DAYS <- 100
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
 BOOT_N_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_N_REPS", "0")))
 if (!is.finite(BOOT_N_REPS) || is.na(BOOT_N_REPS) || BOOT_N_REPS < 0L) BOOT_N_REPS <- 0L
-BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "F"))
+BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E,F"))
 BOOT_TARGETS <- unique(trimws(unlist(strsplit(BOOT_TARGETS_RAW, ","))))
-BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("B", "D", "E", "F")]
-if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- "F"
+BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("E", "F")]
+if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E", "F")
 BOOT_REFIT_SCOPE <- tolower(trimws(Sys.getenv("OK_BOOT_REFIT_SCOPE", "partial")))
 if (!BOOT_REFIT_SCOPE %in% c("none", "partial", "full")) BOOT_REFIT_SCOPE <- "partial"
 BOOT_SEM_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEM_INNER_ITER", "200")))
@@ -154,7 +154,7 @@ N_CORES <- max(1L, min(N_CORES, parallel::detectCores()))
 if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
   N_CORES <- min(N_CORES, 4L)
 }
-BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
+BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) 1L else N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
 BOOT_OUTER_CORES <- max(1L, min(BOOT_OUTER_CORES, N_CORES))
@@ -202,9 +202,58 @@ run_parallel <- function(X, FUN, cores, label = "job") {
     }
     NULL
   })
-  worker_globals <- ls(envir = .GlobalEnv, all.names = TRUE)
+  export_mode <- tolower(trimws(Sys.getenv(
+    "OK_PSOCK_EXPORT_MODE",
+    if (MEMORY_SAFE) "minimal" else "all"
+  )))
+  if (!export_mode %in% c("minimal", "all")) export_mode <- "minimal"
+  verify_worker_symbols <- function(symbols) {
+    if (length(symbols) < 1L) return(TRUE)
+    checks <- tryCatch(
+      parallel::clusterCall(
+        cl,
+        function(nms) unname(vapply(nms, exists, logical(1), inherits = TRUE)),
+        nms = symbols
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(checks)) return(FALSE)
+    all(vapply(checks, function(x) all(isTRUE(x)), logical(1)))
+  }
+  if (identical(export_mode, "all")) {
+    worker_globals <- ls(envir = .GlobalEnv, all.names = TRUE)
+  } else {
+    # Export only symbols referenced by FUN that exist in .GlobalEnv.
+    globs <- tryCatch(
+      codetools::findGlobals(FUN, merge = FALSE),
+      error = function(e) list(variables = character(0), functions = character(0))
+    )
+    needed <- unique(c(globs$variables, globs$functions))
+    needed <- needed[nzchar(needed)]
+    worker_globals <- needed[vapply(
+      needed,
+      function(nm) exists(nm, envir = .GlobalEnv, inherits = FALSE),
+      logical(1)
+    )]
+  }
   if (length(worker_globals) > 0L) {
     parallel::clusterExport(cl, varlist = worker_globals, envir = .GlobalEnv)
+  }
+  if (!verify_worker_symbols(worker_globals) && identical(export_mode, "minimal")) {
+    warning(sprintf(
+      "PSOCK preflight missing symbols for %s under minimal export; retrying with full global export.",
+      label
+    ))
+    worker_globals <- ls(envir = .GlobalEnv, all.names = TRUE)
+    if (length(worker_globals) > 0L) {
+      parallel::clusterExport(cl, varlist = worker_globals, envir = .GlobalEnv)
+    }
+    if (!verify_worker_symbols(worker_globals)) {
+      warning(sprintf(
+        "PSOCK preflight still missing symbols for %s after full export.",
+        label
+      ))
+    }
   }
   tryCatch(
     parallel::parLapply(cl, X, FUN),
@@ -1718,6 +1767,44 @@ ate_H <- if (RUN_DECODE && !is.null(H_marginals) && !is.null(pp_post_decode_H)) 
                  "Fit H (Decode biv+KDE)")
 } else NULL
 
+# Save a checkpoint before bootstrap so long runs retain core fit outputs
+# even if bootstrap gets interrupted or OOM-killed.
+cat("\n--- Step 6a checkpoint: saving pre-bootstrap results ---\n")
+results_pre_bootstrap <- list(
+  fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
+  fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
+  fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
+  fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
+  fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
+  fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
+  bootstrap_ate = NULL,
+  checkpoint = list(
+    stage = "pre_bootstrap",
+    saved_at = as.character(Sys.time()),
+    boot_targets_requested = BOOT_TARGETS,
+    boot_targets_run = intersect(BOOT_TARGETS, c("E", "F")),
+    boot_reps = BOOT_N_REPS
+  ),
+  config = list(
+    RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
+    BOOT_N_REPS = BOOT_N_REPS,
+    BOOT_TARGETS = BOOT_TARGETS,
+    BOOT_REFIT_SCOPE = BOOT_REFIT_SCOPE,
+    BOOT_SEM_INNER_ITER = BOOT_SEM_INNER_ITER,
+    BOOT_OUTER_CORES = BOOT_OUTER_CORES
+  )
+)
+pre_bootstrap_out_file <- file.path(OUT_DIR, "oklahoma_results_pre_bootstrap.rds")
+saveRDS(results_pre_bootstrap, pre_bootstrap_out_file)
+cat(sprintf("Pre-bootstrap checkpoint saved to: %s\n", pre_bootstrap_out_file))
+legacy_pre_bootstrap_out_file <- file.path(LEGACY_OUT_DIR, "oklahoma_results_pre_bootstrap.rds")
+if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
+               normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
+  invisible(file.copy(pre_bootstrap_out_file, legacy_pre_bootstrap_out_file, overwrite = TRUE))
+}
+rm(results_pre_bootstrap)
+invisible(gc(verbose = FALSE))
+
 # Parametric bootstrap ATEs (supports E and F currently).
 bootstrap_ate <- NULL
 boot_targets_run <- intersect(BOOT_TARGETS, c("E", "F"))
@@ -1872,6 +1959,13 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       )
       out$F <- summarize_boot(ate_f_boot, rep_id, sim_F$pre_df, sim_F$post_ctrl_df, sim_F$post_treat_df, f_params_boot)
     }
+    rm_vars <- intersect(
+      c("sim_E", "fit_e_boot", "e_params_boot", "e_marg_boot", "ate_e_boot",
+        "sim_F", "sem_boot", "f_params_boot", "f_marg_boot", "ate_f_boot", "pp_post_f_boot"),
+      ls()
+    )
+    if (length(rm_vars) > 0L) rm(list = rm_vars)
+    invisible(gc(verbose = FALSE))
     out
   }
 
@@ -1950,6 +2044,17 @@ invisible(gc(verbose = FALSE))
       cat(sprintf("  Bootstrap F complete: success=%d, fail=%d\n",
                   bootstrap_ate$fit_F$n_success, bootstrap_ate$fit_F$n_fail))
     }
+  }
+
+  # Bootstrap reached completion, so drop pre-bootstrap checkpoint.
+  if (file.exists(pre_bootstrap_out_file)) {
+    unlink(pre_bootstrap_out_file, force = TRUE)
+    cat(sprintf("Deleted pre-bootstrap checkpoint: %s\n", pre_bootstrap_out_file))
+  }
+  if (exists("legacy_pre_bootstrap_out_file", inherits = FALSE) &&
+      file.exists(legacy_pre_bootstrap_out_file)) {
+    unlink(legacy_pre_bootstrap_out_file, force = TRUE)
+    cat(sprintf("Deleted legacy pre-bootstrap checkpoint: %s\n", legacy_pre_bootstrap_out_file))
   }
 }
 
