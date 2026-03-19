@@ -164,6 +164,7 @@ SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
 SEM_N_PROPS <- 10L
 SEM_CHANGE_FACTOR <- 0.01
+SEM_STALENESS_TRIGGER_EVERY <- 2L
 SEM_INCLUDE_STARTING <- TRUE
 SEM_UPDATE_STARTING <- TRUE
 SEM_UPDATE_CONTROL_PARAMS <- TRUE
@@ -233,6 +234,7 @@ log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " 
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
         " | param_cadence=", SEM_PARAM_UPDATE_CADENCE,
         " | proposal_cadence=", SEM_PROPOSAL_UPDATE_CADENCE,
+        " | staleness_trigger_every=", SEM_STALENESS_TRIGGER_EVERY,
         " | change_factor=", SEM_CHANGE_FACTOR,
         " | include_starting=", SEM_INCLUDE_STARTING,
         " | update_starting=", SEM_UPDATE_STARTING,
@@ -325,7 +327,7 @@ export_globals <- function(cl) {
     "control_state_space", "hawkes_par_1", "hawkes_par_2",
     "N_PROPOSALS", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
     "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
-    "SEM_N_PROPS", "SEM_CHANGE_FACTOR",
+    "SEM_N_PROPS", "SEM_CHANGE_FACTOR", "SEM_STALENESS_TRIGGER_EVERY",
     "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS"
   ), envir = .GlobalEnv)
 }
@@ -521,6 +523,7 @@ run_sem_core <- function(job) {
       iter = SEM_EM_ADAPTIVE_ITER,
       n_props = SEM_N_PROPS,
       change_factor = SEM_CHANGE_FACTOR,
+      stagnation_trigger_every = SEM_STALENESS_TRIGGER_EVERY,
       include_starting_data = SEM_INCLUDE_STARTING,
       update_starting_data = SEM_UPDATE_STARTING,
       verbose = FALSE
@@ -1110,6 +1113,7 @@ sim_study_results <- list(
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
   ),

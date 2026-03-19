@@ -101,7 +101,7 @@ adaptive_SEM <- function(pp_data,
     update_control_params = FALSE, param_update_cadence = 20,
     proposal_update_cadence = 1, update_starting_data = TRUE,
     include_starting_data = FALSE, iter = 100, n_props = 10,
-    change_factor = 0.1, proposal_method = "simulation",
+    change_factor = 0.1, stagnation_trigger_every = 10, proposal_method = "simulation",
     temporal_weight = 0, temporal_scale_days = NULL,
     fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
     outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1
@@ -132,6 +132,7 @@ adaptive_SEM <- function(pp_data,
       iter = adaptive_control$iter,
       n_props = adaptive_control$n_props,
       change_factor = adaptive_control$change_factor,
+      stagnation_trigger_every = adaptive_control$stagnation_trigger_every,
       MCMC_style = FALSE,
       proposal_method = adaptive_control$proposal_method,
       temporal_weight = adaptive_control$temporal_weight,
@@ -208,42 +209,19 @@ adaptive_SEM <- function(pp_data,
     }
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
 
-    use_piecewise_bg <- (!is.null(zero_bg_region) && nrow(filt_realiz) > 0L)
-    if (use_piecewise_bg) {
-      pre_obs <- filt_realiz[, c("x", "y", "t"), drop = FALSE]
-      pre_obs$W <- 1
-      post_obs <- post_realiz[, c("x", "y", "t"), drop = FALSE]
-      post_obs$W <- W_post
-      all_obs <- rbind(pre_obs, post_obs)
-      all_obs <- all_obs[order(all_obs$t), , drop = FALSE]
-
-      post_t_fit <- as.numeric(all_obs$t)
-      post_x_fit <- as.numeric(all_obs$x)
-      post_y_fit <- as.numeric(all_obs$y)
-      W_fit <- as.numeric(all_obs$W)
-      parent_t <- post_t_fit
-      parent_x <- post_x_fit
-      parent_y <- post_y_fit
-
-      t_start_fit <- min(post_t_fit, na.rm = TRUE)
-      t_end_fit <- max_data_t
-      dt_total <- t_end_fit - t_start_fit
-      if (!is.finite(dt_total) || dt_total <= 0) dt_total <- 1
-      pre_dur <- max(0, treatment_time - t_start_fit)
-      post_dur <- max(0, max_data_t - treatment_time)
-      adjust_factor_fit <- (pre_dur + post_dur * adjust_factor) / dt_total
-    } else {
-      post_t_fit <- as.numeric(post_realiz$t)
-      post_x_fit <- as.numeric(post_realiz$x)
-      post_y_fit <- as.numeric(post_realiz$y)
-      W_fit <- as.numeric(W_post)
-      parent_x <- c(filt_realiz$x, post_realiz$x)
-      parent_y <- c(filt_realiz$y, post_realiz$y)
-      parent_t <- c(filt_realiz$t, post_realiz$t)
-      t_start_fit <- treatment_time
-      t_end_fit <- max_data_t
-      adjust_factor_fit <- adjust_factor
-    }
+    # Keep SEM filtration consistent with ATE fitting:
+    # evaluate conditional post-treatment likelihood, using pre-treatment
+    # filtration only as parent history (not as observed events).
+    post_t_fit <- as.numeric(post_realiz$t)
+    post_x_fit <- as.numeric(post_realiz$x)
+    post_y_fit <- as.numeric(post_realiz$y)
+    W_fit <- as.numeric(W_post)
+    parent_x <- c(filt_realiz$x, post_realiz$x)
+    parent_y <- c(filt_realiz$y, post_realiz$y)
+    parent_t <- c(filt_realiz$t, post_realiz$t)
+    t_start_fit <- treatment_time
+    t_end_fit <- max_data_t
+    adjust_factor_fit <- adjust_factor
     if (length(parent_t) < 1L || length(post_t_fit) < 1L) return(-Inf)
 
     loglik <- hawkes_loglik_inhom_filtration_cpp(

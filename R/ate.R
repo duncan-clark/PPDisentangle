@@ -159,43 +159,19 @@ fit_hawkes_with_filtration <- function(params_init,
   W_post[!is.finite(W_post)] <- 0
   W_post[in_zero] <- 0
 
-  use_piecewise_bg <- (!is.null(zero_background_region) && nrow(filtration) > 0L)
-  if (use_piecewise_bg) {
-    pre_obs <- filtration[, c("x", "y", "t"), drop = FALSE]
-    pre_obs$W <- 1
-    post_obs <- realiz[, c("x", "y", "t"), drop = FALSE]
-    post_obs$W <- W_post
-    all_obs <- rbind(pre_obs, post_obs)
-    all_obs <- all_obs[order(all_obs$t), , drop = FALSE]
-
-    # For events that are explicitly observed in the likelihood, parent set is the same.
-    post_t_fit <- as.numeric(all_obs$t)
-    post_x_fit <- as.numeric(all_obs$x)
-    post_y_fit <- as.numeric(all_obs$y)
-    W_fit <- as.numeric(all_obs$W)
-    parent_t <- post_t_fit
-    parent_x <- post_x_fit
-    parent_y <- post_y_fit
-
-    t_start_fit <- min(post_t_fit, na.rm = TRUE)
-    t_end_fit <- windowT[2]
-    dt_total <- t_end_fit - t_start_fit
-    if (!is.finite(dt_total) || dt_total <= 0) dt_total <- 1
-    pre_dur <- max(0, windowT[1] - t_start_fit)
-    post_dur <- max(0, windowT[2] - windowT[1])
-    adjust_factor_fit <- (pre_dur + post_dur * adjust_factor) / dt_total
-  } else {
-    post_t_fit <- as.numeric(realiz$t)
-    post_x_fit <- as.numeric(realiz$x)
-    post_y_fit <- as.numeric(realiz$y)
-    W_fit <- as.numeric(W_post)
-    parent_x <- c(filtration$x, realiz$x)
-    parent_y <- c(filtration$y, realiz$y)
-    parent_t <- c(filtration$t, realiz$t)
-    t_start_fit <- windowT[1]
-    t_end_fit <- windowT[2]
-    adjust_factor_fit <- adjust_factor
-  }
+  # Use pre-treatment filtration as parent-history only. We evaluate a
+  # conditional post-treatment likelihood to avoid fitting pre+post regimes
+  # with a single stationary parameter vector.
+  post_t_fit <- as.numeric(realiz$t)
+  post_x_fit <- as.numeric(realiz$x)
+  post_y_fit <- as.numeric(realiz$y)
+  W_fit <- as.numeric(W_post)
+  parent_x <- c(filtration$x, realiz$x)
+  parent_y <- c(filtration$y, realiz$y)
+  parent_t <- c(filtration$t, realiz$t)
+  t_start_fit <- windowT[1]
+  t_end_fit <- windowT[2]
+  adjust_factor_fit <- adjust_factor
 
   dt <- windowT[2] - windowT[1]
   min_trigger_sd <- 0.001 * sqrt(total_area)
@@ -310,6 +286,36 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         poisson_flag = poisson_flags$control,
         zero_background_region = treated_state_space
       )$par
+
+      # Guard against near-critical/near-zero-baseline filtration fits:
+      # if the implied stationary rate is far below observed post-treatment
+      # control counts, fall back to the legacy post-only control fit.
+      windowS_owin <- if (inherits(windowS, "owin")) windowS else as.owin(windowS)
+      total_area <- spatstat.geom::area(windowS_owin)
+      treated_area <- spatstat.geom::area(treated_state_space)
+      control_adjust <- if (total_area > 0) max(1e-8, (total_area - treated_area) / total_area) else 1
+      empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / (dt_fit * control_adjust) else Inf
+      fitted_rate <- as.numeric(control_pp$mu) / max(1e-6, 1 - as.numeric(control_pp$K))
+      degenerate_fit <- (!is.finite(fitted_rate) || !is.finite(empirical_rate) ||
+                         (as.numeric(control_pp$K) >= 0.98) ||
+                         (fitted_rate < 0.2 * empirical_rate))
+      if (isTRUE(degenerate_fit)) {
+        legacy <- fit_hawkes(
+          unlist(ctrl_init),
+          realiz = ctrl_realiz,
+          zero_background_region = treated_state_space,
+          windowT = windowT,
+          windowS = windowS,
+          trace = 0,
+          maxit = maxit,
+          density_approx = FALSE,
+          numeric_integral = FALSE,
+          poisson_flag = poisson_flags$control,
+          t_trunc = -1
+        )$par
+        control_pp <- as.list(legacy)
+        names(control_pp) <- c("mu", "alpha", "beta", "K")
+      }
     } else {
       # Legacy behavior: control fit uses only post-treatment observed control points.
       control_pp <- fit_hawkes(

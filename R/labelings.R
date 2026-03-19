@@ -768,6 +768,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param iter Number of iterations
 #' @param n_props Number of proposals per iteration
 #' @param change_factor Scaling factor for relabeling
+#' @param stagnation_trigger_every Trigger exploration every N consecutive
+#'   no-flip iterations.
 #' @param MCMC_style Use MCMC acceptance/rejection
 #' @param verbose Print progress
 #' @param ... Additional arguments
@@ -792,6 +794,7 @@ em_style_labelling <- function(pp_data,
                                iter = 100,
                                n_props = 100,
                                change_factor = 0.1,
+                               stagnation_trigger_every = 10,
                                MCMC_style = FALSE,
                                proposal_method = "simulation",
                                fixed_params = NULL,
@@ -804,6 +807,10 @@ em_style_labelling <- function(pp_data,
   base_change_factor <- as.numeric(change_factor)
   if (!is.finite(base_change_factor) || base_change_factor <= 0) {
     stop("change_factor must be a positive finite number.")
+  }
+  stagnation_trigger_every <- as.integer(stagnation_trigger_every)
+  if (is.na(stagnation_trigger_every) || stagnation_trigger_every < 1L) {
+    stop("stagnation_trigger_every must be an integer >= 1.")
   }
   # Keep adaptive proposal size changes moderate around the initial setting.
   change_factor_min <- 0.2 * base_change_factor
@@ -879,7 +886,6 @@ em_style_labelling <- function(pp_data,
   total_param_update <- 0
   current_change_factor <- change_factor
   no_flip_streak <- 0L
-  stagnation_trigger_every <- 10L
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
