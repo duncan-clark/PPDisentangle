@@ -58,10 +58,17 @@ candidate_out_dirs <- unique(c(
   file.path(SCRIPT_DIR, "output"),
   file.path(dirname(dirname(SCRIPT_DIR)), "output")
 ))
-candidate_result_files <- file.path(candidate_out_dirs, "oklahoma_results.rds")
+result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
+                     "^oklahoma_results_pre_bootstrap(_[0-9]+)?\\.rds$")
+candidate_result_files <- unlist(lapply(candidate_out_dirs, function(d) {
+  if (!dir.exists(d)) return(character(0))
+  unique(unlist(lapply(result_patterns, function(pat) {
+    list.files(d, pattern = pat, full.names = TRUE)
+  })))
+}), use.names = FALSE)
 existing_result_files <- candidate_result_files[file.exists(candidate_result_files)]
 if (length(existing_result_files) == 0) {
-  stop("No oklahoma_results.rds found in expected output directories.")
+  stop("No Oklahoma results RDS file found in expected output directories.")
 }
 result_file <- existing_result_files[which.max(file.info(existing_result_files)$mtime)]
 OUT_DIR <- dirname(result_file)
@@ -70,6 +77,8 @@ candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 results <- readRDS(result_file)
 cfg <- results$config
 cty <- results$counties
+using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")) ||
+  grepl("pre_bootstrap", basename(result_file), fixed = TRUE)
 
 resolve_plot_file <- function(filename) {
   candidates <- file.path(candidate_plot_dirs, filename)
@@ -84,11 +93,53 @@ has_fit <- function(fit_name) {
   !is.null(results[[fit_name]])
 }
 decode_enabled <- isTRUE(cfg$RUN_DECODE) || has_fit("fitG") || has_fit("fitH")
+
+coerce_pp_df <- function(obj) {
+  if (is.null(obj)) return(data.frame())
+
+  # Handle spatstat point-pattern objects.
+  if (inherits(obj, "ppp")) {
+    out <- data.frame(x = obj$x, y = obj$y)
+    if (!is.null(obj$marks)) {
+      marks_df <- as.data.frame(obj$marks)
+      out <- cbind(out, marks_df, stringsAsFactors = FALSE)
+    }
+    return(out)
+  }
+
+  # Standard data-frame-like objects.
+  if (is.data.frame(obj)) return(as.data.frame(obj))
+  if (is.matrix(obj)) return(as.data.frame(obj))
+
+  # Common list structure with coordinate/time vectors.
+  if (is.list(obj) && all(c("x", "y") %in% names(obj))) {
+    n <- min(length(obj$x), length(obj$y))
+    out <- data.frame(
+      x = as.numeric(obj$x)[seq_len(n)],
+      y = as.numeric(obj$y)[seq_len(n)]
+    )
+    if ("t" %in% names(obj)) out$t <- as.numeric(obj$t)[seq_len(min(n, length(obj$t)))]
+    for (nm in setdiff(names(obj), c("x", "y", "t"))) {
+      v <- obj[[nm]]
+      if (length(v) >= n && is.atomic(v)) out[[nm]] <- v[seq_len(n)]
+    }
+    return(out)
+  }
+
+  # Last fallback.
+  out <- tryCatch(as.data.frame(obj), error = function(e) NULL)
+  if (is.null(out)) {
+    stop("Could not coerce point-pattern object to data frame for plotting.")
+  }
+  out
+}
 ```
 
 # Introduction
 
 **Report rendered at:** `r render_timestamp`
+
+**Results source:** `r basename(result_file)` `r if (using_pre_bootstrap) "(pre-bootstrap checkpoint)" else "(full results)"`
 
 On 18 March 2015 the Oklahoma Corporation Commission (OCC) issued
 directive **AOI_20150318**, requiring operators within a defined Area of
@@ -171,6 +222,10 @@ ev_all[, t_days := as.numeric(difftime(time_utc, t_star_utc, units = "days"))]
 ev_all <- ev_all[mag >= cfg$ETAS_M0]
 pp_pre  <- results$pp_data$pp_pre
 pp_post <- results$pp_data$pp_post
+pp_pre <- coerce_pp_df(pp_pre)
+pp_post <- coerce_pp_df(pp_post)
+if (!("t" %in% names(pp_pre))) pp_pre$t <- 0
+if (!("t" %in% names(pp_post))) pp_post$t <- 0
 ```
 
 ## Magnitude Distribution
@@ -264,8 +319,18 @@ p1 <- base_map +
   labs(title = "Pre-treatment", x = "X (km)", y = "Y (km)")
 
 pp_post_plot <- pp_post
-pp_post_plot$Process <- factor(pp_post_plot$location_process,
-                               levels = c("control", "treated"))
+process_col <- dplyr::case_when(
+  "location_process" %in% names(pp_post_plot) ~ "location_process",
+  "inferred_process" %in% names(pp_post_plot) ~ "inferred_process",
+  "process" %in% names(pp_post_plot) ~ "process",
+  TRUE ~ NA_character_
+)
+if (is.na(process_col)) {
+  pp_post_plot$Process <- factor("control", levels = c("control", "treated"))
+} else {
+  pp_post_plot$Process <- factor(as.character(pp_post_plot[[process_col]]),
+                                 levels = c("control", "treated"))
+}
 p2 <- base_map +
   geom_point(data = pp_post_plot,
              aes(x = x, y = y, colour = Process, alpha = t),
@@ -909,6 +974,16 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   c_mean <- mean(expected$c_total, na.rm = TRUE)
   t_mean <- mean(expected$t_total, na.rm = TRUE)
   sim_sd_total  <- sd(sim_totals, na.rm = TRUE)
+  base_row <- data.frame(
+    Model = r$lab,
+    `E[N(0)]` = round(c_mean, 0),
+    `E[N(1)]` = round(t_mean, 0),
+    `Total Effect` = round(sim_total, 0),
+    `SD` = round(sim_sd_total, 0),
+    `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
+    check.names = FALSE
+  )
+  if (using_pre_bootstrap) return(base_row)
   boot_sum <- get_boot_summary(r$lab)
   boot_sd <- if (!is.null(boot_sum)) round(boot_sum$sd, 0) else NA
   boot_ci <- if (!is.null(boot_sum)) {
@@ -916,26 +991,31 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   } else {
     "NA"
   }
-  data.frame(
-    Model = r$lab,
-    `E[N(0)]` = round(c_mean, 0),
-    `E[N(1)]` = round(t_mean, 0),
-    `Total Effect` = round(sim_total, 0),
-    `SD` = round(sim_sd_total, 0),
-    `Bootstrap SD` = boot_sd,
-    `Bootstrap 95% CI` = boot_ci,
-    `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
-    check.names = FALSE)
+  base_row$`Bootstrap SD` <- boot_sd
+  base_row$`Bootstrap 95% CI` <- boot_ci
+  base_row
 }))
 kable(ate_biv,
-      col.names = c("Model", "E[N(0)]", "E[N(1)]",
-                    paste0("Total Effect / ", n_cty, " counties / ", ate_days, "d"),
-                    "SD", "Bootstrap SD", "Bootstrap 95% CI",
-                    paste0("Spillover / ", ate_days, "d")),
-      caption = paste0("All-or-nothing total effect over ", ate_days, " days."),
-      align = "lccccccc") |>
+      col.names = if (using_pre_bootstrap) {
+        c("Model", "E[N(0)]", "E[N(1)]",
+          paste0("Total Effect / ", n_cty, " counties / ", ate_days, "d"),
+          "SD", paste0("Spillover / ", ate_days, "d"))
+      } else {
+        c("Model", "E[N(0)]", "E[N(1)]",
+          paste0("Total Effect / ", n_cty, " counties / ", ate_days, "d"),
+          "SD", "Bootstrap SD", "Bootstrap 95% CI",
+          paste0("Spillover / ", ate_days, "d"))
+      },
+      caption = if (using_pre_bootstrap) {
+        paste0("All-or-nothing total effect over ", ate_days, " days (pre-bootstrap checkpoint).")
+      } else {
+        paste0("All-or-nothing total effect over ", ate_days, " days.")
+      },
+      align = if (using_pre_bootstrap) "lccccc" else "lccccccc") |>
   kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
-if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
+if (using_pre_bootstrap) {
+  cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
+} else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
   labs <- c()
   if (!is.null(boot_E_df)) labs <- c(labs, "E (Naive Biv+KDE)")
   if (!is.null(boot_F_df)) labs <- c(labs, "F (SEM Biv+KDE)")
