@@ -6,11 +6,34 @@ src/*.dll
 .RData
 .Ruserdata
 
+# macOS
+.DS_Store
+**/.DS_Store
+
+# R session plot sink
+Rplots.pdf
+
 # Sim study generated files
 cluster_output/
 inst/sim_study/worker_log.txt
 inst/sim_study/sim_*_progress.txt
 inst/sim_study/tmp_prof.out
+inst/sim_study/output/
 
 # Gambia study output
 inst/gambia/output/
+
+# Local run logs & sim outputs (A)
+output/run_logs/
+
+# Oklahoma: rendered report + local pipeline output (D)
+inst/oklahoma/oklahoma_report.html
+inst/oklahoma/oklahoma_report.pdf
+inst/oklahoma/oklahoma_report.tex
+inst/oklahoma/oklahoma_report_files/
+inst/oklahoma/output/
+
+# Repo-root analysis outputs (D)
+output/*.rds
+output/plots/
+output/last_run_sync_stamp.txt

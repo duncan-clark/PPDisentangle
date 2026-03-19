@@ -1887,6 +1887,9 @@ if (exists("t_ate_H", inherits = FALSE)) {
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
 # even if bootstrap gets interrupted or OOM-killed.
 cat("\n--- Step 6a checkpoint: saving pre-bootstrap results ---\n")
+# Include report-facing fields (pp_data, counties, kde_info, full config) so Quarto can
+# render from this checkpoint alone — same keys as final oklahoma_results.rds.
+pre_boot_saved_at <- as.character(Sys.time())
 results_pre_bootstrap <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
@@ -1895,20 +1898,61 @@ results_pre_bootstrap <- list(
   fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
   fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
   bootstrap_ate = NULL,
+  pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
+  kde_info = list(
+    bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
+    n_pre_ctrl_holdout = n_pre_holdout_ctrl,
+    n_pre_holdout = nrow(pp_pre_holdout),
+    n_pre_used = nrow(pp_pre),
+    trigger_range_km = trigger_range_km
+  ),
+  counties = list(
+    names = counties_sf_valid$NAME,
+    treated_names = treated_names,
+    n_counties = partition$n,
+    n_treated = sum(treated_idx)
+  ),
+  metadata = list(stage = "pre_bootstrap", saved_at = pre_boot_saved_at),
   checkpoint = list(
     stage = "pre_bootstrap",
-    saved_at = as.character(Sys.time()),
+    saved_at = pre_boot_saved_at,
     boot_targets_requested = BOOT_TARGETS,
     boot_targets_run = intersect(BOOT_TARGETS, c("E", "F")),
     boot_reps = BOOT_N_REPS
   ),
   config = list(
+    ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    FIXED_STRUCTURAL = FIXED_STRUCTURAL,
+    SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
+    SEM_INNER_PROPS = SEM_INNER_PROPS,
+    SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
+    SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
+    SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
+    RUN_DECODE = RUN_DECODE,
+    RUN_SENSITIVITY = RUN_SENSITIVITY,
+    MEMORY_SAFE = MEMORY_SAFE,
+    TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
+    SENS_CORES = SENS_CORES,
+    ATE_SIM_CORES = ATE_SIM_CORES,
+    DECODE_ITER = DECODE_ITER,
+    ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
     BOOT_TARGETS = BOOT_TARGETS,
     BOOT_REFIT_SCOPE = BOOT_REFIT_SCOPE,
     BOOT_SEM_INNER_ITER = BOOT_SEM_INNER_ITER,
-    BOOT_OUTER_CORES = BOOT_OUTER_CORES
+    BOOT_OUTER_CORES = BOOT_OUTER_CORES,
+    BOOT_SEED = BOOT_SEED,
+    TEST_MODE = TEST_MODE,
+    windowT_post = windowT_post,
+    n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
+    n_post = nrow(pp_post),
+    n_counties = partition$n, n_treated = sum(treated_idx),
+    grid_diameters = grid_diameters,
+    grid_multipliers = grid_multipliers,
+    kde_bandwidth_multipliers = vapply(kde_bandwidth_specs, `[[`, numeric(1), "multiplier"),
+    spatial_scale_D = D_scale
   )
 )
 pre_bootstrap_out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results_pre_bootstrap.rds"))

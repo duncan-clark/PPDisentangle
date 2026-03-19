@@ -50,6 +50,7 @@ library(knitr)
 library(kableExtra)
 
 knitr::opts_chunk$set(fig.align = "center", out.width = "100%")
+`%||%` <- function(a, b) if (!is.null(a)) a else b
 
 SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
@@ -75,9 +76,54 @@ OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
 results <- readRDS(result_file)
-cfg <- results$config
+meta_for_cfg <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
+cfg <- if (!is.null(results$config)) results$config else list()
+if (is.null(cfg$ETAS_M0) || length(cfg$ETAS_M0) == 0) {
+  cfg$ETAS_M0 <- meta_for_cfg$design$min_mag
+}
+if (is.null(cfg$FIXED_STRUCTURAL)) cfg$FIXED_STRUCTURAL <- list()
+
+# Older pre-bootstrap RDS files omitted pp_data/counties/full config; rebuild from CSV.
+report_rebuilt <- NULL
+if (is.null(results$pp_data) || is.null(results$counties)) {
+  support_path <- file.path(SCRIPT_DIR, "oklahoma_report_support.R")
+  if (!file.exists(support_path)) {
+    stop("Missing ", support_path, " — cannot rebuild pp_data for this checkpoint.")
+  }
+  source(support_path, local = TRUE)
+  report_rebuilt <- oklahoma_report_rebuild_pp_and_counties(DATA_DIR, etas_m0 = cfg$ETAS_M0)
+  results$pp_data <- report_rebuilt$pp_data
+  results$counties <- report_rebuilt$counties
+}
 cty <- results$counties
+# Back-fill config keys expected by the narrative / tables (narrow legacy checkpoints).
+if (is.null(cfg$n_counties) && !is.null(cty$n_counties)) cfg$n_counties <- cty$n_counties
+if (is.null(cfg$n_treated) && !is.null(cty$n_treated)) cfg$n_treated <- cty$n_treated
+pd0 <- results$pp_data
+if (!is.null(pd0)) {
+  if (is.null(cfg$n_pre) || (length(cfg$n_pre) == 1L && is.na(cfg$n_pre))) {
+    cfg$n_pre <- nrow(as.data.frame(pd0$pp_pre))
+  }
+  if (is.null(cfg$n_post) || (length(cfg$n_post) == 1L && is.na(cfg$n_post))) {
+    cfg$n_post <- nrow(as.data.frame(pd0$pp_post))
+  }
+  if ((is.null(cfg$n_pre_holdout) || (length(cfg$n_pre_holdout) == 1L && is.na(cfg$n_pre_holdout))) &&
+      !is.null(pd0$pp_pre_holdout)) {
+    cfg$n_pre_holdout <- nrow(as.data.frame(pd0$pp_pre_holdout))
+  }
+  if (is.null(cfg$n_pre_total) || (length(cfg$n_pre_total) == 1L && is.na(cfg$n_pre_total))) {
+    cfg$n_pre_total <- (cfg$n_pre_holdout %||% 0L) + (cfg$n_pre %||% 0L)
+  }
+}
+# Default ATE horizon if missing (days post-treatment in design)
+if (is.null(cfg$ATE_WINDOW_DAYS) || (length(cfg$ATE_WINDOW_DAYS) == 1L && is.na(cfg$ATE_WINDOW_DAYS))) {
+  t_star <- as.POSIXct(meta_for_cfg$design$t_star_utc, tz = "UTC")
+  post_end <- as.POSIXct(meta_for_cfg$design$post_end_utc, tz = "UTC")
+  cfg$ATE_WINDOW_DAYS <- as.integer(ceiling(as.numeric(difftime(post_end, t_star, units = "days"))))
+}
+
 using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")) ||
+  (!is.null(results$checkpoint) && isTRUE(identical(results$checkpoint$stage, "pre_bootstrap"))) ||
   grepl("pre_bootstrap", basename(result_file), fixed = TRUE)
 
 resolve_plot_file <- function(filename) {
@@ -299,8 +345,18 @@ st_crs(counties_km) <- NA
 #| label: fig-pp
 #| fig-cap: "Pre-treatment (left) and post-treatment (right) events overlaid on the county partition."
 #| fig-height: 5
-xlims <- range(c(pp_pre$x, pp_post$x))
-ylims <- range(c(pp_pre$y, pp_post$y))
+xs <- c(pp_pre$x, pp_post$x)
+ys <- c(pp_pre$y, pp_post$y)
+xs <- xs[is.finite(xs)]
+ys <- ys[is.finite(ys)]
+if (length(xs) == 0L || length(ys) == 0L) {
+  bb_map <- sf::st_bbox(counties_km)
+  xlims <- as.numeric(bb_map[c("xmin", "xmax")])
+  ylims <- as.numeric(bb_map[c("ymin", "ymax")])
+} else {
+  xlims <- range(xs, na.rm = TRUE)
+  ylims <- range(ys, na.rm = TRUE)
+}
 
 base_map <- ggplot() +
   geom_sf(data = counties_km, aes(fill = treatment),
@@ -325,8 +381,11 @@ process_col <- dplyr::case_when(
   "process" %in% names(pp_post_plot) ~ "process",
   TRUE ~ NA_character_
 )
-if (is.na(process_col)) {
-  pp_post_plot$Process <- factor("control", levels = c("control", "treated"))
+nr_post <- nrow(pp_post_plot)
+if (nr_post == 0L) {
+  pp_post_plot$Process <- factor(character(0), levels = c("control", "treated"))
+} else if (is.na(process_col)) {
+  pp_post_plot$Process <- factor(rep("control", nr_post), levels = c("control", "treated"))
 } else {
   pp_post_plot$Process <- factor(as.character(pp_post_plot[[process_col]]),
                                  levels = c("control", "treated"))
@@ -386,16 +445,29 @@ $W_k \equiv 1$.
 ```{r tbl-kde}
 #| label: tbl-kde
 kde <- results$kde_info
-kde_holdout <- if (!is.null(kde$n_pre_holdout)) kde$n_pre_holdout else NA
-kde_used <- if (!is.null(kde$n_pre_used)) kde$n_pre_used else NA
-kde_df <- data.frame(
-  Setting = c("KDE training events (held-out control pre)",
-              "Held-out pre-treatment events (all processes)",
-              "Pre-treatment events used for estimation",
-              "Bandwidth (km)", "Estimated triggering range (km)", "Method"),
-  Value = c(kde$n_training, kde_holdout, kde_used,
-            round(kde$bw_sigma, 2), round(kde$trigger_range_km, 2),
-            "Diggle cross-validation"))
+if (is.null(kde)) {
+  kde_df <- data.frame(
+    Setting = "KDE summary",
+    Value = paste0("Not stored in this results file. ",
+                   if (using_pre_bootstrap) {
+                     "Re-run oklahoma_analysis.R through the pre-bootstrap checkpoint (current script saves kde_info), or use full oklahoma_results.rds."
+                   } else {
+                     "Use a full results RDS that includes kde_info."
+                   }),
+    stringsAsFactors = FALSE
+  )
+} else {
+  kde_holdout <- if (!is.null(kde$n_pre_holdout)) kde$n_pre_holdout else NA
+  kde_used <- if (!is.null(kde$n_pre_used)) kde$n_pre_used else NA
+  kde_df <- data.frame(
+    Setting = c("KDE training events (held-out control pre)",
+                "Held-out pre-treatment events (all processes)",
+                "Pre-treatment events used for estimation",
+                "Bandwidth (km)", "Estimated triggering range (km)", "Method"),
+    Value = c(kde$n_training, kde_holdout, kde_used,
+              round(kde$bw_sigma, 2), round(kde$trigger_range_km, 2),
+              "Diggle cross-validation"))
+}
 kable(kde_df, align = "lc",
       caption = "KDE background rate estimation details.") |>
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)

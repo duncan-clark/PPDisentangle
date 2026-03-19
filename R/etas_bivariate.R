@@ -46,6 +46,7 @@ loglik_etas_bivariate <- function(params,
                                   control_state_space = NULL,
                                   treated_state_space = NULL,
                                   background_rate_var = NULL,
+                                  treated_background_zero_before = NULL,
                                   t_trunc = NULL,
                                   ...) {
   if (is.list(params) && !is.null(names(params))) {
@@ -149,6 +150,12 @@ loglik_etas_bivariate <- function(params,
     W_1 <- W_1 * W_cov
   }
 
+  # Optional policy mask: force treated-process background to zero before
+  # treatment (or any user-specified cutoff), while keeping control unchanged.
+  if (!is.null(treated_background_zero_before)) {
+    W_1[realiz$t < as.numeric(treated_background_zero_before)] <- 0
+  }
+
   tval <- windowT[2] - windowT[1]
 
   etas_bivariate_loglik_cpp(
@@ -198,6 +205,7 @@ fit_etas_bivariate <- function(params_init,
                                control_state_space = NULL,
                                treated_state_space = NULL,
                                background_rate_var = NULL,
+                               treated_background_zero_before = NULL,
                                maxit = 5000,
                                fixed_params = NULL,
                                symmetric = FALSE,
@@ -283,6 +291,7 @@ fit_etas_bivariate <- function(params_init,
       control_state_space = control_state_space,
       treated_state_space = treated_state_space,
       background_rate_var = background_rate_var,
+      treated_background_zero_before = treated_background_zero_before,
       t_trunc = t_trunc, precomp = precomp
     )
   }
