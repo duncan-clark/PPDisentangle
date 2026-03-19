@@ -466,6 +466,17 @@ adaptive_SEM <- function(pp_data,
         if (!is.null(treated_background_zero_before)) {
           W1[r$t < treated_background_zero_before] <- 0
         }
+        if (!is.null(background_rate_var) && background_rate_var %in% names(r)) {
+          W_cov <- r[[background_rate_var]]
+          if (length(W_cov) != nn) stop("background_rate_var length mismatch in SEM bivariate precomp.")
+          W_cov <- as.numeric(W_cov)
+          W_cov[!is.finite(W_cov)] <- 0
+          min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+          if (!is.finite(min_pos)) min_pos <- 1e-12
+          W_cov[W_cov <= 0] <- min_pos
+          W0 <- W0 * W_cov
+          W1 <- W1 * W_cov
+        }
         if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
         list(realiz = r, precomp = list(W_0 = W0, W_1 = W1,
                                         areaS_0 = aS0, areaS_1 = aS1))
@@ -477,6 +488,7 @@ adaptive_SEM <- function(pp_data,
             windowT = biv_wT, windowS = statespace,
             control_state_space = control_state_space,
             treated_state_space = treated_state_space,
+            background_rate_var = background_rate_var,
             treated_background_zero_before = treated_background_zero_before,
             t_trunc = t_trunc, precomp = pc$precomp
           )

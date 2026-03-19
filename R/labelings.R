@@ -816,6 +816,11 @@ em_style_labelling <- function(pp_data,
   change_factor_min <- 0.2 * base_change_factor
   change_factor_max <- 2.0 * base_change_factor
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
+  treated_background_zero_before <- if ("treated_background_zero_before" %in% names(dots)) {
+    as.numeric(dots$treated_background_zero_before)
+  } else {
+    NULL
+  }
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
@@ -983,6 +988,8 @@ em_style_labelling <- function(pp_data,
             windowT = history_window, windowS = statespace,
             control_state_space = control_state_space,
             treated_state_space = treated_state_space,
+            background_rate_var = background_rate_var,
+            treated_background_zero_before = treated_background_zero_before,
             t_trunc = t_trunc
           )
         }
@@ -1111,6 +1118,8 @@ em_style_labelling <- function(pp_data,
               windowT = history_window, windowS = statespace,
               control_state_space = control_state_space,
               treated_state_space = treated_state_space,
+              background_rate_var = background_rate_var,
+              treated_background_zero_before = treated_background_zero_before,
               t_trunc = t_trunc
             )
           }

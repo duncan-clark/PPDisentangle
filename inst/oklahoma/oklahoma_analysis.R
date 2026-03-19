@@ -134,18 +134,34 @@ ATE_WINDOW_DAYS <- 100
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
 BOOT_N_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_N_REPS", "0")))
 if (!is.finite(BOOT_N_REPS) || is.na(BOOT_N_REPS) || BOOT_N_REPS < 0L) BOOT_N_REPS <- 0L
-BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E,F"))
+# Keep defaults memory-safe: E-only bootstrap unless user explicitly requests F.
+BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E"))
 BOOT_TARGETS <- unique(trimws(unlist(strsplit(BOOT_TARGETS_RAW, ","))))
 BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("E", "F")]
-if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E", "F")
-BOOT_REFIT_SCOPE <- tolower(trimws(Sys.getenv("OK_BOOT_REFIT_SCOPE", "partial")))
-if (!BOOT_REFIT_SCOPE %in% c("none", "partial", "full")) BOOT_REFIT_SCOPE <- "partial"
-BOOT_SEM_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEM_INNER_ITER", "200")))
+if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E")
+# Safer default is no per-replicate refit (still allows explicit partial/full override).
+BOOT_REFIT_SCOPE <- tolower(trimws(Sys.getenv("OK_BOOT_REFIT_SCOPE", "none")))
+if (!BOOT_REFIT_SCOPE %in% c("none", "partial", "full")) BOOT_REFIT_SCOPE <- "none"
+BOOT_SEM_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEM_INNER_ITER", "100")))
 if (!is.finite(BOOT_SEM_INNER_ITER) || is.na(BOOT_SEM_INNER_ITER) || BOOT_SEM_INNER_ITER < 1L) {
-  BOOT_SEM_INNER_ITER <- 200L
+  BOOT_SEM_INNER_ITER <- 100L
 }
 BOOT_OUTER_CORES_RAW <- Sys.getenv("OK_BOOT_OUTER_CORES", "")
 BOOT_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEED", "")))
+OK_GLOBAL_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_GLOBAL_SEED", "1")))
+OK_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_IDENTICAL_RANDOMNESS", "true")) %in% c("1", "true", "yes", "y")
+OK_BOOT_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_BOOT_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
+OK_BOOT_GUARD_DEGENERATE <- tolower(Sys.getenv("OK_BOOT_GUARD_DEGENERATE", "true")) %in% c("1", "true", "yes", "y")
+BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_BOOT_BRANCHING_MAX", "0.98")))
+if (!is.finite(BOOT_BRANCHING_MAX) || is.na(BOOT_BRANCHING_MAX) || BOOT_BRANCHING_MAX <= 0) {
+  BOOT_BRANCHING_MAX <- 0.98
+}
+BOOT_MAX_PRE_EVENTS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_MAX_PRE_EVENTS", "25000")))
+if (!is.finite(BOOT_MAX_PRE_EVENTS) || is.na(BOOT_MAX_PRE_EVENTS) || BOOT_MAX_PRE_EVENTS < 100L) BOOT_MAX_PRE_EVENTS <- 25000L
+BOOT_MAX_POST_EVENTS_PER_PROC <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_MAX_POST_EVENTS_PER_PROC", "30000")))
+if (!is.finite(BOOT_MAX_POST_EVENTS_PER_PROC) || is.na(BOOT_MAX_POST_EVENTS_PER_PROC) || BOOT_MAX_POST_EVENTS_PER_PROC < 100L) BOOT_MAX_POST_EVENTS_PER_PROC <- 30000L
+BOOT_MAX_TOTAL_EVENTS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_MAX_TOTAL_EVENTS", "90000")))
+if (!is.finite(BOOT_MAX_TOTAL_EVENTS) || is.na(BOOT_MAX_TOTAL_EVENTS) || BOOT_MAX_TOTAL_EVENTS < 1000L) BOOT_MAX_TOTAL_EVENTS <- 90000L
 REPORT_FORMATS_RAW <- tolower(trimws(Sys.getenv("OK_REPORT_FORMATS", "html,pdf")))
 REPORT_FORMATS <- unique(trimws(unlist(strsplit(REPORT_FORMATS_RAW, ","))))
 REPORT_FORMATS <- REPORT_FORMATS[REPORT_FORMATS %in% c("html", "pdf")]
@@ -164,15 +180,19 @@ OK_CORES_RAW <- Sys.getenv("OK_CORES", "")
 N_CORES <- as.integer(ifelse(nzchar(OK_CORES_RAW), OK_CORES_RAW, default_local_cores))
 N_CORES <- max(1L, min(N_CORES, parallel::detectCores()))
 if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
-  N_CORES <- min(N_CORES, 4L)
+  N_CORES <- min(N_CORES, 8L)
 }
-BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) 1L else N_CORES
+BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) max(2L, min(8L, as.integer(floor(N_CORES / 4L)))) else N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
 BOOT_OUTER_CORES <- max(1L, min(BOOT_OUTER_CORES, N_CORES))
 if (MEMORY_SAFE && RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && BOOT_OUTER_CORES > 1L) {
-  cat(sprintf("Memory-safe bootstrap override: forcing BOOT_OUTER_CORES from %d to 1\n", BOOT_OUTER_CORES))
-  BOOT_OUTER_CORES <- 1L
+  boot_outer_cap <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_OUTER_CAP_MEMSAFE", as.character(max(2L, min(8L, as.integer(floor(N_CORES / 4L))))))))
+  if (!is.finite(boot_outer_cap) || is.na(boot_outer_cap) || boot_outer_cap < 1L) boot_outer_cap <- 2L
+  if (BOOT_OUTER_CORES > boot_outer_cap) {
+    cat(sprintf("Memory-safe bootstrap cap: reducing BOOT_OUTER_CORES from %d to %d\n", BOOT_OUTER_CORES, boot_outer_cap))
+    BOOT_OUTER_CORES <- boot_outer_cap
+  }
 }
 SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
 SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
@@ -187,6 +207,10 @@ PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
   if (MEMORY_SAFE) "psock" else "fork"
 )))
 if (!PARALLEL_BACKEND %in% c("fork", "psock", "sequential")) PARALLEL_BACKEND <- "psock"
+
+if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+  set.seed(OK_GLOBAL_SEED)
+}
 
 run_parallel <- function(X, FUN, cores, label = "job") {
   n <- length(X)
@@ -1171,6 +1195,19 @@ if (RUN_DECODE) fit_jobs <- c(fit_jobs, "G", "H")
 
 run_one_fit_job <- function(tag) {
   t0 <- proc.time()[["elapsed"]]
+  # Debug mode: force identical RNG streams across D/F/G/H fit jobs.
+  if (isTRUE(OK_IDENTICAL_RANDOMNESS)) {
+    if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+      set.seed(OK_GLOBAL_SEED)
+    }
+  } else {
+    fit_seed_base <- suppressWarnings(as.integer(Sys.getenv("OK_FIT_JOB_SEED_BASE", Sys.getenv("SLURM_JOB_ID", ""))))
+    if (is.finite(fit_seed_base) && !is.na(fit_seed_base)) {
+      tag_offset <- match(tag, c("D", "F", "G", "H"))
+      if (is.na(tag_offset)) tag_offset <- 0L
+      set.seed(fit_seed_base + as.integer(tag_offset))
+    }
+  }
   out_obj <- NULL
   if (tag == "D") {
     out_obj <- fit_d()
@@ -1944,6 +1981,12 @@ results_pre_bootstrap <- list(
     BOOT_SEM_INNER_ITER = BOOT_SEM_INNER_ITER,
     BOOT_OUTER_CORES = BOOT_OUTER_CORES,
     BOOT_SEED = BOOT_SEED,
+    BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
+    BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
+    BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
+    BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
+    BOOT_MAX_TOTAL_EVENTS = BOOT_MAX_TOTAL_EVENTS,
     TEST_MODE = TEST_MODE,
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
@@ -2005,15 +2048,61 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   f_ctrl_seed <- F_marginals$ctrl
   f_treat_seed <- F_marginals$treat
 
+  get_num <- function(obj, nm, default = NA_real_) {
+    if (is.null(obj) || is.null(obj[[nm]])) return(default)
+    v <- suppressWarnings(as.numeric(obj[[nm]]))
+    if (length(v) < 1L || !is.finite(v[[1]])) return(default)
+    v[[1]]
+  }
+  approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
+    A <- get_num(par_obj, "A", NA_real_)
+    alpha_m <- get_num(par_obj, "alpha_m", 0)
+    if (!is.finite(A) || A < 0) return(Inf)
+    if (!is.finite(alpha_m)) alpha_m <- 0
+    # Rough ETAS branching proxy under exponential magnitudes.
+    A * exp(alpha_m / beta_gr)
+  }
+  validate_sim_obj <- function(sim_obj, label, max_events) {
+    n_ev <- if (is.null(sim_obj) || is.null(sim_obj$t)) 0L else length(sim_obj$t)
+    if (n_ev > max_events) {
+      stop(sprintf("%s produced %d events (> %d cap)", label, n_ev, max_events))
+    }
+    if (n_ev > 0L) {
+      x_ok <- !any(!is.finite(sim_obj$x))
+      y_ok <- !any(!is.finite(sim_obj$y))
+      t_ok <- !any(!is.finite(sim_obj$t))
+      m_ok <- !any(!is.finite(sim_obj$mag))
+      if (!(x_ok && y_ok && t_ok && m_ok)) {
+        stop(sprintf("%s produced non-finite values", label))
+      }
+    }
+    invisible(TRUE)
+  }
+
   simulate_boot_data <- function(ctrl_seed, treat_seed) {
+    if (OK_BOOT_GUARD_DEGENERATE) {
+      pre_br <- approx_branching_ratio(pre_ctrl_seed)
+      ctrl_br <- approx_branching_ratio(ctrl_seed)
+      treat_br <- approx_branching_ratio(treat_seed)
+      if (any(!is.finite(c(pre_br, ctrl_br, treat_br))) ||
+          pre_br > BOOT_BRANCHING_MAX || ctrl_br > BOOT_BRANCHING_MAX || treat_br > BOOT_BRANCHING_MAX) {
+        stop(sprintf(
+          "Degenerate bootstrap guard: branching proxy too high (pre=%.3f ctrl=%.3f treat=%.3f, limit=%.3f)",
+          pre_br, ctrl_br, treat_br, BOOT_BRANCHING_MAX
+        ))
+      }
+    }
     pre_sim <- sim_etas(pre_ctrl_seed, pre_window_boot, windowS = control_ss,
                         m0 = ETAS_M0, beta_gr = BETA_GR)
+    validate_sim_obj(pre_sim, "bootstrap pre_sim", BOOT_MAX_PRE_EVENTS)
     pre_df <- as_pp_df(pre_sim, "control", "control")
     history_df <- pre_df[, c("x", "y", "t", "mag"), drop = FALSE]
     ctrl_post_sim <- sim_etas(ctrl_seed, post_window_boot, windowS = control_ss,
                               m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df)
+    validate_sim_obj(ctrl_post_sim, "bootstrap ctrl_post_sim", BOOT_MAX_POST_EVENTS_PER_PROC)
     treat_post_sim <- sim_etas(treat_seed, post_window_boot, windowS = treated_ss,
                                m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df)
+    validate_sim_obj(treat_post_sim, "bootstrap treat_post_sim", BOOT_MAX_POST_EVENTS_PER_PROC)
     post_ctrl_df <- as_pp_df(ctrl_post_sim, "control", "control")
     post_treat_df <- as_pp_df(treat_post_sim, "treated", "treated")
     pp_post_sim <- rbind(post_ctrl_df, post_treat_df)
@@ -2028,6 +2117,9 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     pre_bg_treat <- normalize_bg_weights(pre_df[0, , drop = FALSE], treated_ss, lambda_im)$new_df
     pp_all_bg_sim <- rbind(pre_bg_ctrl, pre_bg_treat, pp_post_bg_sim)
     pp_all_bg_sim <- pp_all_bg_sim[order(pp_all_bg_sim$t), , drop = FALSE]
+    if (nrow(pp_all_bg_sim) > BOOT_MAX_TOTAL_EVENTS) {
+      stop(sprintf("bootstrap total simulated events %d exceeded cap %d", nrow(pp_all_bg_sim), BOOT_MAX_TOTAL_EVENTS))
+    }
 
     list(
       pre_df = pre_df,
@@ -2058,7 +2150,16 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   }
 
   run_boot_rep <- function(rep_id) {
-    if (!is.na(BOOT_SEED)) set.seed(BOOT_SEED + rep_id)
+    if (isTRUE(OK_BOOT_IDENTICAL_RANDOMNESS)) {
+      if (!is.na(BOOT_SEED)) {
+        set.seed(BOOT_SEED)
+      } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+        set.seed(OK_GLOBAL_SEED)
+      }
+    } else {
+      seed_base <- if (!is.na(BOOT_SEED)) BOOT_SEED else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) OK_GLOBAL_SEED else NA_integer_
+      if (!is.na(seed_base)) set.seed(as.integer(seed_base + rep_id))
+    }
     out <- list(rep = rep_id)
 
     if ("E" %in% boot_targets_run) {
@@ -2459,6 +2560,12 @@ results <- list(
     BOOT_SEM_INNER_ITER = BOOT_SEM_INNER_ITER,
     BOOT_OUTER_CORES = BOOT_OUTER_CORES,
     BOOT_SEED = BOOT_SEED,
+    BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
+    BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
+    BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
+    BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
+    BOOT_MAX_TOTAL_EVENTS = BOOT_MAX_TOTAL_EVENTS,
     TEST_MODE = TEST_MODE,
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),

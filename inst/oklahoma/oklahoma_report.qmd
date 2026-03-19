@@ -135,6 +135,15 @@ resolve_plot_file <- function(filename) {
 
 render_timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
 
+# KDE/config scalars may be NULL, list-wrapped, or non-numeric after saveRDS / merges.
+fmt_scaled_num <- function(x, digits = 2) {
+  if (is.null(x)) return("N/A")
+  xv <- suppressWarnings(as.numeric(unlist(x, use.names = FALSE)))
+  xv <- xv[is.finite(xv)]
+  if (length(xv) < 1L) return("N/A")
+  as.character(round(xv[[1]], digits))
+}
+
 has_fit <- function(fit_name) {
   !is.null(results[[fit_name]])
 }
@@ -465,7 +474,7 @@ if (is.null(kde)) {
                 "Pre-treatment events used for estimation",
                 "Bandwidth (km)", "Estimated triggering range (km)", "Method"),
     Value = c(kde$n_training, kde_holdout, kde_used,
-              round(kde$bw_sigma, 2), round(kde$trigger_range_km, 2),
+              fmt_scaled_num(kde$bw_sigma), fmt_scaled_num(kde$trigger_range_km),
               "Diggle cross-validation"))
 }
 kable(kde_df, align = "lc",
@@ -1131,7 +1140,7 @@ sensitivity to spatial resolution:
 
 - **Grid partitions** with cell diameters equal to 1, 2, and 5
   times the estimated triggering range
-  (`r round(results$kde_info$trigger_range_km, 2)` km).
+  (`r fmt_scaled_num(if (!is.null(results$kde_info)) results$kde_info$trigger_range_km else NULL)` km).
 - **AOI region** partition: the AOI polygon defines one treated region,
   everything else is control (2 tiles total).
 
@@ -1454,10 +1463,20 @@ may better capture localized effects but have fewer events per cell.
 
 ```{r tbl-config}
 #| label: tbl-config
-ate_win <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else "N/A"
-sem_inner_props <- if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS
-grid_str <- if (!is.null(cfg$grid_diameters)) {
-  paste(round(cfg$grid_diameters, 2), "km", collapse = ", ")
+scalar_chr <- function(x, default = "N/A") {
+  if (is.null(x)) return(default)
+  xv <- unlist(x, use.names = FALSE)
+  if (length(xv) < 1L) return(default)
+  x1 <- xv[[1]]
+  if (is.na(x1)) return(default)
+  as.character(x1)
+}
+ate_win <- scalar_chr(cfg$ATE_WINDOW_DAYS)
+sem_inner_props <- scalar_chr(cfg$SEM_INNER_PROPS %||% cfg$SEM_N_LABELLINGS)
+grid_vals <- suppressWarnings(as.numeric(unlist(cfg$grid_diameters, use.names = FALSE)))
+grid_vals <- grid_vals[is.finite(grid_vals)]
+grid_str <- if (length(grid_vals) > 0L) {
+  paste(round(grid_vals, 2), "km", collapse = ", ")
 } else { "N/A" }
 cdf <- data.frame(
   Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
@@ -1466,18 +1485,20 @@ cdf <- data.frame(
               "ATE simulation window (days)","Simulation replicates",
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
               "Test mode"),
-  Value = c(cfg$ETAS_M0, cfg$BETA_GR,
-            paste0(cfg$n_counties," / ",cfg$n_treated),
-            cfg$SEM_N_ITER, cfg$SEM_INNER_ITER, sem_inner_props, cfg$SEM_N_LABELLINGS,
-            cfg$SEM_CHANGE_FACTOR,
-            if (!is.null(cfg$RUN_DECODE)) cfg$RUN_DECODE else decode_enabled,
-            if (!is.null(cfg$DECODE_ITER)) cfg$DECODE_ITER else "N/A",
-            paste(cfg$windowT_post, collapse=" \u2013 "),
-            ate_win, cfg$ATE_N_SIMS,
-            if (!is.null(cfg$spatial_scale_D)) cfg$spatial_scale_D else "N/A",
-            if (!is.null(results$kde_info$trigger_range_km)) round(results$kde_info$trigger_range_km, 2) else "N/A",
+  Value = c(scalar_chr(cfg$ETAS_M0), scalar_chr(cfg$BETA_GR),
+            paste0(scalar_chr(cfg$n_counties), " / ", scalar_chr(cfg$n_treated)),
+            scalar_chr(cfg$SEM_N_ITER), scalar_chr(cfg$SEM_INNER_ITER), sem_inner_props, scalar_chr(cfg$SEM_N_LABELLINGS),
+            scalar_chr(cfg$SEM_CHANGE_FACTOR),
+            scalar_chr(cfg$RUN_DECODE %||% decode_enabled),
+            scalar_chr(cfg$DECODE_ITER),
+            if (!is.null(cfg$windowT_post)) paste(unlist(cfg$windowT_post, use.names = FALSE), collapse=" \u2013 ") else "N/A",
+            ate_win, scalar_chr(cfg$ATE_N_SIMS),
+            fmt_scaled_num(cfg$spatial_scale_D),
+            fmt_scaled_num(if (!is.null(results$kde_info)) results$kde_info$trigger_range_km else NULL),
             grid_str,
-            cfg$TEST_MODE))
+            scalar_chr(cfg$TEST_MODE)),
+  stringsAsFactors = FALSE
+)
 kable(cdf, align="lc", caption="Analysis configuration.") |>
   kable_styling(bootstrap_options="striped", full_width=FALSE)
 ```

@@ -16,13 +16,14 @@ PP_BOOT_REPS="${PP_BOOT_REPS:-}"
 PP_SEM_INNER="${PP_SEM_INNER:-100}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
-PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
+PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
 PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
 PP_MODE="${PP_MODE:-}"
+PP_SEED="${PP_SEED:-1}"
 CORES_EXPLICIT=0
 MEM_EXPLICIT=0
 SEM_INNER_EXPLICIT=0
@@ -73,13 +74,18 @@ if [ -n "$PP_MODE" ]; then
     long|full|big)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=32; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=12; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
-      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
-      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then
+        AUTO_BOOT_CORES=$(( PP_CORES / 4 ))
+        [ "$AUTO_BOOT_CORES" -lt 2 ] && AUTO_BOOT_CORES=2
+        [ "$AUTO_BOOT_CORES" -gt 8 ] && AUTO_BOOT_CORES=8
+        PP_BOOT_OUTER_CORES="$AUTO_BOOT_CORES"
+      fi
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       ;;
     *)
@@ -100,7 +106,12 @@ if [ -z "$PP_MEM" ]; then
 fi
 
 if [ -z "$PP_BOOT_REPS" ]; then
-  PP_BOOT_REPS="$PP_CORES"
+  # Bootstrap is the dominant memory consumer; default below total cores.
+  if [ "$PP_CORES" -gt 8 ]; then
+    PP_BOOT_REPS=8
+  else
+    PP_BOOT_REPS="$PP_CORES"
+  fi
 fi
 if [ -z "$PP_SENS_SEM_INNER" ]; then
   PP_SENS_SEM_INNER="$PP_SEM_INNER"
@@ -109,11 +120,19 @@ if [ -z "$PP_BOOT_SEM_INNER" ]; then
   PP_BOOT_SEM_INNER="$PP_SEM_INNER"
 fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
-  PP_BOOT_OUTER_CORES=1
+  AUTO_BOOT_CORES=$(( PP_CORES / 4 ))
+  [ "$AUTO_BOOT_CORES" -lt 2 ] && AUTO_BOOT_CORES=2
+  [ "$AUTO_BOOT_CORES" -gt 8 ] && AUTO_BOOT_CORES=8
+  PP_BOOT_OUTER_CORES="$AUTO_BOOT_CORES"
 fi
 
 if [ "$PP_RUN_SENSITIVITY" = "auto" ]; then
-  PP_RUN_SENSITIVITY=1
+  # Prefer memory headroom for bootstrap unless user explicitly enables sensitivity.
+  if [ "${PP_BOOT_REPS:-0}" -gt 0 ]; then
+    PP_RUN_SENSITIVITY=0
+  else
+    PP_RUN_SENSITIVITY=1
+  fi
 fi
 
 # ----------------------------
@@ -182,6 +201,7 @@ echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
+echo "seed=$PP_SEED (fit jobs identical RNG; bootstrap RNG de-correlated by replicate)"
 echo ""
 
 # Shared library path only; guard package install lock collisions.
@@ -375,6 +395,10 @@ export OK_BOOT_N_REPS="$PP_BOOT_REPS"
 export OK_BOOT_TARGETS="$PP_BOOT_TARGETS"
 export OK_BOOT_SEM_INNER_ITER="$PP_BOOT_SEM_INNER"
 export OK_BOOT_OUTER_CORES="$PP_BOOT_OUTER_CORES"
+export OK_GLOBAL_SEED="$PP_SEED"
+export OK_IDENTICAL_RANDOMNESS=true
+export OK_BOOT_IDENTICAL_RANDOMNESS=false
+export OK_BOOT_GUARD_DEGENERATE=true
 export OK_REPORT_FORMATS=html
 
 if [ "$PP_SETUP_TEST" = "1" ]; then
