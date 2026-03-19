@@ -50,6 +50,11 @@ adaptive_SEM <- function(pp_data,
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
   use_pre_history_for_biv <- isTRUE(dots$use_pre_history_for_biv)
+  hawkes_use_filtration_history <- if ("hawkes_use_filtration_history" %in% names(dots)) {
+    isTRUE(dots$hawkes_use_filtration_history)
+  } else {
+    TRUE
+  }
   treated_background_zero_before <- if ("treated_background_zero_before" %in% names(dots)) {
     as.numeric(dots$treated_background_zero_before)
   } else {
@@ -183,12 +188,12 @@ adaptive_SEM <- function(pp_data,
     dt <- max_data_t - treatment_time
     if (!is.finite(dt) || dt <= 0) return(-Inf)
 
-    adjust_factor <- 1
+    active_area <- total_area
     in_zero <- rep(FALSE, nrow(post_realiz))
     if (!is.null(zero_bg_region) && nrow(post_realiz) > 0) {
       if (!inherits(zero_bg_region, "owin")) zero_bg_region <- as.owin(zero_bg_region)
       zero_area <- spatstat.geom::area(zero_bg_region)
-      adjust_factor <- max(0, (total_area - zero_area) / total_area)
+      active_area <- max(1e-12, total_area - zero_area)
       in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_bg_region)
     }
 
@@ -221,7 +226,7 @@ adaptive_SEM <- function(pp_data,
     parent_t <- c(filt_realiz$t, post_realiz$t)
     t_start_fit <- treatment_time
     t_end_fit <- max_data_t
-    adjust_factor_fit <- adjust_factor
+    adjust_factor_fit <- 1
     if (length(parent_t) < 1L || length(post_t_fit) < 1L) return(-Inf)
 
     loglik <- hawkes_loglik_inhom_filtration_cpp(
@@ -236,7 +241,7 @@ adaptive_SEM <- function(pp_data,
       alpha = alpha,
       beta = beta,
       K = K,
-      areaS = total_area,
+      areaS = active_area,
       t_start = t_start_fit,
       t_end = t_end_fit,
       adjust_factor = adjust_factor_fit,
@@ -285,10 +290,15 @@ adaptive_SEM <- function(pp_data,
       }
       if (length(include) == 0) return(-Inf)
       if (!is_etas) {
+        filt_control <- if (hawkes_use_filtration_history) {
+          y[pre_idx & y$inferred_process == "control", , drop = FALSE]
+        } else {
+          y[0, c("x", "y", "t"), drop = FALSE]
+        }
         control_lik <- hawkes_loglik_with_filtration(
           params = control_par,
           post_realiz = y[include, , drop = FALSE],
-          filt_realiz = y[pre_idx & y$inferred_process == "control", , drop = FALSE],
+          filt_realiz = filt_control,
           zero_bg_region = treated_state_space
         )
       } else {
@@ -306,10 +316,15 @@ adaptive_SEM <- function(pp_data,
       }
       if (length(include) == 0) return(-Inf)
       if (!is_etas) {
+        filt_treated <- if (hawkes_use_filtration_history) {
+          y[pre_idx & y$inferred_process == "treated", , drop = FALSE]
+        } else {
+          y[0, c("x", "y", "t"), drop = FALSE]
+        }
         treat_lik <- hawkes_loglik_with_filtration(
           params = treat_par,
           post_realiz = y[include, , drop = FALSE],
-          filt_realiz = y[pre_idx & y$inferred_process == "treated", , drop = FALSE],
+          filt_realiz = filt_treated,
           zero_bg_region = control_state_space
         )
       } else {
@@ -535,7 +550,11 @@ adaptive_SEM <- function(pp_data,
         liks <- sapply(prepared_labellings, function(parts) {
           post_part <- parts[[split_key]]
           if (!is_etas) {
-            filt_part <- parts[[filt_key]]
+            filt_part <- if (hawkes_use_filtration_history) {
+              parts[[filt_key]]
+            } else {
+              post_part[0, c("x", "y", "t"), drop = FALSE]
+            }
             hawkes_loglik_with_filtration(
               params = params,
               post_realiz = as.data.frame(post_part),
@@ -623,6 +642,7 @@ adaptive_SEM <- function(pp_data,
   result <- list(
     hawkes_params_control = c_params[[length(c_params)]],
     hawkes_params_treated = t_params[[length(t_params)]],
+    c_params = c_params,
     t_params = t_params,
     labellings = labellings,
     keepers = keepers,

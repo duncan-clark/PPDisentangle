@@ -138,20 +138,20 @@ fit_hawkes_with_filtration <- function(params_init,
   }
 
   total_area <- spatstat.geom::area(windowS)
-  adjust_factor <- 1
+  active_area <- total_area
   in_zero <- rep(FALSE, nrow(realiz))
   if (!is.null(zero_background_region)) {
     if (!inherits(zero_background_region, "owin")) {
       zero_background_region <- as.owin(zero_background_region)
     }
     zero_area <- spatstat.geom::area(zero_background_region)
-    adjust_factor <- max(0, (total_area - zero_area) / total_area)
+    active_area <- max(1e-12, total_area - zero_area)
     in_zero <- inside.owin(realiz$x, realiz$y, w = zero_background_region)
   }
 
   if (isTRUE(poisson_flag)) {
     dt <- windowT[2] - windowT[1]
-    mu_hat <- if (dt > 0 && adjust_factor > 0) nrow(realiz) / (dt * adjust_factor) else 0
+    mu_hat <- if (dt > 0) nrow(realiz) / dt else 0
     return(list(par = list(mu = mu_hat, alpha = 1, beta = 1, K = 0), converged = TRUE))
   }
 
@@ -171,7 +171,7 @@ fit_hawkes_with_filtration <- function(params_init,
   parent_t <- c(filtration$t, realiz$t)
   t_start_fit <- windowT[1]
   t_end_fit <- windowT[2]
-  adjust_factor_fit <- adjust_factor
+  adjust_factor_fit <- 1
 
   dt <- windowT[2] - windowT[1]
   min_trigger_sd <- 0.001 * sqrt(total_area)
@@ -195,7 +195,7 @@ fit_hawkes_with_filtration <- function(params_init,
       alpha = alpha,
       beta = beta,
       K = K,
-      areaS = total_area,
+      areaS = active_area,
       t_start = t_start_fit,
       t_end = t_end_fit,
       adjust_factor = adjust_factor_fit,
@@ -290,11 +290,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       # Guard against near-critical/near-zero-baseline filtration fits:
       # if the implied stationary rate is far below observed post-treatment
       # control counts, fall back to the legacy post-only control fit.
-      windowS_owin <- if (inherits(windowS, "owin")) windowS else as.owin(windowS)
-      total_area <- spatstat.geom::area(windowS_owin)
-      treated_area <- spatstat.geom::area(treated_state_space)
-      control_adjust <- if (total_area > 0) max(1e-8, (total_area - treated_area) / total_area) else 1
-      empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / (dt_fit * control_adjust) else Inf
+      empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / dt_fit else Inf
       fitted_rate <- as.numeric(control_pp$mu) / max(1e-6, 1 - as.numeric(control_pp$K))
       degenerate_fit <- (!is.finite(fitted_rate) || !is.finite(empirical_rate) ||
                          (as.numeric(control_pp$K) >= 0.98) ||

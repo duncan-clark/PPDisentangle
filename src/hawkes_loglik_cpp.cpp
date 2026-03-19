@@ -107,9 +107,8 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
       double dx = post_x[i] - parent_x[j];
       double dy = post_y[i] - parent_y[j];
       double r2 = dx * dx + dy * dy;
-      double r = std::sqrt(r2);
-      if (r * alpha > 20.0) continue;
-      lambda_i += const_val * std::exp(-beta * dt - alpha * r);
+      if (r2 * alpha > 20.0) continue;
+      lambda_i += const_val * std::exp(-beta * dt - alpha * r2);
     }
     if (lambda_i <= 1e-15) lambda_i = 1e-15;
     loglik += std::log(lambda_i);
