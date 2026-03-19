@@ -93,7 +93,7 @@ if (TEST) {
   N_TAU_I_TRUE <- 5
   N_PROPOSALS <- 5
   SEM_EM_ADAPTIVE_ITER <- 100
-  SEM_N_ITER <- 3
+  SEM_N_ITER <- 1
   SEM_N_LABELLINGS <- 5
   SAVE_DIR <- resolve_save_dir()
 } else if (ON_CLUSTER) {
@@ -228,7 +228,9 @@ ATE_N_SIMS <- if (TEST) 1L else as.integer(N_SIMS)
 ATE_N_TAU_SIMS <- if (TEST) 1L else as.integer(N_TAU_SIMS)
 ATE_N_TAU_I <- if (TEST) 1L else as.integer(N_TAU_I)
 ATE_MAXIT <- if (TEST) 300L else 1000L
-ATE_CONTROL_FILTRATION_AWARE <- tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
+SIM_FILTRATION_AWARE <- tolower(Sys.getenv("PP_SIM_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
+ATE_CONTROL_FILTRATION_AWARE <- SIM_FILTRATION_AWARE &&
+  (tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y"))
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
@@ -245,6 +247,7 @@ log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | n_tau_sims=", ATE_N_TAU_SIMS,
         " | n_tau_i=", ATE_N_TAU_I,
         " | maxit=", ATE_MAXIT,
+        " | sim_filtration_aware=", SIM_FILTRATION_AWARE,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
 log_msg("Base seed=", BASE_SEED)
 log_msg("Output: ", SAVE_DIR)
@@ -328,7 +331,8 @@ export_globals <- function(cl) {
     "N_PROPOSALS", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
     "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
     "SEM_N_PROPS", "SEM_CHANGE_FACTOR", "SEM_STALENESS_TRIGGER_EVERY",
-    "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS"
+    "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS",
+    "SIM_FILTRATION_AWARE"
   ), envir = .GlobalEnv)
 }
 
@@ -515,6 +519,7 @@ run_sem_core <- function(job) {
     hawkes_params_treated = params_init,
     N_labellings = SEM_N_LABELLINGS,
     N_iter = SEM_N_ITER, verbose = FALSE,
+    hawkes_use_filtration_history = SIM_FILTRATION_AWARE,
     adaptive_control = list(
       param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
       proposal_update_cadence = SEM_PROPOSAL_UPDATE_CADENCE,
@@ -651,9 +656,10 @@ pre_histories <- lapply(obs_data, function(df) {
 for (nm in names(labellings)) {
   for (i in seq_along(labellings[[nm]])) {
     post_x <- labellings[[nm]][[i]] %>% filter(.data$t >= TREATMENT_TIME)
+    filt_x <- if (SIM_FILTRATION_AWARE) pre_histories[[i]] else pre_histories[[i]][0, , drop = FALSE]
     tasks[[length(tasks) + 1]] <- list(
       x = slim_for_ate(post_x),
-      filtration_data = pre_histories[[i]],
+      filtration_data = filt_x,
       labelling_name = nm, hawkes_params = NULL
     )
   }
@@ -662,9 +668,10 @@ for (i in seq_along(EM_results)) {
   tmp <- obs_data[[i]]
   tmp$inferred_process <- tmp$location_process
   post_tmp <- tmp %>% filter(.data$t >= TREATMENT_TIME)
+  filt_x <- if (SIM_FILTRATION_AWARE) pre_histories[[i]] else pre_histories[[i]][0, , drop = FALSE]
   tasks[[length(tasks) + 1]] <- list(
     x = slim_for_ate(post_tmp),
-    filtration_data = pre_histories[[i]],
+    filtration_data = filt_x,
     labelling_name = "SEM_full",
     hawkes_params = list(
       control = EM_results[[i]]$hawkes_params_control,
@@ -691,13 +698,31 @@ for (k in seq_along(tasks)) {
 }
 if (length(crazy_idx) > 0) {
   log_msg(sprintf("[CRAZY PARAMS] %d tasks with explosive params (K>0.98 or mu>1e5)", length(crazy_idx)))
-  if (SKIP_CRAZY) {
-    tasks <- tasks[-crazy_idx]
-    log_msg("[CRAZY PARAMS] Skipping explosive tasks")
-  } else {
-    log_msg("[CRAZY PARAMS] Retaining tasks in queue, but worker-side guard still returns NULL for explosive params")
-  }
+  log_msg("[CRAZY PARAMS] Retaining all tasks for inspection; explosive ones are excluded from ATE execution queue")
 }
+skipped_explosive_tasks <- if (length(crazy_idx) > 0) {
+  do.call(rbind, lapply(crazy_idx, function(k) {
+    tsk <- tasks[[k]]
+    ctrl <- tsk$hawkes_params$control
+    treat <- tsk$hawkes_params$treated
+    data.frame(
+      task_idx = k,
+      sim_id = ((k - 1) %% SIM_SIZE) + 1,
+      labelling = tsk$labelling_name,
+      control_mu = ctrl$mu, control_K = ctrl$K,
+      treated_mu = treat$mu, treated_K = treat$K,
+      stringsAsFactors = FALSE
+    )
+  }))
+} else {
+  data.frame(
+    task_idx = integer(0), sim_id = integer(0), labelling = character(0),
+    control_mu = numeric(0), control_K = numeric(0),
+    treated_mu = numeric(0), treated_K = numeric(0),
+    stringsAsFactors = FALSE
+  )
+}
+ate_run_idx <- setdiff(seq_along(tasks), crazy_idx)
 
 ATE_env <- new.env(parent = baseenv())
 ATE_env$ATE_estim_hawkes <- getFromNamespace("ATE_estim_hawkes", "PPDisentangle")
@@ -749,60 +774,66 @@ environment(task_function) <- ATE_env
 
 if (N_CORES > 1) gc(verbose = FALSE)
 ATE_SEQUENTIAL <- TEST
+results_flat <- vector("list", length(tasks))
 if (ATE_SEQUENTIAL) {
   log_msg("ATE estimation: sequential (TEST mode)")
   stopCluster(cl)
-  results_flat <- lapply(tasks, task_function)
+  if (length(ate_run_idx) > 0L) {
+    results_flat[ate_run_idx] <- lapply(tasks[ate_run_idx], task_function)
+  }
 } else {
   # Recreate a fresh, smaller cluster for ATE to avoid stale worker state and
   # reduce memory pressure from too many concurrent heavy ATE jobs.
   stopCluster(cl)
-  gc(verbose = FALSE)
-  cl_ate <- make_cluster(min(ATE_WORKERS, length(tasks)))
-  export_ate_globals(cl_ate)
-  task_ids <- seq_along(tasks)
-  task_batches <- split(task_ids, ceiling(task_ids / ATE_BATCH_SIZE))
-  results_flat <- vector("list", length(tasks))
-  batch_failed <- FALSE
-  done_total <- 0L
-  ok_total <- 0L
-  null_total <- 0L
-  for (b in seq_along(task_batches)) {
-    idx <- task_batches[[b]]
-    log_msg(sprintf("[ATE BATCH %d/%d] start (tasks %d..%d, n=%d)",
-                    b, length(task_batches), min(idx), max(idx), length(idx)))
-    tb0 <- proc.time()[3]
-    batch_res <- tryCatch(
-      parLapply(cl_ate, tasks[idx], fun = task_function),
-      error = function(e) {
-        log_msg("[ATE PARALLEL ERROR] batch ", b, "/", length(task_batches), ": ", conditionMessage(e))
-        NULL
+  if (length(ate_run_idx) > 0L) {
+    gc(verbose = FALSE)
+    cl_ate <- make_cluster(min(ATE_WORKERS, length(ate_run_idx)))
+    export_ate_globals(cl_ate)
+    task_ids <- ate_run_idx
+    task_batches <- split(task_ids, ceiling(seq_along(task_ids) / ATE_BATCH_SIZE))
+    batch_failed <- FALSE
+    done_total <- 0L
+    ok_total <- 0L
+    null_total <- 0L
+    for (b in seq_along(task_batches)) {
+      idx <- task_batches[[b]]
+      log_msg(sprintf("[ATE BATCH %d/%d] start (tasks %d..%d, n=%d)",
+                      b, length(task_batches), min(idx), max(idx), length(idx)))
+      tb0 <- proc.time()[3]
+      batch_res <- tryCatch(
+        parLapply(cl_ate, tasks[idx], fun = task_function),
+        error = function(e) {
+          log_msg("[ATE PARALLEL ERROR] batch ", b, "/", length(task_batches), ": ", conditionMessage(e))
+          NULL
+        }
+      )
+      if (is.null(batch_res)) {
+        batch_failed <- TRUE
+        break
       }
-    )
-    if (is.null(batch_res)) {
-      batch_failed <- TRUE
-      break
+      results_flat[idx] <- batch_res
+      n_ok <- sum(vapply(batch_res, function(z) !is.null(z), logical(1)))
+      n_null <- length(batch_res) - n_ok
+      done_total <- done_total + length(batch_res)
+      ok_total <- ok_total + n_ok
+      null_total <- null_total + n_null
+      batch_elapsed <- proc.time()[3] - tb0
+      log_msg(sprintf("[ATE BATCH %d/%d] done in %.1f s | ok=%d null=%d | cumulative %d/%d (ok=%d null=%d)",
+                      b, length(task_batches), batch_elapsed, n_ok, n_null,
+                      done_total, length(ate_run_idx), ok_total, null_total))
+      rm(batch_res); gc(verbose = FALSE)
+      log_elapsed("ATE parallel batch", proc.time()[3] - t0, done_total, length(ate_run_idx))
     }
-    results_flat[idx] <- batch_res
-    n_ok <- sum(vapply(batch_res, function(z) !is.null(z), logical(1)))
-    n_null <- length(batch_res) - n_ok
-    done_total <- done_total + length(batch_res)
-    ok_total <- ok_total + n_ok
-    null_total <- null_total + n_null
-    batch_elapsed <- proc.time()[3] - tb0
-    log_msg(sprintf("[ATE BATCH %d/%d] done in %.1f s | ok=%d null=%d | cumulative %d/%d (ok=%d null=%d)",
-                    b, length(task_batches), batch_elapsed, n_ok, n_null,
-                    done_total, length(tasks), ok_total, null_total))
-    rm(batch_res); gc(verbose = FALSE)
-    log_elapsed("ATE parallel batch", proc.time()[3] - t0, max(idx), length(tasks))
-  }
-  stopCluster(cl_ate)
-  if (batch_failed) {
-    log_msg("[ATE PARALLEL ERROR] Falling back to sequential for robustness.")
-    results_flat <- lapply(tasks, task_function)
+    stopCluster(cl_ate)
+    if (batch_failed) {
+      log_msg("[ATE PARALLEL ERROR] Falling back to sequential for robustness.")
+      results_flat[ate_run_idx] <- lapply(tasks[ate_run_idx], task_function)
+    }
+  } else {
+    log_msg("[ATE] No runnable tasks after explosive-parameter screening.")
   }
 }
-log_elapsed("ATE estimation", proc.time()[3] - t0, length(tasks), length(tasks))
+log_elapsed("ATE estimation", proc.time()[3] - t0, length(ate_run_idx), length(tasks))
 log_memory("post_ATE")
 
 # ------------------------------------------------------------------
@@ -850,6 +881,7 @@ log_msg("True one-flip ATE:  ", round(true_tau_1, 4))
 log_msg("")
 log_msg("Building plots ...")
 sim_study_plots <- list()
+boxplot_method_levels <- c("oracle", "naive", "best", "SEM_adaptive", "SEM_full")
 
 # Point pattern plots (first realization)
 if (length(obs_data) > 0) {
@@ -869,10 +901,19 @@ if (length(obs_data) > 0) {
 extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
   lapply(seq_along(results_flat), function(k) {
     r <- results_flat[[k]]
-    par_obj <- r[[field_name]]
-    if (is.null(r) || is.null(par_obj)) return(NULL)
+    task_k <- tasks[[k]]
+    par_obj <- if (!is.null(r)) r[[field_name]] else NULL
+    # If SEM_full ATE was skipped (e.g., explosive guard), still expose
+    # fitted SEM parameters in parameter plots for transparency.
+    if (is.null(par_obj) &&
+        !is.null(task_k) &&
+        identical(task_k$labelling_name, "SEM_full") &&
+        !is.null(task_k$hawkes_params)) {
+      par_obj <- if (identical(field_name, "control_pp")) task_k$hawkes_params$control else task_k$hawkes_params$treated
+    }
+    if (is.null(par_obj)) return(NULL)
     data.frame(
-      labelling = tasks[[k]]$labelling_name,
+      labelling = task_k$labelling_name,
       sim_id = ((k - 1) %% sim_size) + 1,
       mu = par_obj$mu, alpha = par_obj$alpha,
       beta = par_obj$beta, K = par_obj$K,
@@ -882,6 +923,10 @@ extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
 }
 build_param_boxplots <- function(params_df, truth_params) {
   if (is.null(params_df) || nrow(params_df) < 1) return(NULL)
+  params_df$labelling <- factor(
+    params_df$labelling,
+    levels = unique(c(boxplot_method_levels, as.character(params_df$labelling)))
+  )
   params_long <- reshape2::melt(
     params_df,
     id.vars = c("labelling", "sim_id"),
@@ -921,7 +966,7 @@ if (!is.null(treated_param_plots) && length(treated_param_plots) > 0) {
 # All-nothing ATE boxplot
 if (!is.null(results_df) && nrow(results_df) > 0) {
   results_df$labelling <- factor(results_df$labelling,
-    levels = unique(c("oracle", "naive", "best", "SEM_adaptive", "SEM_full", results_df$labelling)))
+    levels = unique(c(boxplot_method_levels, as.character(results_df$labelling))))
   lines_data_ate <- data.frame(all_nothing_ATE = all_nothing_ATE)
   oracle_ate <- results_df %>% filter(.data$labelling == "oracle")
   oracle_mean_ate <- if (nrow(oracle_ate) > 0) mean(oracle_ate$all_nothing_theory, na.rm = TRUE) else NA
@@ -953,6 +998,10 @@ ate_detail_rows <- lapply(seq_along(results_flat), function(k) {
 })
 ate_detail_rows <- do.call(rbind, ate_detail_rows)
 if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
+  ate_detail_rows$labelling <- factor(
+    ate_detail_rows$labelling,
+    levels = unique(c(boxplot_method_levels, as.character(ate_detail_rows$labelling)))
+  )
   true_means_pts <- data.frame(
     method = c("points_per_tile_control_theory", "points_per_tile_treated_theory"),
     mean_ATE = c(
@@ -1101,6 +1150,8 @@ sim_study_results <- list(
   summary_df = if (exists("summary_df")) summary_df else NULL,
   results_flat = results_flat,
   tasks = tasks,
+  ate_run_idx = ate_run_idx,
+  skipped_explosive_tasks = skipped_explosive_tasks,
   class_metrics = class_metrics,
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
@@ -1113,6 +1164,7 @@ sim_study_results <- list(
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SIM_FILTRATION_AWARE = SIM_FILTRATION_AWARE,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
