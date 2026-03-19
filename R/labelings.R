@@ -816,6 +816,11 @@ em_style_labelling <- function(pp_data,
   change_factor_min <- 0.2 * base_change_factor
   change_factor_max <- 2.0 * base_change_factor
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
+  hawkes_use_filtration_history <- if ("hawkes_use_filtration_history" %in% names(dots)) {
+    isTRUE(dots$hawkes_use_filtration_history)
+  } else {
+    TRUE
+  }
   treated_background_zero_before <- if ("treated_background_zero_before" %in% names(dots)) {
     as.numeric(dots$treated_background_zero_before)
   } else {
@@ -919,7 +924,16 @@ em_style_labelling <- function(pp_data,
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
         post_inds <- as.numeric(tileindex(post_data$x, post_data$y, partition))
-        filt_by_proc <- if (!is.null(pre_data$location_process)) split(pre_data, pre_data$location_process) else NULL
+        pre_for_proposals <- if (is_biv_etas || hawkes_use_filtration_history) {
+          pre_data
+        } else {
+          pre_data[0, , drop = FALSE]
+        }
+        filt_by_proc <- if (!is.null(pre_for_proposals$location_process)) {
+          split(pre_for_proposals, pre_for_proposals$location_process)
+        } else {
+          NULL
+        }
         post_proposals <- lapply(1:n_props, function(j) {
           simulation_labeling_hawkes_hawkes_fast(
             post_data, partition = partition, partition_process = partition_processes,
@@ -927,7 +941,7 @@ em_style_labelling <- function(pp_data,
             windowT = time_window,
             hawkes_params_control = control_par[[length(control_par)]],
             hawkes_params_treated = treated_par[[length(treated_par)]],
-            change_factor = proposal_change_factor, filtration = pre_data, verbose = FALSE,
+            change_factor = proposal_change_factor, filtration = pre_for_proposals, verbose = FALSE,
             temporal_weight = temporal_weight,
             temporal_scale_days = temporal_scale_days,
             points_tile_index = post_inds, filt_by_proc = filt_by_proc,
