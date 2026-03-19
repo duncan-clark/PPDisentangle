@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "label": "cand_205",
+    "seed": 205,
+    "quick": true,
+    "run_decode": false,
+    "timestamp": "2026-03-18 11:23:56.297549",
+    "repo_root": "/Users/dac6/Library/CloudStorage/GoogleDrive-clark.a.duncan@gmail.com/My Drive/my_laptop/Documents/Academics/computation/r_code/CausalPointProcess/PPDisentangle"
+  },
+  "components": {
+    "likelihood": {
+      "name": "hawkes_loglik_precomp",
+      "primary_time_sec": 0.009,
+      "no_precomp_sec": 0.025,
+      "precomp_sec": 0.009,
+      "internal_speedup": 2.7778,
+      "ll_abs_diff": 12.9636,
+      "correctness_pass": true
+    },
+    "simulation": {
+      "name": "hawkes_sim_fast_vs_ref",
+      "primary_time_sec": 0.03,
+      "fast_sec": 0.03,
+      "reference_sec": 0.043,
+      "internal_speedup": 1.4333,
+      "mean_count_fast": 451.6667,
+      "mean_count_ref": 453.4,
+      "sd_count_fast": 34.4937,
+      "sd_count_ref": 30.0684,
+      "mean_count_abs_diff": 1.7333,
+      "sd_count_abs_diff": 4.4253,
+      "mean_count_rel_diff": 0.0038,
+      "sd_count_rel_diff": 0.1472,
+      "correctness_pass": true
+    },
+    "sem": {
+      "name": "sem_inner_loop",
+      "primary_time_sec": 0.422,
+      "elapsed_sec": 0.422,
+      "n_iter": 10,
+      "final_accuracy": 0.8992,
+      "mean_accuracy": 0.8982,
+      "all_metrics_finite": true,
+      "correctness_pass": true
+    }
+  },
+  "overall_correctness_pass": true
+}
