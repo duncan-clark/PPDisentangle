@@ -224,8 +224,8 @@ pp_pre  <- results$pp_data$pp_pre
 pp_post <- results$pp_data$pp_post
 pp_pre <- coerce_pp_df(pp_pre)
 pp_post <- coerce_pp_df(pp_post)
-if (!("t" %in% names(pp_pre))) pp_pre$t <- 0
-if (!("t" %in% names(pp_post))) pp_post$t <- 0
+if (!("t" %in% names(pp_pre))) pp_pre$t <- numeric(nrow(pp_pre))
+if (!("t" %in% names(pp_post))) pp_post$t <- numeric(nrow(pp_post))
 ```
 
 ## Magnitude Distribution
