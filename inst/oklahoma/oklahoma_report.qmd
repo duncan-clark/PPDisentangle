@@ -60,6 +60,7 @@ candidate_out_dirs <- unique(c(
   file.path(dirname(dirname(SCRIPT_DIR)), "output")
 ))
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
+                     "^oklahoma_results_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap_job([0-9]+)?\\.rds$")
 candidate_result_files <- unlist(lapply(candidate_out_dirs, function(d) {
