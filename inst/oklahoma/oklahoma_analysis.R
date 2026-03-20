@@ -2679,6 +2679,12 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
     } else {
       cat("Report render complete.\n")
       sync_stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+      result_mtime <- tryCatch(file.info(out_file)$mtime[[1]], error = function(e) NA)
+      result_stamp <- if (!is.na(result_mtime)) {
+        format(result_mtime, "%Y%m%d_%H%M%S")
+      } else {
+        format(Sys.time(), "%Y%m%d_%H%M%S")
+      }
       report_html_rendered <- if ("html" %in% REPORT_FORMATS) {
         file.path(SCRIPT_DIR, "oklahoma_report.html")
       } else {
@@ -2690,14 +2696,14 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
         NA_character_
       }
       report_html_target <- if (is.character(report_html_rendered) &&
-                                !is.na(report_html_rendered) && nzchar(FILE_TAG)) {
-        file.path(SCRIPT_DIR, add_file_tag("oklahoma_report.html"))
+                                !is.na(report_html_rendered)) {
+        file.path(SCRIPT_DIR, add_file_tag(sprintf("oklahoma_report_%s.html", result_stamp)))
       } else {
         report_html_rendered
       }
       report_pdf_target <- if (is.character(report_pdf_rendered) &&
-                               !is.na(report_pdf_rendered) && nzchar(FILE_TAG)) {
-        file.path(SCRIPT_DIR, add_file_tag("oklahoma_report.pdf"))
+                               !is.na(report_pdf_rendered)) {
+        file.path(SCRIPT_DIR, add_file_tag(sprintf("oklahoma_report_%s.pdf", result_stamp)))
       } else {
         report_pdf_rendered
       }
@@ -2734,6 +2740,14 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
         writeLines(stamp_lines, file.path(LEGACY_OUT_DIR, add_file_tag("last_run_sync_stamp.txt")))
       }
       cat("Sync stamp written for Google Drive change detection.\n")
+      if ("html" %in% REPORT_FORMATS) {
+        cat(sprintf("Timestamped report (from results mtime %s): %s\n",
+                    result_stamp, normalizePath(report_html_target, winslash = "/", mustWork = FALSE)))
+      }
+      if ("pdf" %in% REPORT_FORMATS) {
+        cat(sprintf("Timestamped PDF (from results mtime %s): %s\n",
+                    result_stamp, normalizePath(report_pdf_target, winslash = "/", mustWork = FALSE)))
+      }
     }
   } else {
     cat("Quarto not found in PATH; skipping report render.\n")
