@@ -92,7 +92,7 @@ if (TEST) {
   N_TAU_I <- 3
   N_TAU_I_TRUE <- 5
   N_PROPOSALS <- 5
-  SEM_EM_ADAPTIVE_ITER <- 100
+  SEM_EM_ADAPTIVE_ITER <- 200
   SEM_N_ITER <- 1
   SEM_N_LABELLINGS <- 5
   SAVE_DIR <- resolve_save_dir()
@@ -106,7 +106,7 @@ if (TEST) {
   N_PROPOSALS <- 10
   # Restore pre-bootstrap baseline SEM settings for cluster stability/accuracy.
   SEM_EM_ADAPTIVE_ITER <- 2000
-  SEM_N_ITER <- 3
+  SEM_N_ITER <- 100
   SEM_N_LABELLINGS <- 10
   SAVE_DIR <- resolve_save_dir()
 } else if (SMALL) {
@@ -163,7 +163,7 @@ stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
 # SEM/adaptive configuration
 SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
-SEM_N_PROPS <- 10L
+SEM_N_PROPS <- 20L
 SEM_CHANGE_FACTOR <- 0.005
 SEM_STALENESS_TRIGGER_EVERY <- 10L
 SEM_INCLUDE_STARTING <- TRUE
@@ -810,6 +810,74 @@ slim_for_ate <- function(df) {
   out
 }
 
+estimate_control_params_from_labeling <- function(post_data, filt_data) {
+  fit_hawkes_with_filtration_fn <- getFromNamespace("fit_hawkes_with_filtration", "PPDisentangle")
+  fit_hawkes_fn <- getFromNamespace("fit_hawkes", "PPDisentangle")
+  ctrl_realiz <- post_data[post_data$inferred_process == "control", , drop = FALSE]
+  dt_fit <- END_TIME - TREATMENT_TIME
+  if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
+  if (nrow(ctrl_realiz) < 2) {
+    return(list(mu = max(1e-8, nrow(ctrl_realiz) / dt_fit), alpha = 0, beta = dt_fit / 10, K = 0.01))
+  }
+  ctrl_init <- list(
+    mu = max(1e-8, nrow(ctrl_realiz) / dt_fit),
+    alpha = 0,
+    beta = dt_fit / 100,
+    K = 0.01
+  )
+  if (isTRUE(ATE_CONTROL_FILTRATION_AWARE)) {
+    fit_ctrl <- fit_hawkes_with_filtration_fn(
+      params_init = ctrl_init,
+      realiz = ctrl_realiz,
+      filtration = filt_data,
+      windowT = c(TREATMENT_TIME, END_TIME),
+      windowS = OMEGA,
+      maxit = ATE_MAXIT,
+      poisson_flag = FALSE,
+      zero_background_region = treated_state_space
+    )$par
+    empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / dt_fit else Inf
+    fitted_rate <- as.numeric(fit_ctrl$mu) / max(1e-6, 1 - as.numeric(fit_ctrl$K))
+    degenerate_fit <- (!is.finite(fitted_rate) || !is.finite(empirical_rate) ||
+                       (as.numeric(fit_ctrl$K) >= 0.98) ||
+                       (fitted_rate < 0.2 * empirical_rate))
+    if (isTRUE(degenerate_fit)) {
+      legacy <- fit_hawkes_fn(
+        unlist(ctrl_init),
+        realiz = ctrl_realiz,
+        zero_background_region = treated_state_space,
+        windowT = c(TREATMENT_TIME, END_TIME),
+        windowS = OMEGA,
+        trace = 0,
+        maxit = ATE_MAXIT,
+        density_approx = FALSE,
+        numeric_integral = FALSE,
+        poisson_flag = FALSE,
+        t_trunc = -1
+      )$par
+      fit_ctrl <- as.list(legacy)
+      names(fit_ctrl) <- c("mu", "alpha", "beta", "K")
+    }
+  } else {
+    fit_ctrl <- fit_hawkes_fn(
+      unlist(ctrl_init),
+      realiz = ctrl_realiz,
+      zero_background_region = treated_state_space,
+      windowT = c(TREATMENT_TIME, END_TIME),
+      windowS = OMEGA,
+      trace = 0,
+      maxit = ATE_MAXIT,
+      density_approx = FALSE,
+      numeric_integral = FALSE,
+      poisson_flag = FALSE,
+      t_trunc = -1
+    )$par
+    fit_ctrl <- as.list(fit_ctrl)
+    names(fit_ctrl) <- c("mu", "alpha", "beta", "K")
+  }
+  fit_ctrl
+}
+
 tasks <- list()
 pre_histories <- lapply(obs_data, function(df) {
   pre <- as.data.frame(df) %>% filter(.data$t < TREATMENT_TIME)
@@ -831,16 +899,23 @@ for (nm in names(labellings)) {
   }
 }
 for (i in seq_along(EM_results)) {
-  tmp <- obs_data[[i]]
-  tmp$inferred_process <- tmp$location_process
-  post_tmp <- tmp %>% filter(.data$t >= TREATMENT_TIME)
+  post_tmp <- EM_results[[i]]$adaptive$adaptive_labelling %>% filter(.data$t >= TREATMENT_TIME)
   filt_x <- if (SIM_FILTRATION_AWARE) pre_histories[[i]] else pre_histories[[i]][0, , drop = FALSE]
+  post_slim <- slim_for_ate(post_tmp)
+  ctrl_sem_full <- tryCatch(
+    estimate_control_params_from_labeling(post_slim, filt_x),
+    error = function(e) {
+      post_fallback <- post_slim
+      post_fallback$inferred_process <- post_fallback$location_process
+      estimate_control_params_from_labeling(post_fallback, filt_x)
+    }
+  )
   tasks[[length(tasks) + 1]] <- list(
-    x = slim_for_ate(post_tmp),
+    x = post_slim,
     filtration_data = filt_x,
     labelling_name = "SEM_full",
     hawkes_params = list(
-      control = EM_results[[i]]$hawkes_params_control,
+      control = ctrl_sem_full,
       treated = EM_results[[i]]$hawkes_params_treated
     )
   )
@@ -1037,6 +1112,55 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
   log_msg("No valid ATE results (all tasks timed out or errored).")
 }
 
+TRUE_CTRL_TAU_I <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_I", "3")))
+if (!is.finite(TRUE_CTRL_TAU_I) || is.na(TRUE_CTRL_TAU_I) || TRUE_CTRL_TAU_I < 1L) TRUE_CTRL_TAU_I <- 3L
+TRUE_CTRL_TAU_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_SIMS", "5")))
+if (!is.finite(TRUE_CTRL_TAU_SIMS) || is.na(TRUE_CTRL_TAU_SIMS) || TRUE_CTRL_TAU_SIMS < 1L) TRUE_CTRL_TAU_SIMS <- 5L
+
+results_df_true_control <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
+  r <- results_flat[[k]]
+  if (is.null(r) || is.null(r$treated_pp)) return(NULL)
+  treated_pp <- r$treated_pp
+  ctrl_true <- hawkes_par_1
+  tau_i_true <- vapply(seq_len(TRUE_CTRL_TAU_I), function(j) {
+    tau_i(
+      sample(partition$n, 1),
+      partition = partition, treated_partitions = treated_partitions,
+      statespace = OMEGA, windowT = c(TREATMENT_TIME, END_TIME),
+      control_pp = ctrl_true, treated_pp = treated_pp, n_sim = TRUE_CTRL_TAU_SIMS
+    )
+  }, numeric(1))
+  data.frame(
+    labelling = tasks[[k]]$labelling_name,
+    all_nothing_true_control =
+      (treated_pp$mu * TIME_INT * (1 / (1 - treated_pp$K)) -
+         ctrl_true$mu * TIME_INT * (1 / (1 - ctrl_true$K))) / partition$n,
+    tau_1_true_control = mean(tau_i_true),
+    ATE_total = r$ATE_total,
+    ATE_treatment = r$ATE_treatment,
+    ATE_spillover = r$ATE_spillover,
+    ATE_naive = r$ATE_naive,
+    stringsAsFactors = FALSE
+  )
+}))
+summary_df_true_control <- if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
+  results_df_true_control %>%
+    group_by(.data$labelling) %>%
+    summarize(
+      mean_all_nothing_true_control = mean(.data$all_nothing_true_control, na.rm = TRUE),
+      mean_tau1_true_control = mean(.data$tau_1_true_control, na.rm = TRUE),
+      mean_ATE_total = mean(.data$ATE_total, na.rm = TRUE),
+      mean_ATE_naive = mean(.data$ATE_naive, na.rm = TRUE),
+      .groups = "drop"
+    )
+} else {
+  NULL
+}
+if (!is.null(summary_df_true_control)) {
+  log_msg("=== ATE Results (true control parameters fixed) ===")
+  print(summary_df_true_control)
+}
+
 log_msg("")
 log_msg("True all/nothing ATE:", round(all_nothing_ATE, 4))
 log_msg("True one-flip ATE:  ", round(true_tau_1, 4))
@@ -1181,6 +1305,25 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     coord_cartesian(ylim = c(y_lo, y_hi))
+}
+
+if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
+  results_df_true_control$labelling <- factor(
+    results_df_true_control$labelling,
+    levels = unique(c(boxplot_method_levels, as.character(results_df_true_control$labelling)))
+  )
+  oracle_tc <- results_df_true_control %>% filter(.data$labelling == "oracle")
+  oracle_tc_mean <- if (nrow(oracle_tc) > 0) mean(oracle_tc$all_nothing_true_control, na.rm = TRUE) else NA_real_
+  y_lo_tc <- min(all_nothing_ATE * 1.5, min(results_df_true_control$all_nothing_true_control, na.rm = TRUE) * 0.95)
+  y_hi_tc <- max(3, max(results_df_true_control$all_nothing_true_control, na.rm = TRUE) * 1.05)
+  sim_study_plots$plot_all_nothing_ATE_true_control <- ggplot(results_df_true_control) +
+    geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_true_control)) +
+    geom_hline(yintercept = all_nothing_ATE, linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+    {if (!is.na(oracle_tc_mean)) geom_hline(yintercept = oracle_tc_mean, linetype = "dotted", color = "blue", linewidth = 0.8)} +
+    labs(x = "Method", y = "All-Nothing ATE (True Control Fixed)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    coord_cartesian(ylim = c(y_lo_tc, y_hi_tc))
 }
 
 # Points per tile (control vs treated theoretical means)
@@ -1365,6 +1508,8 @@ timing_report <- list(
 sim_study_results <- list(
   results_df = results_df,
   summary_df = if (exists("summary_df")) summary_df else NULL,
+  results_df_true_control = results_df_true_control,
+  summary_df_true_control = summary_df_true_control,
   control_param_summary = if (exists("control_param_summary")) control_param_summary else NULL,
   treated_param_summary = if (exists("treated_param_summary")) treated_param_summary else NULL,
   control_params_df = if (exists("control_params_df")) control_params_df else NULL,
@@ -1383,6 +1528,7 @@ sim_study_results <- list(
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
+    TRUE_CTRL_TAU_I = TRUE_CTRL_TAU_I, TRUE_CTRL_TAU_SIMS = TRUE_CTRL_TAU_SIMS,
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
