@@ -149,7 +149,7 @@ if (!is.finite(BOOT_SEM_INNER_ITER) || is.na(BOOT_SEM_INNER_ITER) || BOOT_SEM_IN
 BOOT_OUTER_CORES_RAW <- Sys.getenv("OK_BOOT_OUTER_CORES", "")
 BOOT_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEED", "")))
 OK_GLOBAL_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_GLOBAL_SEED", "1")))
-OK_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_IDENTICAL_RANDOMNESS", "true")) %in% c("1", "true", "yes", "y")
+OK_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_BOOT_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_GUARD_DEGENERATE <- tolower(Sys.getenv("OK_BOOT_GUARD_DEGENERATE", "true")) %in% c("1", "true", "yes", "y")
 BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_BOOT_BRANCHING_MAX", "0.98")))
@@ -488,8 +488,8 @@ if (n_pre_ctrl_struct_init < 5) {
   stop("Insufficient first-half control pre-treatment events for structural parameter estimation.")
 }
 
-# Data-driven structural parameter calibration from first-half control pre data.
-# These values are fixed downstream so only productivity terms are refit.
+# Data-driven ETAS calibration from first-half control pre data.
+# These values are used as robust initializations for all downstream fits.
 PRE_CTRL_BOOT_PARAMS <- NULL
 estimate_structural_init <- function() {
   starts <- VANILLA_STARTS
@@ -536,7 +536,7 @@ estimate_structural_init <- function() {
   out
 }
 STRUCT_INIT <- estimate_structural_init()
-FIXED_STRUCTURAL <- as.list(STRUCT_INIT[c("c", "p", "D", "gamma", "q")])
+FIXED_STRUCTURAL <- list()
 if (is.null(PRE_CTRL_BOOT_PARAMS)) {
   PRE_CTRL_BOOT_PARAMS <- list(mu = 1.0, A = 0.2, alpha_m = 0.8,
                                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
@@ -546,19 +546,23 @@ if (is.null(PRE_CTRL_BOOT_PARAMS)) {
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
             STRUCT_INIT$gamma, STRUCT_INIT$q))
-cat(sprintf("  Structural parameters fixed in downstream fits: c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
-            FIXED_STRUCTURAL$c, FIXED_STRUCTURAL$p, FIXED_STRUCTURAL$D,
-            FIXED_STRUCTURAL$gamma, FIXED_STRUCTURAL$q))
+cat(sprintf("  Pre-treatment full ETAS init: mu=%.4f, A=%.4f, alpha_m=%.4f, c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
+            PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
+            PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
+            PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
 
-apply_structural_init_etas <- function(start_par) {
+apply_pre_init_etas <- function(start_par) {
   out <- start_par
-  for (nm in c("c", "p", "D", "gamma", "q")) out[[nm]] <- STRUCT_INIT[[nm]]
+  for (nm in etas_names) out[[nm]] <- PRE_CTRL_BOOT_PARAMS[[nm]]
   out
 }
 
-apply_structural_init_biv <- function(par_vec) {
+apply_pre_init_biv <- function(par_vec) {
   out <- par_vec
-  out[c("c", "p", "D", "gamma", "q")] <- unlist(STRUCT_INIT[c("c", "p", "D", "gamma", "q")])
+  out[c("mu_0", "mu_1")] <- PRE_CTRL_BOOT_PARAMS$mu
+  out[c("A_00", "A_11", "A_01", "A_10")] <- PRE_CTRL_BOOT_PARAMS$A
+  out[c("alpha_m_00", "alpha_m_11", "alpha_m_01", "alpha_m_10")] <- PRE_CTRL_BOOT_PARAMS$alpha_m
+  out[c("c", "p", "D", "gamma", "q")] <- unlist(PRE_CTRL_BOOT_PARAMS[c("c", "p", "D", "gamma", "q")])
   out
 }
 
@@ -635,12 +639,12 @@ tryCatch({
 
 fit_best_indep <- function(realiz, zbr, starts, maxit) {
   best_fit <- NULL; best_val <- -Inf
-  starts_use <- lapply(starts, apply_structural_init_etas)
+  starts_use <- lapply(starts, apply_pre_init_etas)
   for (s in starts_use) {
     fit <- tryCatch(
       fit_etas(params_init = s, realiz = realiz, windowT = windowT_post,
                windowS = win_km, m0 = ETAS_M0, maxit = maxit,
-               fixed_params = FIXED_STRUCTURAL, zero_background_region = zbr),
+               fixed_params = NULL, zero_background_region = zbr),
       error = function(e) NULL)
     if (!is.null(fit) && is.finite(fit$value) && fit$value > best_val) {
       best_fit <- fit; best_val <- fit$value
@@ -674,8 +678,8 @@ if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1) {
 
 A_ctrl <- if (!is.null(fitA_ctrl)) as.list(fitA_ctrl$par) else VANILLA_STARTS[[1]]
 A_treat <- if (!is.null(fitA_treat)) as.list(fitA_treat$par) else VANILLA_STARTS[[1]]
-A_ctrl <- apply_structural_init_etas(A_ctrl)
-A_treat <- apply_structural_init_etas(A_treat)
+A_ctrl <- apply_pre_init_etas(A_ctrl)
+A_treat <- apply_pre_init_etas(A_treat)
 names(A_ctrl) <- etas_names; names(A_treat) <- etas_names
 
 cat("  Control:", paste(etas_names, round(unlist(A_ctrl), 4), sep = "=", collapse = ", "), "\n")
@@ -686,7 +690,7 @@ cat("  Treated:", paste(etas_names, round(unlist(A_treat), 4), sep = "=", collap
 # ============================================================================
 cat("\n--- Fit B: Naive bivariate ETAS ---\n")
 
-biv_init <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+biv_init <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 biv_names <- names(biv_init)
 fit_b <- function() {
   tryCatch({
@@ -695,7 +699,7 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -712,8 +716,8 @@ C_ctrl <- A_ctrl; C_treat <- A_treat
 # ============================================================================
 cat("\n--- Fit D: SEM bivariate ETAS ---\n")
 
-biv_init_D <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
-biv_fixed <- FIXED_STRUCTURAL
+biv_init_D <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+biv_fixed <- NULL
 
 run_sem_fit <- function(pp_data_in,
                         partition_in,
@@ -904,7 +908,7 @@ tryCatch({
 # ============================================================================
 cat("\n--- Fit E: Naive bivariate ETAS with KDE background ---\n")
 
-biv_init_E <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+biv_init_E <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 fit_e <- function() {
   tryCatch({
     fit_etas_bivariate(
@@ -913,7 +917,7 @@ fit_e <- function() {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate+KDE fit error:", e$message, "\n"); NULL })
 }
@@ -923,7 +927,7 @@ fit_e <- function() {
 # ============================================================================
 cat("\n--- Fit F: SEM bivariate ETAS with KDE background ---\n")
 
-biv_init_F <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+biv_init_F <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 fit_f <- function() {
   tryCatch({
     run_sem_fit(
@@ -1371,7 +1375,7 @@ run_kde_bandwidth_fit <- function(spec) {
   pp_post_bg_local <- bg_data$pp_post_bg
   pp_all_bg_local <- bg_data$pp_all_bg
 
-  biv_init_local <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+  biv_init_local <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   fitE_local <- tryCatch({
     fit_etas_bivariate(
       params_init = biv_init_local, realiz = pp_all_bg_local,
@@ -1379,7 +1383,7 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit E error: %s\n", bw_label, e$message))
@@ -1626,7 +1630,7 @@ run_biv_for_partition <- function(part_info) {
               sum(pp_post_p$location_process == "treated")))
 
   # Naive bivariate + KDE background
-  biv_init_p <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+  biv_init_p <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   fitE_p <- tryCatch({
     fit_etas_bivariate(
       params_init = biv_init_p, realiz = pp_all_p,
@@ -1634,7 +1638,7 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
@@ -1789,6 +1793,13 @@ pp_post_sem_D <- if (!is.null(semD)) semD$adaptive$adaptive_labelling else NULL
 pp_post_sem_D <- if (!is.null(pp_post_sem_D)) pp_post_sem_D[pp_post_sem_D$t >= 0, ] else pp_post
 pp_post_sem_F <- if (!is.null(semF)) semF$adaptive$adaptive_labelling else NULL
 pp_post_sem_F <- if (!is.null(pp_post_sem_F)) pp_post_sem_F[pp_post_sem_F$t >= 0, ] else pp_post
+if (!is.null(pp_post_sem_D) && !is.null(pp_post_sem_F) && nrow(pp_post_sem_D) == nrow(pp_post_sem_F)) {
+  same_labels_DF <- mean(pp_post_sem_D$inferred_process == pp_post_sem_F$inferred_process, na.rm = TRUE)
+  d_flip <- sum(pp_post_sem_D$location_process != pp_post_sem_D$inferred_process, na.rm = TRUE)
+  f_flip <- sum(pp_post_sem_F$location_process != pp_post_sem_F$inferred_process, na.rm = TRUE)
+  cat(sprintf("  Relabelling overlap D vs F: %.1f%% same inferred labels (D flips=%d, F flips=%d)\n",
+              100 * same_labels_DF, d_flip, f_flip))
+}
 
 windowT_ate <- c(0, ATE_WINDOW_DAYS)
 cat(sprintf("  ATE window: [0, %d] days\n", ATE_WINDOW_DAYS))
@@ -2177,7 +2188,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
-              maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+              maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
             )
           }, error = function(e) NULL)
           if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par

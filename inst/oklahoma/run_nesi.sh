@@ -201,7 +201,7 @@ echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
-echo "seed=$PP_SEED (fit jobs identical RNG; bootstrap RNG de-correlated by replicate)"
+echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo ""
 
 # Shared library path only; guard package install lock collisions.
@@ -396,7 +396,7 @@ export OK_BOOT_TARGETS="$PP_BOOT_TARGETS"
 export OK_BOOT_SEM_INNER_ITER="$PP_BOOT_SEM_INNER"
 export OK_BOOT_OUTER_CORES="$PP_BOOT_OUTER_CORES"
 export OK_GLOBAL_SEED="$PP_SEED"
-export OK_IDENTICAL_RANDOMNESS=true
+export OK_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_GUARD_DEGENERATE=true
 export OK_REPORT_FORMATS=html
