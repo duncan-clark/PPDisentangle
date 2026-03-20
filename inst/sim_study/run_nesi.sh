@@ -27,10 +27,16 @@ done
 if [ -n "$PP_MODE" ]; then
     mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
     case "$mode_norm" in
-        test|quick)
+        test)
             PP_TEST="--test"
             if [ "$HAVE_SIMS_ARG" -eq 0 ]; then
                 PP_SIMS=2
+            fi
+            ;;
+        quick)
+            PP_TEST=""
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then
+                PP_SIMS=32
             fi
             ;;
         long|full|big)
@@ -40,7 +46,7 @@ if [ -n "$PP_MODE" ]; then
             fi
             ;;
         *)
-            echo "Unknown --mode '$PP_MODE' (expected: test | long)"
+            echo "Unknown --mode '$PP_MODE' (expected: test | quick | long)"
             exit 1
             ;;
     esac
@@ -120,7 +126,7 @@ fi
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/inst/sim_study/output"
 
-if [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
+if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
     echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
     PP_SIMS="$SLURM_CPUS_PER_TASK"
 fi
@@ -131,6 +137,32 @@ echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
+
+mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
+if [ "$mode_norm_runtime" = "quick" ]; then
+    if [ -z "${PP_SEM_WORKERS:-}" ]; then
+        if [ "$PP_SIMS" -gt 8 ]; then
+            export PP_SEM_WORKERS=8
+        else
+            export PP_SEM_WORKERS="$PP_SIMS"
+        fi
+    fi
+    export PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-200}"
+    export PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-3}"
+    export PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-20}"
+    export PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-10}"
+    export PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-1}"
+    export PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
+    export PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
+    echo "Quick profile env:"
+    echo "  PP_SEM_INNER_ITER=$PP_SEM_INNER_ITER"
+    echo "  PP_SEM_OUTER_ITER=$PP_SEM_OUTER_ITER"
+    echo "  PP_SEM_N_PROPS=$PP_SEM_N_PROPS"
+    echo "  PP_SEM_N_LABELLINGS=$PP_SEM_N_LABELLINGS"
+    echo "  PP_SEM_WORKERS=$PP_SEM_WORKERS"
+    echo "  PP_ATE_N_SIMS=$PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS=$PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I=$PP_ATE_N_TAU_I"
+    echo ""
+fi
 
 # Shared library path only; guard package install lock collisions.
 SHARED_R_LIBS_USER="${R_LIBS_USER:-/nesi/project/uoo04008/Rlibs}"

@@ -85,7 +85,13 @@ NY <- 10
 local_core_default <- max(1L, parallel::detectCores() - 1L)
 if (TEST) {
   n_test <- if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) N_SIMS_ARG else 2L
-  N_CORES <- if (ON_CLUSTER) as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", n_test)) else max(1L, min(n_test, parallel::detectCores()))
+  if (ON_CLUSTER) {
+    slurm_cores_test <- suppressWarnings(as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", as.character(n_test))))
+    if (!is.finite(slurm_cores_test) || is.na(slurm_cores_test) || slurm_cores_test < 1L) slurm_cores_test <- n_test
+    N_CORES <- max(1L, min(as.integer(n_test), slurm_cores_test))
+  } else {
+    N_CORES <- max(1L, min(as.integer(n_test), parallel::detectCores()))
+  }
   SIM_SIZE <- n_test
   N_SIMS <- n_test
   N_TAU_SIMS <- 3
@@ -140,7 +146,7 @@ if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   SIM_SIZE <- N_SIMS_ARG
 }
 
-if (ON_CLUSTER) {
+if (ON_CLUSTER && !TEST) {
   slurm_cores <- suppressWarnings(as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", NA_character_)))
   if (is.finite(slurm_cores) && slurm_cores >= 1) {
     if (!isTRUE(all.equal(SIM_SIZE, slurm_cores)) || !isTRUE(all.equal(N_CORES, slurm_cores))) {
@@ -155,6 +161,29 @@ if (ON_CLUSTER) {
   }
 }
 
+env_int <- function(name, default_value, min_value = 1L) {
+  raw <- Sys.getenv(name, "")
+  if (!nzchar(raw)) return(as.integer(default_value))
+  val <- suppressWarnings(as.integer(raw))
+  if (!is.finite(val) || is.na(val)) return(as.integer(default_value))
+  as.integer(max(min_value, val))
+}
+
+env_num <- function(name, default_value, min_value = NULL) {
+  raw <- Sys.getenv(name, "")
+  if (!nzchar(raw)) return(as.numeric(default_value))
+  val <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(val) || is.na(val)) return(as.numeric(default_value))
+  if (!is.null(min_value)) val <- max(min_value, val)
+  as.numeric(val)
+}
+
+# Optional runtime overrides for quick/full profiles without code edits.
+N_PROPOSALS <- env_int("PP_LABEL_PROPOSALS", N_PROPOSALS, 1L)
+SEM_EM_ADAPTIVE_ITER <- env_int("PP_SEM_INNER_ITER", SEM_EM_ADAPTIVE_ITER, 1L)
+SEM_N_ITER <- env_int("PP_SEM_OUTER_ITER", SEM_N_ITER, 1L)
+SEM_N_LABELLINGS <- env_int("PP_SEM_N_LABELLINGS", SEM_N_LABELLINGS, 1L)
+
 BASE_SEED <- 123L
 stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
   as.integer(BASE_SEED + as.integer(stage_offset) * 100000L + as.integer(sim_id) * 1000L + as.integer(extra))
@@ -164,11 +193,13 @@ stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
 SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
 SEM_N_PROPS <- 20L
-SEM_CHANGE_FACTOR <- 0.005
+SEM_N_PROPS <- env_int("PP_SEM_N_PROPS", SEM_N_PROPS, 1L)
+SEM_CHANGE_FACTOR <- env_num("PP_SEM_CHANGE_FACTOR", 0.005, min_value = 1e-6)
 SEM_STALENESS_TRIGGER_EVERY <- 10L
-SEM_INCLUDE_STARTING <- TRUE
-SEM_UPDATE_STARTING <- TRUE
-SEM_UPDATE_CONTROL_PARAMS <- FALSE
+SEM_STALENESS_TRIGGER_EVERY <- env_int("PP_SEM_STALENESS_TRIGGER_EVERY", SEM_STALENESS_TRIGGER_EVERY, 1L)
+SEM_INCLUDE_STARTING <- tolower(Sys.getenv("PP_SEM_INCLUDE_STARTING", "true")) %in% c("1", "true", "yes", "y")
+SEM_UPDATE_STARTING <- tolower(Sys.getenv("PP_SEM_UPDATE_STARTING", "true")) %in% c("1", "true", "yes", "y")
+SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS", "false")) %in% c("1", "true", "yes", "y")
 
 TREAT_PROP <- 0.5
 TIME_INT   <- END_TIME - TREATMENT_TIME
@@ -229,6 +260,10 @@ ATE_N_SIMS <- if (TEST) 1L else as.integer(N_SIMS)
 ATE_N_TAU_SIMS <- if (TEST) 1L else as.integer(N_TAU_SIMS)
 ATE_N_TAU_I <- if (TEST) 1L else as.integer(N_TAU_I)
 ATE_MAXIT <- if (TEST) 300L else 1000L
+ATE_N_SIMS <- env_int("PP_ATE_N_SIMS", ATE_N_SIMS, 1L)
+ATE_N_TAU_SIMS <- env_int("PP_ATE_N_TAU_SIMS", ATE_N_TAU_SIMS, 1L)
+ATE_N_TAU_I <- env_int("PP_ATE_N_TAU_I", ATE_N_TAU_I, 1L)
+ATE_MAXIT <- env_int("PP_ATE_MAXIT", ATE_MAXIT, 1L)
 SIM_FILTRATION_AWARE <- tolower(Sys.getenv("PP_SIM_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
 ATE_CONTROL_FILTRATION_AWARE <- SIM_FILTRATION_AWARE &&
   (tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y"))
@@ -244,7 +279,11 @@ SEM_PILOT_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_SIMS", "1
 if (!is.finite(SEM_PILOT_SIMS) || is.na(SEM_PILOT_SIMS) || SEM_PILOT_SIMS < 1L) SEM_PILOT_SIMS <- min(SIM_SIZE, 12L)
 SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_CORES", as.character(max(1L, floor(0.8 * N_CORES))))))
 if (!is.finite(SEM_PILOT_CORES) || is.na(SEM_PILOT_CORES) || SEM_PILOT_CORES < 1L) SEM_PILOT_CORES <- max(1L, floor(0.8 * N_CORES))
+SEM_WORKERS_DEFAULT <- if (ON_CLUSTER && TEST) min(8L, as.integer(N_CORES)) else as.integer(N_CORES)
+SEM_WORKERS <- env_int("PP_SEM_WORKERS", SEM_WORKERS_DEFAULT, 1L)
+SEM_WORKERS <- min(as.integer(N_CORES), as.integer(SEM_WORKERS))
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
+log_msg("SEM workers=", SEM_WORKERS)
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
         " | param_cadence=", SEM_PARAM_UPDATE_CADENCE,
@@ -393,7 +432,7 @@ pilot_only_mode <- RUN_SEM_PILOT && PILOT_ONLY
 # Create cluster now that all globals are defined
 cl <- NULL
 if (!pilot_only_mode) {
-  cl <- make_cluster(N_CORES)
+  cl <- make_cluster(SEM_WORKERS)
   export_globals(cl)
 }
 
@@ -507,7 +546,7 @@ if (!pilot_only_mode) {
       }, error = function(e) NULL)
     }))
   }
-  if (N_CORES > 1) {
+  if (SEM_WORKERS > 1) {
     labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, TRUE)
   } else {
     labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, FALSE)
@@ -706,7 +745,7 @@ if (RUN_SEM_PILOT) {
   }
 }
 
-if (N_CORES > 1) {
+if (SEM_WORKERS > 1) {
   # PSOCK workers need these helpers explicitly exported because `run_sem`
   # resolves `run_sem_core` in the worker global environment.
   clusterExport(cl, c("run_sem_core", "run_sem", "is_sem_error"), envir = .GlobalEnv)
@@ -1532,6 +1571,9 @@ sim_study_results <- list(
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_WORKERS = SEM_WORKERS,
+    SEM_N_PROPS = SEM_N_PROPS,
+    SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SIM_FILTRATION_AWARE = SIM_FILTRATION_AWARE,
     RUN_SEM_PILOT = RUN_SEM_PILOT,
     PILOT_ONLY = PILOT_ONLY,
