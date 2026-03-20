@@ -1250,7 +1250,20 @@ extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
     )
   })
 }
-build_param_boxplots <- function(params_df, truth_params) {
+extract_oracle_param_means <- function(params_df) {
+  if (is.null(params_df) || nrow(params_df) < 1) return(NULL)
+  oracle_df <- params_df %>% filter(.data$labelling == "oracle")
+  if (nrow(oracle_df) < 1) return(NULL)
+  out <- c(
+    mu = mean(oracle_df$mu, na.rm = TRUE),
+    alpha = mean(oracle_df$alpha, na.rm = TRUE),
+    beta = mean(oracle_df$beta, na.rm = TRUE),
+    K = mean(oracle_df$K, na.rm = TRUE)
+  )
+  if (all(!is.finite(out))) return(NULL)
+  out
+}
+build_param_boxplots <- function(params_df, truth_params, oracle_param_means = NULL) {
   if (is.null(params_df) || nrow(params_df) < 1) return(NULL)
   params_df$labelling <- factor(
     params_df$labelling,
@@ -1265,11 +1278,21 @@ build_param_boxplots <- function(params_df, truth_params) {
   plots <- lapply(c("mu", "alpha", "beta", "K"), function(p) {
     tmp <- params_long %>% filter(.data$param == p)
     if (nrow(tmp) == 0) return(NULL)
-    oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
+    oracle_mean <- NA_real_
+    if (!is.null(oracle_param_means) && p %in% names(oracle_param_means)) {
+      oracle_mean <- as.numeric(oracle_param_means[[p]])
+    }
+    if (!is.finite(oracle_mean)) {
+      oracle_vals <- tmp %>% filter(.data$labelling == "oracle")
+      if (nrow(oracle_vals) > 0) oracle_mean <- mean(oracle_vals$value, na.rm = TRUE)
+    }
     ggplot(tmp) +
       geom_boxplot(aes(x = .data$labelling, y = .data$value)) +
+      # Show sample means so the plot aligns with the mean/sd summary tables.
+      stat_summary(aes(x = .data$labelling, y = .data$value), fun = mean,
+                   geom = "point", shape = 23, size = 2, fill = "black", color = "black") +
       geom_hline(yintercept = truth_params[[p]], linetype = "dashed", color = "red") +
-      {if (nrow(oracle_vals) > 0) geom_hline(yintercept = mean(oracle_vals$value, na.rm = TRUE), linetype = "dotted", color = "blue") } +
+      {if (is.finite(oracle_mean)) geom_hline(yintercept = oracle_mean, linetype = "dotted", color = "blue") } +
       labs(x = "Method", y = paste0(p, " estimate")) +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -1306,6 +1329,8 @@ summarize_param_table <- function(df, process_name) {
 }
 control_param_summary <- summarize_param_table(control_params_df, "control")
 treated_param_summary <- summarize_param_table(treated_params_df, "treated")
+control_oracle_means <- extract_oracle_param_means(control_params_df)
+treated_oracle_means <- extract_oracle_param_means(treated_params_df)
 if (!is.null(control_param_summary)) {
   log_msg("=== Control fitted parameters (mean/sd) ===")
   print(control_param_summary)
@@ -1315,12 +1340,20 @@ if (!is.null(treated_param_summary)) {
   print(treated_param_summary)
 }
 
-control_param_plots <- build_param_boxplots(control_params_df, hawkes_par_1)
+control_param_plots <- build_param_boxplots(
+  control_params_df,
+  hawkes_par_1,
+  oracle_param_means = control_oracle_means
+)
 if (!is.null(control_param_plots) && length(control_param_plots) > 0) {
   sim_study_plots$plot_control_params <- control_param_plots
 }
 
-treated_param_plots <- build_param_boxplots(treated_params_df, hawkes_par_2)
+treated_param_plots <- build_param_boxplots(
+  treated_params_df,
+  hawkes_par_2,
+  oracle_param_means = treated_oracle_means
+)
 if (!is.null(treated_param_plots) && length(treated_param_plots) > 0) {
   sim_study_plots$plot_treated_params <- treated_param_plots
 }

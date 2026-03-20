@@ -120,6 +120,27 @@ test_that("sim_etas_fast is an alias for sim_etas", {
   expect_identical(sim_etas_fast, sim_etas)
 })
 
+test_that("sim_etas preserves Poisson immigrant rate on irregular windows", {
+  Omega <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+  partition <- spatstat.geom::quadrats(Omega, nx = 2, ny = 2)
+  irregular_win <- as.owin(partition[c(1, 4)])
+
+  params <- list(mu = 20, A = 0, alpha_m = 1, c = 0.1, p = 1.2,
+                 D = 1, gamma = 0.5, q = 1.5)
+  windowT <- c(0, 5)
+  expected_mean <- params$mu * diff(windowT)
+
+  set.seed(20260322)
+  reps <- 120
+  counts <- replicate(reps, length(sim_etas(
+    params, windowT, irregular_win,
+    m0 = etas_sim_m0, beta_gr = 2.3
+  )$t))
+
+  mean_count <- mean(counts)
+  expect_true(abs(mean_count - expected_mean) < 12)
+})
+
 test_that("sim_etas_children_cpp returns correct types", {
   ch <- sim_etas_children_cpp(
     parent_x = 25, parent_y = 25, parent_t = 5, parent_mag = 3.5,

@@ -398,13 +398,18 @@ sim_etas <- function(params,
     if (is.null(covariate_lookup)) {
       n_bg <- rpois(1, mu * (windowT[2] - windowT[1]))
       if (n_bg > 0) {
-        bg_x <- runif(n_bg, x_min, x_max)
-        bg_y <- runif(n_bg, y_min, y_max)
-        if (!is_rect) {
-          ok <- inside.owin(bg_x, bg_y, windowS)
-          bg_x <- bg_x[ok]; bg_y <- bg_y[ok]
+        if (is_rect) {
+          bg_x <- runif(n_bg, x_min, x_max)
+          bg_y <- runif(n_bg, y_min, y_max)
+          n_ok <- n_bg
+        } else {
+          # Sample directly on irregular windows to preserve the target
+          # immigrant rate mu * |windowT| without bbox-rejection thinning.
+          bg_pp <- spatstat.random::runifpoint(n = n_bg, win = windowS)
+          bg_x <- bg_pp$x
+          bg_y <- bg_pp$y
+          n_ok <- bg_pp$n
         }
-        n_ok <- length(bg_x)
         if (n_ok > 0) {
           p_x <- bg_x; p_y <- bg_y
           p_t <- sort(runif(n_ok, windowT[1], windowT[2]))
