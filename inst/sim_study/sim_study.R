@@ -164,9 +164,9 @@ stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
 SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
 SEM_N_PROPS <- 10L
-SEM_CHANGE_FACTOR <- 0.01
+SEM_CHANGE_FACTOR <- 0.005
 SEM_STALENESS_TRIGGER_EVERY <- 10L
-SEM_INCLUDE_STARTING <- FALSE
+SEM_INCLUDE_STARTING <- TRUE
 SEM_UPDATE_STARTING <- TRUE
 SEM_UPDATE_CONTROL_PARAMS <- FALSE
 
@@ -232,6 +232,18 @@ ATE_MAXIT <- if (TEST) 300L else 1000L
 SIM_FILTRATION_AWARE <- tolower(Sys.getenv("PP_SIM_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
 ATE_CONTROL_FILTRATION_AWARE <- SIM_FILTRATION_AWARE &&
   (tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y"))
+RUN_SEM_PILOT <- tolower(Sys.getenv("PP_RUN_SEM_PILOT", "false")) %in% c("1", "true", "yes", "y")
+if (RUN_SEM_PILOT && ON_CLUSTER) {
+  log_msg("[SEM PILOT] Disabled on cluster (local tuning only).")
+  RUN_SEM_PILOT <- FALSE
+}
+PILOT_ONLY <- tolower(Sys.getenv("PP_PILOT_ONLY", "false")) %in% c("1", "true", "yes", "y")
+SEM_PILOT_ITERS <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_ITERS", "200")))
+if (!is.finite(SEM_PILOT_ITERS) || is.na(SEM_PILOT_ITERS) || SEM_PILOT_ITERS < 10L) SEM_PILOT_ITERS <- 200L
+SEM_PILOT_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_SIMS", "1")))
+if (!is.finite(SEM_PILOT_SIMS) || is.na(SEM_PILOT_SIMS) || SEM_PILOT_SIMS < 1L) SEM_PILOT_SIMS <- min(SIM_SIZE, 12L)
+SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_CORES", as.character(max(1L, floor(0.8 * N_CORES))))))
+if (!is.finite(SEM_PILOT_CORES) || is.na(SEM_PILOT_CORES) || SEM_PILOT_CORES < 1L) SEM_PILOT_CORES <- max(1L, floor(0.8 * N_CORES))
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
 log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " | labellings=", SEM_N_LABELLINGS)
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
@@ -250,6 +262,12 @@ log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | maxit=", ATE_MAXIT,
         " | sim_filtration_aware=", SIM_FILTRATION_AWARE,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
+if (RUN_SEM_PILOT) {
+  log_msg("SEM pilot: iters=", SEM_PILOT_ITERS,
+          " | sims=", SEM_PILOT_SIMS,
+          " | cores=", SEM_PILOT_CORES,
+          " | pilot_only=", PILOT_ONLY)
+}
 log_msg("Base seed=", BASE_SEED)
 log_msg("Output: ", SAVE_DIR)
 
@@ -370,27 +388,36 @@ if (partition_processes[1] == "treated") {
 }
 
 log_msg("True all/nothing ATE:", round(all_nothing_ATE, 4))
+pilot_only_mode <- RUN_SEM_PILOT && PILOT_ONLY
 
 # Create cluster now that all globals are defined
-cl <- make_cluster(N_CORES)
-export_globals(cl)
+cl <- NULL
+if (!pilot_only_mode) {
+  cl <- make_cluster(N_CORES)
+  export_globals(cl)
+}
 
 # ------------------------------------------------------------------
 # 2. Compute true average one-flip ATE
 # ------------------------------------------------------------------
-log_msg("Computing true tau_i ...")
-t0 <- proc.time()[3]
-tau_i_estim <- parSapply(cl = cl, X = 1:partition$n, FUN = function(i) {
-  tau_i(i,
-    partition = partition, treated_partitions = treated_partitions,
-    statespace = OMEGA, windowT = c(TREATMENT_TIME, END_TIME),
-    control_pp = hawkes_par_1, treated_pp = hawkes_par_2,
-    n_sim = N_TAU_I_TRUE
-  )
-})
-true_tau_1 <- mean(tau_i_estim)
-log_elapsed("True tau_i", proc.time()[3] - t0)
-log_msg("True one-flip ATE:", round(true_tau_1, 4))
+if (!pilot_only_mode) {
+  log_msg("Computing true tau_i ...")
+  t0 <- proc.time()[3]
+  tau_i_estim <- parSapply(cl = cl, X = 1:partition$n, FUN = function(i) {
+    tau_i(i,
+      partition = partition, treated_partitions = treated_partitions,
+      statespace = OMEGA, windowT = c(TREATMENT_TIME, END_TIME),
+      control_pp = hawkes_par_1, treated_pp = hawkes_par_2,
+      n_sim = N_TAU_I_TRUE
+    )
+  })
+  true_tau_1 <- mean(tau_i_estim)
+  log_elapsed("True tau_i", proc.time()[3] - t0)
+  log_msg("True one-flip ATE:", round(true_tau_1, 4))
+} else {
+  true_tau_1 <- NA_real_
+  log_msg("[SEM PILOT] Skipping true tau_i in pilot-only mode.")
+}
 
 # ------------------------------------------------------------------
 # 3. Generate observed data
@@ -430,70 +457,74 @@ log_memory("post_data_gen")
 # ------------------------------------------------------------------
 # 4. Baseline labellings (oracle + naive)
 # ------------------------------------------------------------------
-log_msg("Computing oracle and naive labellings ...")
-pp_labeled_oracle <- lapply(obs_data, function(s) {
-  pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME) %>%
-    mutate(inferred_process = "control", location_process = "control")
-  post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
-  rbind(pre, oracle_labeling(post))
-})
+if (!pilot_only_mode) {
+  log_msg("Computing oracle and naive labellings ...")
+  pp_labeled_oracle <- lapply(obs_data, function(s) {
+    pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME) %>%
+      mutate(inferred_process = "control", location_process = "control")
+    post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
+    rbind(pre, oracle_labeling(post))
+  })
 
-pp_labeled_naive <- lapply(obs_data, function(s) {
-  pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME) %>%
-    mutate(inferred_process = "control", location_process = "control")
-  post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
-  rbind(pre, naive_labeling(post))
-})
+  pp_labeled_naive <- lapply(obs_data, function(s) {
+    pre  <- as.data.frame(s) %>% filter(.data$t < TREATMENT_TIME) %>%
+      mutate(inferred_process = "control", location_process = "control")
+    post <- as.data.frame(s) %>% filter(.data$t >= TREATMENT_TIME)
+    rbind(pre, naive_labeling(post))
+  })
+}
 
 # ------------------------------------------------------------------
 # 5. Labelling proposals
 # ------------------------------------------------------------------
-log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
-t0 <- proc.time()[3]
-proposal_jobs <- lapply(seq_along(obs_data), function(i) {
-  list(i = i, seed = stage_seed(2L, i), data = obs_data[[i]])
-})
-gen_proposals <- function(job) {
-  set.seed(job$seed)
-  s <- job$data
-  df <- as.data.frame(s)
-  pre  <- df[df$t < TREATMENT_TIME, , drop = FALSE]
-  post <- df[df$t >= TREATMENT_TIME, , drop = FALSE]
-  pre$location_process <- "control"
-  pre$inferred_process <- NULL
-  Filter(Negate(is.null), lapply(1:N_PROPOSALS, function(i) {
-    tryCatch({
-      tmp <- simulation_labeling_hawkes_hawkes_fast(
-        post, partition = partition,
-        partition_process = partition_processes,
-        statespace = OMEGA, state_spaces = state_spaces,
-        windowT = c(TREATMENT_TIME, END_TIME),
-        hawkes_params_control = hawkes_par_1,
-        hawkes_params_treated = NULL,
-        change_factor = 1, filtration = pre, proximity_weight = 0
-      )
-      pre$inferred_process <- "control"
-      rbind(pre, tmp)
-    }, error = function(e) NULL)
-  }))
-}
-if (N_CORES > 1) {
-  labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, TRUE)
-} else {
-  labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, FALSE)
-}
-log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
-
-pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
-  props <- labelling_proposals[[i]]
-  if (length(props) == 0) return(pp_labeled_naive[[i]])
-  accs <- sapply(props, function(y) {
-    keep <- which(y$t > TREATMENT_TIME)
-    if (length(keep) < 2) return(0)
-    mean(y$inferred_process[keep] == y$process[keep])
+if (!pilot_only_mode) {
+  log_msg("Generating", N_PROPOSALS, "labelling proposals per sim ...")
+  t0 <- proc.time()[3]
+  proposal_jobs <- lapply(seq_along(obs_data), function(i) {
+    list(i = i, seed = stage_seed(2L, i), data = obs_data[[i]])
   })
-  props[[which.max(accs)]]
-})
+  gen_proposals <- function(job) {
+    set.seed(job$seed)
+    s <- job$data
+    df <- as.data.frame(s)
+    pre  <- df[df$t < TREATMENT_TIME, , drop = FALSE]
+    post <- df[df$t >= TREATMENT_TIME, , drop = FALSE]
+    pre$location_process <- "control"
+    pre$inferred_process <- NULL
+    Filter(Negate(is.null), lapply(1:N_PROPOSALS, function(i) {
+      tryCatch({
+        tmp <- simulation_labeling_hawkes_hawkes_fast(
+          post, partition = partition,
+          partition_process = partition_processes,
+          statespace = OMEGA, state_spaces = state_spaces,
+          windowT = c(TREATMENT_TIME, END_TIME),
+          hawkes_params_control = hawkes_par_1,
+          hawkes_params_treated = NULL,
+          change_factor = 1, filtration = pre, proximity_weight = 0
+        )
+        pre$inferred_process <- "control"
+        rbind(pre, tmp)
+      }, error = function(e) NULL)
+    }))
+  }
+  if (N_CORES > 1) {
+    labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, TRUE)
+  } else {
+    labelling_proposals <- run_maybe_parallel(cl, proposal_jobs, gen_proposals, FALSE)
+  }
+  log_elapsed("Labelling proposals", proc.time()[3] - t0, SIM_SIZE, SIM_SIZE)
+
+  pp_labeled_best_proposal <- lapply(seq_along(labelling_proposals), function(i) {
+    props <- labelling_proposals[[i]]
+    if (length(props) == 0) return(pp_labeled_naive[[i]])
+    accs <- sapply(props, function(y) {
+      keep <- which(y$t > TREATMENT_TIME)
+      if (length(keep) < 2) return(0)
+      mean(y$inferred_process[keep] == y$process[keep])
+    })
+    props[[which.max(accs)]]
+  })
+}
 
 # ------------------------------------------------------------------
 # 7. Adaptive SEM
@@ -503,12 +534,29 @@ t0 <- proc.time()[3]
 sem_jobs <- lapply(seq_along(obs_data), function(i) {
   list(i = i, seed = stage_seed(3L, i), data = obs_data[[i]])
 })
-run_sem_core <- function(job) {
+run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
   set.seed(job$seed)
   dat <- job$data
   total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
   mu_start     <- total_points / TIME_INT
   params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
+  local_tuning <- if (is.null(tuning)) {
+    list(
+      param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
+      proposal_update_cadence = SEM_PROPOSAL_UPDATE_CADENCE,
+      state_spaces = NULL,
+      update_control_params = SEM_UPDATE_CONTROL_PARAMS,
+      iter = if (is.null(sem_inner_iter_override)) SEM_EM_ADAPTIVE_ITER else sem_inner_iter_override,
+      n_props = SEM_N_PROPS,
+      change_factor = SEM_CHANGE_FACTOR,
+      stagnation_trigger_every = SEM_STALENESS_TRIGGER_EVERY,
+      include_starting_data = SEM_INCLUDE_STARTING,
+      update_starting_data = SEM_UPDATE_STARTING,
+      verbose = FALSE
+    )
+  } else {
+    tuning
+  }
 
   adaptive_SEM(
     pp_data = dat, partition = partition,
@@ -521,19 +569,7 @@ run_sem_core <- function(job) {
     N_labellings = SEM_N_LABELLINGS,
     N_iter = SEM_N_ITER, verbose = FALSE,
     hawkes_use_filtration_history = SIM_FILTRATION_AWARE,
-    adaptive_control = list(
-      param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
-      proposal_update_cadence = SEM_PROPOSAL_UPDATE_CADENCE,
-      state_spaces = NULL,
-      update_control_params = SEM_UPDATE_CONTROL_PARAMS,
-      iter = SEM_EM_ADAPTIVE_ITER,
-      n_props = SEM_N_PROPS,
-      change_factor = SEM_CHANGE_FACTOR,
-      stagnation_trigger_every = SEM_STALENESS_TRIGGER_EVERY,
-      include_starting_data = SEM_INCLUDE_STARTING,
-      update_starting_data = SEM_UPDATE_STARTING,
-      verbose = FALSE
-    )
+    adaptive_control = local_tuning
   )
 }
 run_sem <- function(job) {
@@ -548,6 +584,128 @@ run_sem <- function(job) {
   )
 }
 is_sem_error <- function(x) inherits(x, "ppdis_sem_error")
+
+sem_pilot_summary <- NULL
+if (RUN_SEM_PILOT) {
+  budget_constant <- as.integer(SEM_PILOT_ITERS * 10L) # keep n_props * iter fixed
+  mk_cfg <- function(name, change_factor, n_props, include_starting, staleness = 10L,
+                     proposal_cadence = 1L, param_cadence = 10L, update_starting = TRUE) {
+    n_props <- as.integer(n_props)
+    iters <- max(20L, as.integer(floor(budget_constant / max(1L, n_props))))
+    list(
+      name = name,
+      change_factor = change_factor,
+      n_props = n_props,
+      iter = iters,
+      include_starting = include_starting,
+      staleness = as.integer(staleness),
+      proposal_cadence = as.integer(proposal_cadence),
+      param_cadence = as.integer(param_cadence),
+      update_starting = isTRUE(update_starting)
+    )
+  }
+  pilot_cfgs <- list(
+    mk_cfg("cf005_np5_start0",  0.005,  5L, FALSE),
+    mk_cfg("cf005_np10_start0", 0.005, 10L, FALSE),
+    mk_cfg("cf005_np20_start0", 0.005, 20L, FALSE),
+    mk_cfg("cf010_np5_start0",  0.010,  5L, FALSE),
+    mk_cfg("cf010_np10_start0", 0.010, 10L, FALSE),
+    mk_cfg("cf010_np20_start0", 0.010, 20L, FALSE),
+    mk_cfg("cf020_np5_start0",  0.020,  5L, FALSE),
+    mk_cfg("cf020_np10_start0", 0.020, 10L, FALSE),
+    mk_cfg("cf020_np20_start0", 0.020, 20L, FALSE),
+    mk_cfg("cf005_np10_start1", 0.005, 10L, TRUE),
+    mk_cfg("cf010_np10_start1", 0.010, 10L, TRUE),
+    mk_cfg("cf010_np10_start0_st5",  0.010, 10L, FALSE, staleness = 5L),
+    mk_cfg("cf010_np10_start0_st20", 0.010, 10L, FALSE, staleness = 20L)
+  )
+  pilot_ids <- seq_len(min(SEM_PILOT_SIMS, length(obs_data)))
+  pilot_jobs <- list()
+  for (cfg_id in seq_along(pilot_cfgs)) {
+    for (sid in pilot_ids) {
+      pilot_jobs[[length(pilot_jobs) + 1L]] <- list(
+        cfg_id = cfg_id,
+        cfg = pilot_cfgs[[cfg_id]],
+        job = list(i = sid, seed = stage_seed(31L, sid, cfg_id), data = obs_data[[sid]])
+      )
+    }
+  }
+  run_sem_pilot <- function(x) {
+    cfg <- x$cfg
+    tuning <- list(
+      param_update_cadence = cfg$param_cadence,
+      proposal_update_cadence = cfg$proposal_cadence,
+      state_spaces = NULL,
+      update_control_params = FALSE, # no control-parameter adaptation in this pilot
+      iter = cfg$iter,
+      n_props = cfg$n_props,
+      change_factor = cfg$change_factor,
+      stagnation_trigger_every = cfg$staleness,
+      include_starting_data = cfg$include_starting,
+      update_starting_data = cfg$update_starting,
+      verbose = FALSE
+    )
+    out <- tryCatch(run_sem_core(x$job, tuning = tuning), error = function(e) NULL)
+    if (is.null(out) || is.null(out$adaptive)) {
+      return(data.frame(config = cfg$name, sim_id = x$job$i, ok = FALSE,
+                        n_props = cfg$n_props, iter = cfg$iter,
+                        end_metric = NA_real_, metric_gain = NA_real_,
+                        mean_flips = NA_real_, stringsAsFactors = FALSE))
+    }
+    ad <- out$adaptive
+    metric_vec <- if (!is.null(ad$metrics)) as.numeric(ad$metrics) else numeric(0)
+    metric_vec <- metric_vec[is.finite(metric_vec)]
+    m0 <- if (length(metric_vec) > 0) metric_vec[[1]] else NA_real_
+    mT <- if (length(metric_vec) > 0) metric_vec[[length(metric_vec)]] else NA_real_
+    data.frame(
+      config = cfg$name,
+      sim_id = x$job$i,
+      ok = TRUE,
+      n_props = cfg$n_props,
+      iter = cfg$iter,
+      end_metric = mT,
+      metric_gain = mT - m0,
+      mean_flips = if (!is.null(ad$average_flips) && length(ad$average_flips) > 0) mean(ad$average_flips, na.rm = TRUE) else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  }
+  log_msg("Running SEM pilot grid ...")
+  pilot_results <- NULL
+  if (SEM_PILOT_CORES > 1L) {
+    cl_pilot <- make_cluster(SEM_PILOT_CORES)
+    export_globals(cl_pilot)
+    clusterExport(cl_pilot, c("run_sem_core", "run_sem_pilot", "stage_seed", "SEM_PILOT_ITERS"), envir = environment())
+    pilot_results <- parLapply(cl_pilot, pilot_jobs, run_sem_pilot)
+    stopCluster(cl_pilot)
+  } else {
+    pilot_results <- lapply(pilot_jobs, run_sem_pilot)
+  }
+  pilot_df <- do.call(rbind, pilot_results)
+  sem_pilot_summary <- pilot_df %>%
+    group_by(.data$config) %>%
+    summarize(
+      n = n(),
+      n_ok = sum(.data$ok, na.rm = TRUE),
+      n_props = mean(.data$n_props, na.rm = TRUE),
+      iter = mean(.data$iter, na.rm = TRUE),
+      mean_end_metric = mean(.data$end_metric, na.rm = TRUE),
+      mean_metric_gain = mean(.data$metric_gain, na.rm = TRUE),
+      mean_flips = mean(.data$mean_flips, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(.data$mean_metric_gain), desc(.data$mean_end_metric), .data$mean_flips)
+  log_msg("SEM pilot summary:")
+  print(sem_pilot_summary)
+  if (PILOT_ONLY) {
+    log_msg("[SEM PILOT] pilot_only=TRUE; skipping full SEM/ATE/plot/save.")
+    if (exists("cl") && !is.null(cl)) {
+      try(stopCluster(cl), silent = TRUE)
+    }
+    close(log_con)
+    quit(save = "no", status = 0)
+  }
+}
+
 if (N_CORES > 1) {
   # PSOCK workers need these helpers explicitly exported because `run_sem`
   # resolves `run_sem_core` in the worker global environment.
@@ -589,10 +747,17 @@ sem_diagnostics <- lapply(seq_along(EM_results), function(i) {
   a <- EM_results[[i]]$adaptive
   if (is.null(a)) return(NULL)
   n_iter <- length(a$accuracies)
+  if (n_iter < 1L) return(NULL)
+  metric_vec <- rep(NA_real_, n_iter)
+  if (!is.null(a$metrics) && length(a$metrics) > 0) {
+    use_n <- min(n_iter, length(a$metrics))
+    metric_vec[seq_len(use_n)] <- as.numeric(a$metrics[seq_len(use_n)])
+  }
   data.frame(
     sim_id = i,
     iteration = seq_len(n_iter),
     accuracy = a$accuracies,
+    metric = metric_vec,
     average_flips = a$average_flips,
     max_metric_flips = a$max_metric_flips,
     stringsAsFactors = FALSE
@@ -953,6 +1118,39 @@ control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control
 treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp")
 control_params_df <- do.call(rbind, control_param_rows)
 treated_params_df <- do.call(rbind, treated_param_rows)
+if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
+  present_treated <- unique(as.character(treated_params_df$labelling))
+  if (!("oracle" %in% present_treated)) {
+    log_msg("[WARN] Treated parameter rows contain no oracle fits.")
+  }
+}
+
+summarize_param_table <- function(df, process_name) {
+  if (is.null(df) || nrow(df) < 1) return(NULL)
+  out <- df %>%
+    group_by(.data$labelling) %>%
+    summarize(
+      n = n(),
+      mu_mean = mean(.data$mu, na.rm = TRUE), mu_sd = sd(.data$mu, na.rm = TRUE),
+      alpha_mean = mean(.data$alpha, na.rm = TRUE), alpha_sd = sd(.data$alpha, na.rm = TRUE),
+      beta_mean = mean(.data$beta, na.rm = TRUE), beta_sd = sd(.data$beta, na.rm = TRUE),
+      K_mean = mean(.data$K, na.rm = TRUE), K_sd = sd(.data$K, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(factor(.data$labelling, levels = boxplot_method_levels))
+  out$process <- process_name
+  out
+}
+control_param_summary <- summarize_param_table(control_params_df, "control")
+treated_param_summary <- summarize_param_table(treated_params_df, "treated")
+if (!is.null(control_param_summary)) {
+  log_msg("=== Control fitted parameters (mean/sd) ===")
+  print(control_param_summary)
+}
+if (!is.null(treated_param_summary)) {
+  log_msg("=== Treated fitted parameters (mean/sd) ===")
+  print(treated_param_summary)
+}
 
 control_param_plots <- build_param_boxplots(control_params_df, hawkes_par_1)
 if (!is.null(control_param_plots) && length(control_param_plots) > 0) {
@@ -1098,6 +1296,24 @@ if (exists("EM_results") && length(EM_results) > 0) {
   }
 }
 
+# Adaptive SEM objective/likelihood tracking over iterations
+if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0 &&
+    "metric" %in% names(sem_diagnostics_df)) {
+  metric_df <- sem_diagnostics_df %>% filter(is.finite(.data$metric))
+  if (!is.null(metric_df) && nrow(metric_df) > 0) {
+    mean_metric_df <- metric_df %>%
+      group_by(iteration) %>%
+      summarize(mean_metric = mean(.data$metric, na.rm = TRUE), .groups = "drop")
+    sim_study_plots$plot_em_loglik_iters <- ggplot() +
+      geom_line(data = metric_df, aes(x = iteration, y = metric, group = sim_id),
+                color = "gray80", alpha = 0.45) +
+      geom_line(data = mean_metric_df, aes(x = iteration, y = mean_metric),
+                color = "darkgreen", linewidth = 1) +
+      labs(x = "Iteration", y = "Adaptive SEM objective (higher is better)") +
+      theme_minimal()
+  }
+}
+
 # Flips over iterations plot
 if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
   mean_flips_df <- sem_diagnostics_df %>%
@@ -1149,6 +1365,11 @@ timing_report <- list(
 sim_study_results <- list(
   results_df = results_df,
   summary_df = if (exists("summary_df")) summary_df else NULL,
+  control_param_summary = if (exists("control_param_summary")) control_param_summary else NULL,
+  treated_param_summary = if (exists("treated_param_summary")) treated_param_summary else NULL,
+  control_params_df = if (exists("control_params_df")) control_params_df else NULL,
+  treated_params_df = if (exists("treated_params_df")) treated_params_df else NULL,
+  sem_pilot_summary = sem_pilot_summary,
   results_flat = results_flat,
   tasks = tasks,
   ate_run_idx = ate_run_idx,
@@ -1166,6 +1387,11 @@ sim_study_results <- list(
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SIM_FILTRATION_AWARE = SIM_FILTRATION_AWARE,
+    RUN_SEM_PILOT = RUN_SEM_PILOT,
+    PILOT_ONLY = PILOT_ONLY,
+    SEM_PILOT_ITERS = SEM_PILOT_ITERS,
+    SEM_PILOT_SIMS = SEM_PILOT_SIMS,
+    SEM_PILOT_CORES = SEM_PILOT_CORES,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
