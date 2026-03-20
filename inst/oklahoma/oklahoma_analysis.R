@@ -125,8 +125,8 @@ RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1",
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
-# Oklahoma fits now estimate all ETAS parameters freely.
-FIXED_STRUCTURAL <- list()
+# Structural terms are fixed downstream after first-half pre-treatment calibration.
+FIXED_STRUCTURAL <- NULL
 
 ATE_N_SIMS    <- if (QUICK_CHECK) 5 else if (TEST_MODE) 20 else 40
 ATE_WINDOW_DAYS <- 100
@@ -489,7 +489,7 @@ if (n_pre_ctrl_struct_init < 5) {
 }
 
 # Data-driven structural parameter calibration from first-half control pre data.
-# These values are used as starting points (not fixed) for downstream fits.
+# These values are fixed downstream so only productivity terms are refit.
 PRE_CTRL_BOOT_PARAMS <- NULL
 estimate_structural_init <- function() {
   starts <- VANILLA_STARTS
@@ -536,7 +536,7 @@ estimate_structural_init <- function() {
   out
 }
 STRUCT_INIT <- estimate_structural_init()
-FIXED_STRUCTURAL <- list()
+FIXED_STRUCTURAL <- as.list(STRUCT_INIT[c("c", "p", "D", "gamma", "q")])
 if (is.null(PRE_CTRL_BOOT_PARAMS)) {
   PRE_CTRL_BOOT_PARAMS <- list(mu = 1.0, A = 0.2, alpha_m = 0.8,
                                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
@@ -546,6 +546,9 @@ if (is.null(PRE_CTRL_BOOT_PARAMS)) {
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
             STRUCT_INIT$gamma, STRUCT_INIT$q))
+cat(sprintf("  Structural parameters fixed in downstream fits: c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
+            FIXED_STRUCTURAL$c, FIXED_STRUCTURAL$p, FIXED_STRUCTURAL$D,
+            FIXED_STRUCTURAL$gamma, FIXED_STRUCTURAL$q))
 
 apply_structural_init_etas <- function(start_par) {
   out <- start_par
@@ -637,7 +640,7 @@ fit_best_indep <- function(realiz, zbr, starts, maxit) {
     fit <- tryCatch(
       fit_etas(params_init = s, realiz = realiz, windowT = windowT_post,
                windowS = win_km, m0 = ETAS_M0, maxit = maxit,
-               fixed_params = NULL, zero_background_region = zbr),
+               fixed_params = FIXED_STRUCTURAL, zero_background_region = zbr),
       error = function(e) NULL)
     if (!is.null(fit) && is.finite(fit$value) && fit$value > best_val) {
       best_fit <- fit; best_val <- fit$value
@@ -692,7 +695,7 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -710,7 +713,7 @@ C_ctrl <- A_ctrl; C_treat <- A_treat
 cat("\n--- Fit D: SEM bivariate ETAS ---\n")
 
 biv_init_D <- apply_structural_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
-biv_fixed <- NULL
+biv_fixed <- FIXED_STRUCTURAL
 
 run_sem_fit <- function(pp_data_in,
                         partition_in,
@@ -910,7 +913,7 @@ fit_e <- function() {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate+KDE fit error:", e$message, "\n"); NULL })
 }
@@ -1376,7 +1379,7 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit E error: %s\n", bw_label, e$message))
@@ -1631,7 +1634,7 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
@@ -2163,65 +2166,73 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     out <- list(rep = rep_id)
 
     if ("E" %in% boot_targets_run) {
-      sim_E <- simulate_boot_data(e_ctrl_seed, e_treat_seed)
-      e_params_boot <- E_params
-      if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
-        fit_e_boot <- tryCatch({
-          fit_etas_bivariate(
-            params_init = E_params, realiz = sim_E$pp_all_bg_sim,
-            windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
-            control_state_space = control_ss, treated_state_space = treated_ss,
-            background_rate_var = "W",
-            treated_background_zero_before = 0,
-            maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
-          )
-        }, error = function(e) NULL)
-        if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
-      }
-      e_marg_boot <- extract_marginals(e_params_boot)
-      ate_e_boot <- ate_estim_fast(
-        e_marg_boot$ctrl, e_marg_boot$treat, sim_E$pp_post_bg_sim,
-        label = sprintf("Boot E #%d", rep_id),
-        n_tiles_used = partition$n,
-        treated_idx_used = treated_idx,
-        quiet = TRUE
-      )
-      out$E <- summarize_boot(ate_e_boot, rep_id, sim_E$pre_df, sim_E$post_ctrl_df, sim_E$post_treat_df, e_params_boot)
+      out$E <- tryCatch({
+        sim_E <- simulate_boot_data(e_ctrl_seed, e_treat_seed)
+        e_params_boot <- E_params
+        if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
+          fit_e_boot <- tryCatch({
+            fit_etas_bivariate(
+              params_init = E_params, realiz = sim_E$pp_all_bg_sim,
+              windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
+              control_state_space = control_ss, treated_state_space = treated_ss,
+              background_rate_var = "W",
+              treated_background_zero_before = 0,
+              maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+            )
+          }, error = function(e) NULL)
+          if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
+        }
+        e_marg_boot <- extract_marginals(e_params_boot)
+        ate_e_boot <- ate_estim_fast(
+          e_marg_boot$ctrl, e_marg_boot$treat, sim_E$pp_post_bg_sim,
+          label = sprintf("Boot E #%d", rep_id),
+          n_tiles_used = partition$n,
+          treated_idx_used = treated_idx,
+          quiet = TRUE
+        )
+        summarize_boot(ate_e_boot, rep_id, sim_E$pre_df, sim_E$post_ctrl_df, sim_E$post_treat_df, e_params_boot)
+      }, error = function(e) {
+        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap E failed: ", conditionMessage(e)))
+      })
     }
 
     if ("F" %in% boot_targets_run) {
-      sim_F <- simulate_boot_data(f_ctrl_seed, f_treat_seed)
-      f_params_boot <- F_params
-      pp_post_f_boot <- sim_F$pp_post_bg_sim
-      if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
-        sem_boot <- run_sem_fit(
-          pp_data_in = sim_F$pp_all_bg_sim,
-          partition_in = partition,
-          partition_processes_in = partition_processes,
-          state_spaces_in = state_spaces,
-          init_params_in = F_params,
-          background_rate_var_in = "W",
-          sem_inner_iter_in = BOOT_SEM_INNER_ITER,
-          verbose_in = FALSE,
-          label = sprintf("Boot F #%d", rep_id)
+      out$F <- tryCatch({
+        sim_F <- simulate_boot_data(f_ctrl_seed, f_treat_seed)
+        f_params_boot <- F_params
+        pp_post_f_boot <- sim_F$pp_post_bg_sim
+        if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
+          sem_boot <- run_sem_fit(
+            pp_data_in = sim_F$pp_all_bg_sim,
+            partition_in = partition,
+            partition_processes_in = partition_processes,
+            state_spaces_in = state_spaces,
+            init_params_in = F_params,
+            background_rate_var_in = "W",
+            sem_inner_iter_in = BOOT_SEM_INNER_ITER,
+            verbose_in = FALSE,
+            label = sprintf("Boot F #%d", rep_id)
+          )
+          if (!is.null(sem_boot) && !is.null(sem_boot$etas_bivariate_params)) {
+            f_params_boot <- sem_boot$etas_bivariate_params
+          }
+          if (!is.null(sem_boot) && !is.null(sem_boot$adaptive$adaptive_labelling)) {
+            pp_post_f_boot <- sem_boot$adaptive$adaptive_labelling
+            pp_post_f_boot <- pp_post_f_boot[pp_post_f_boot$t >= 0, , drop = FALSE]
+          }
+        }
+        f_marg_boot <- extract_marginals(f_params_boot)
+        ate_f_boot <- ate_estim_fast(
+          f_marg_boot$ctrl, f_marg_boot$treat, pp_post_f_boot,
+          label = sprintf("Boot F #%d", rep_id),
+          n_tiles_used = partition$n,
+          treated_idx_used = treated_idx,
+          quiet = TRUE
         )
-        if (!is.null(sem_boot) && !is.null(sem_boot$etas_bivariate_params)) {
-          f_params_boot <- sem_boot$etas_bivariate_params
-        }
-        if (!is.null(sem_boot) && !is.null(sem_boot$adaptive$adaptive_labelling)) {
-          pp_post_f_boot <- sem_boot$adaptive$adaptive_labelling
-          pp_post_f_boot <- pp_post_f_boot[pp_post_f_boot$t >= 0, , drop = FALSE]
-        }
-      }
-      f_marg_boot <- extract_marginals(f_params_boot)
-      ate_f_boot <- ate_estim_fast(
-        f_marg_boot$ctrl, f_marg_boot$treat, pp_post_f_boot,
-        label = sprintf("Boot F #%d", rep_id),
-        n_tiles_used = partition$n,
-        treated_idx_used = treated_idx,
-        quiet = TRUE
-      )
-      out$F <- summarize_boot(ate_f_boot, rep_id, sim_F$pre_df, sim_F$post_ctrl_df, sim_F$post_treat_df, f_params_boot)
+        summarize_boot(ate_f_boot, rep_id, sim_F$pre_df, sim_F$post_ctrl_df, sim_F$post_treat_df, f_params_boot)
+      }, error = function(e) {
+        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap F failed: ", conditionMessage(e)))
+      })
     }
     rm_vars <- intersect(
       c("sim_E", "fit_e_boot", "e_params_boot", "e_marg_boot", "ate_e_boot",
@@ -2507,6 +2518,44 @@ timing_df <- if (length(timing_rows) > 0L) {
 }
 timing_df <- timing_df[order(timing_df$order), , drop = FALSE]
 rownames(timing_df) <- NULL
+
+# Print timing summary to stdout so it is visible in slurm.out.
+cat("\n--- Runtime timing summary (chronological) ---\n")
+if (nrow(timing_df) > 0L) {
+  for (i in seq_len(nrow(timing_df))) {
+    row_i <- timing_df[i, , drop = FALSE]
+    sec_i <- suppressWarnings(as.numeric(row_i$elapsed_sec[[1]]))
+    min_i <- suppressWarnings(as.numeric(row_i$elapsed_min[[1]]))
+    sec_txt <- if (is.finite(sec_i)) sprintf("%.1f", sec_i) else "NA"
+    min_txt <- if (is.finite(min_i)) sprintf("%.2f", min_i) else "NA"
+    status_txt <- as.character(row_i$status[[1]])
+    detail_txt <- trimws(as.character(row_i$detail[[1]]))
+    if (nzchar(detail_txt) && !identical(detail_txt, "NA")) {
+      cat(sprintf("  %02d | %-28s | %8ss (%6sm) | %-8s | %s\n",
+                  as.integer(row_i$order[[1]]), as.character(row_i$stage[[1]]),
+                  sec_txt, min_txt, status_txt, detail_txt))
+    } else {
+      cat(sprintf("  %02d | %-28s | %8ss (%6sm) | %-8s\n",
+                  as.integer(row_i$order[[1]]), as.character(row_i$stage[[1]]),
+                  sec_txt, min_txt, status_txt))
+    }
+  }
+  finite_idx <- is.finite(timing_df$elapsed_sec)
+  if (any(finite_idx)) {
+    top_idx <- order(timing_df$elapsed_sec[finite_idx], decreasing = TRUE)
+    top_n <- min(5L, length(top_idx))
+    top_rows <- timing_df[which(finite_idx)[top_idx[seq_len(top_n)]], , drop = FALSE]
+    cat("\n--- Slowest stages (top 5) ---\n")
+    for (i in seq_len(nrow(top_rows))) {
+      cat(sprintf("  %-28s : %8.1fs (%6.2fm)\n",
+                  as.character(top_rows$stage[[i]]),
+                  as.numeric(top_rows$elapsed_sec[[i]]),
+                  as.numeric(top_rows$elapsed_min[[i]])))
+    }
+  }
+} else {
+  cat("  No timing rows recorded.\n")
+}
 
 results <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
