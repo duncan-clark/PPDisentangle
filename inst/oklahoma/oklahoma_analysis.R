@@ -94,8 +94,8 @@ VANILLA_STARTS <- list(
        D = 2.0, gamma = 0.3, q = 2.0)
 )
 
-SEM_N_LABELLINGS  <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 30
-SEM_N_ITER        <- 1
+SEM_N_LABELLINGS  <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
+SEM_N_ITER        <- if (QUICK_CHECK) 1 else if (TEST_MODE) 2 else 10
 SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 1000
 env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER", "")))
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
@@ -112,6 +112,7 @@ SEM_TEMPORAL_SCALE_DAYS <- 15
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
 SEM_OUTER_MAXIT_BIV   <- if (QUICK_CHECK) 30 else if (TEST_MODE) 100 else 60
+SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "true")) %in% c("1", "true", "yes", "y")
 # Keep Decode iterations separate from SEM inner iterations.
 DECODE_ITER <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 200
 env_decode_iter <- suppressWarnings(as.integer(Sys.getenv("OK_DECODE_ITER", "")))
@@ -314,6 +315,7 @@ cat(sprintf("Memory safe: %s | Sens cores: %d | ATE sim cores: %d | Boot outer c
 cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
+cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 
 analysis_start_time <- Sys.time()
@@ -732,9 +734,9 @@ run_sem_fit <- function(pp_data_in,
                         label = "SEM") {
   t0 <- proc.time()[["elapsed"]]
   cat(sprintf("  [%s] start (n=%d, pid=%d)\n", label, nrow(pp_data_in), Sys.getpid()))
-  out <- tryCatch({
+  run_one_sem <- function(pp_data_sem, init_params_sem, fixed_params_sem, sem_label) {
     adaptive_SEM(
-      pp_data = pp_data_in, partition = partition_in,
+      pp_data = pp_data_sem, partition = partition_in,
       partition_processes = partition_processes_in,
       statespace = win_km, time_window = windowT_post, treatment_time = 0,
       hawkes_params_control = A_ctrl, hawkes_params_treated = A_treat,
@@ -749,16 +751,32 @@ run_sem_fit <- function(pp_data_in,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
-        update_control_params = TRUE, fixed_params = biv_fixed,
+        update_control_params = TRUE, fixed_params = fixed_params_sem,
         proposal_method = "simulation",
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
       ),
       m0 = ETAS_M0, beta_gr = BETA_GR,
-      etas_bivariate_params = init_params_in,
+      etas_bivariate_params = init_params_sem,
       background_rate_var = background_rate_var_in,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
       treated_background_zero_before = treated_background_zero_before_in
     )
+  }
+  out <- tryCatch({
+    pp_data_sem <- pp_data_in
+    init_params_sem <- init_params_in
+    if (SEM_WARMSTART_FIXED) {
+      fixed_all <- as.list(init_params_in)
+      cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters...\n", label))
+      warm_sem <- run_one_sem(pp_data_sem, init_params_sem, fixed_all, paste0(label, " warm"))
+      if (!is.null(warm_sem) && !is.null(warm_sem$adaptive$adaptive_labelling)) {
+        pp_data_sem <- warm_sem$adaptive$adaptive_labelling
+      }
+      if (!is.null(warm_sem) && !is.null(warm_sem$etas_bivariate_params)) {
+        init_params_sem <- warm_sem$etas_bivariate_params
+      }
+    }
+    run_one_sem(pp_data_sem, init_params_sem, biv_fixed, label)
   }, error = function(e) {
     cat(sprintf("  [%s] error: %s\n", label, e$message))
     NULL
