@@ -124,6 +124,7 @@ RUN_DECODE <- tolower(Sys.getenv("OK_RUN_DECODE", "false")) %in% c("1", "true", 
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
+DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 # Structural terms are fixed downstream after first-half pre-treatment calibration.
@@ -316,6 +317,7 @@ cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
+cat(sprintf("D/F SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 
 analysis_start_time <- Sys.time()
@@ -730,7 +732,7 @@ run_sem_fit <- function(pp_data_in,
                         use_pre_history_for_biv_in = TRUE,
                         treated_background_zero_before_in = 0,
                         sem_inner_iter_in = SEM_INNER_ITER,
-                        verbose_in = FALSE,
+                        verbose_in = DF_VERBOSE,
                         label = "SEM") {
   t0 <- proc.time()[["elapsed"]]
   cat(sprintf("  [%s] start (n=%d, pid=%d)\n", label, nrow(pp_data_in), Sys.getpid()))
@@ -747,7 +749,7 @@ run_sem_fit <- function(pp_data_in,
         proposal_update_cadence = 1,
         state_spaces = state_spaces_in,
         iter = sem_inner_iter_in, n_props = SEM_INNER_PROPS,
-        change_factor = SEM_CHANGE_FACTOR, verbose = FALSE,
+        change_factor = SEM_CHANGE_FACTOR, verbose = verbose_in,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
@@ -795,7 +797,7 @@ fit_d <- function() {
       state_spaces_in = state_spaces,
       init_params_in = biv_init_D,
       background_rate_var_in = NULL,
-      verbose_in = OK_VERBOSE,
+      verbose_in = DF_VERBOSE,
       label = "Fit D"
     )
   }, error = function(e) { cat("  SEM-biv error:", e$message, "\n"); NULL })
@@ -955,7 +957,7 @@ fit_f <- function() {
       state_spaces_in = state_spaces,
       init_params_in = biv_init_F,
       background_rate_var_in = "W",
-      verbose_in = OK_VERBOSE,
+      verbose_in = DF_VERBOSE,
       label = "Fit F"
     )
   }, error = function(e) { cat("  SEM-biv+KDE error:", e$message, "\n"); NULL })
