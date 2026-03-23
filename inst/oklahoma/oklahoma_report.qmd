@@ -699,28 +699,46 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "Label flips per relabelling iteration."
+#| fig-cap: "Label flips per relabelling iteration (raw and smoothed traces)."
 #| fig-height: 4
 build_flip_df <- function(avg_flips, max_flips) {
   if (is.null(avg_flips) || is.null(max_flips)) return(NULL)
   n <- min(length(avg_flips), length(max_flips))
   if (n == 0) return(NULL)
-  data.frame(
+  df <- data.frame(
     iteration = seq_len(n),
     average_flips = as.numeric(avg_flips[seq_len(n)]),
     max_metric_flips = as.numeric(max_flips[seq_len(n)])
   )
+  # Add smooth trend overlays so directional convergence is easier to inspect.
+  if (n >= 5) {
+    avg_low <- stats::lowess(df$iteration, df$average_flips, f = 0.15, iter = 1)
+    max_low <- stats::lowess(df$iteration, df$max_metric_flips, f = 0.15, iter = 1)
+    df$average_flips_smooth <- stats::approx(avg_low$x, avg_low$y, xout = df$iteration, rule = 2)$y
+    df$max_metric_flips_smooth <- stats::approx(max_low$x, max_low$y, xout = df$iteration, rule = 2)$y
+  } else {
+    df$average_flips_smooth <- df$average_flips
+    df$max_metric_flips_smooth <- df$max_metric_flips
+  }
+  df
 }
 
 plot_flip_df <- function(df, ttl) {
   if (is.null(df) || nrow(df) == 0) return(NULL)
   ggplot(df, aes(x = iteration)) +
-    geom_line(aes(y = average_flips, color = "Average flips")) +
-    geom_line(aes(y = max_metric_flips, color = "Max metric flips")) +
+    geom_line(aes(y = average_flips, color = "Average flips"), alpha = 0.45) +
+    geom_line(aes(y = max_metric_flips, color = "Max metric flips"), alpha = 0.45) +
+    geom_line(aes(y = average_flips_smooth, color = "Average flips (smoothed)"), linewidth = 1.05) +
+    geom_line(aes(y = max_metric_flips_smooth, color = "Max metric flips (smoothed)"), linewidth = 1.05) +
     geom_hline(yintercept = 1, linetype = "dashed") +
     labs(title = ttl, x = "Iteration", y = "Number of flips") +
     theme_minimal() +
-    scale_color_manual(name = "Metric", values = c("Average flips" = "blue", "Max metric flips" = "red"))
+    scale_color_manual(name = "Metric", values = c(
+      "Average flips" = "#6baed6",
+      "Max metric flips" = "#fb6a4a",
+      "Average flips (smoothed)" = "#08519c",
+      "Max metric flips (smoothed)" = "#a50f15"
+    ))
 }
 
 plots <- list()
