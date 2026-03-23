@@ -107,6 +107,7 @@ if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_IN
 }
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_CHANGE_FACTOR <- 0.01
+SEM_STAGNATION_TRIGGER_EVERY <- 50
 SEM_TEMPORAL_WEIGHT <- if (QUICK_CHECK) 0.2 else if (TEST_MODE) 0.4 else 0.6
 SEM_TEMPORAL_SCALE_DAYS <- 15
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
@@ -540,7 +541,7 @@ estimate_structural_init <- function() {
   out
 }
 STRUCT_INIT <- estimate_structural_init()
-FIXED_STRUCTURAL <- list()
+FIXED_STRUCTURAL <- as.list(STRUCT_INIT[c("c", "p", "D", "gamma", "q")])
 if (is.null(PRE_CTRL_BOOT_PARAMS)) {
   PRE_CTRL_BOOT_PARAMS <- list(mu = 1.0, A = 0.2, alpha_m = 0.8,
                                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
@@ -703,7 +704,7 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -721,7 +722,7 @@ C_ctrl <- A_ctrl; C_treat <- A_treat
 cat("\n--- Fit D: SEM bivariate ETAS ---\n")
 
 biv_init_D <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
-biv_fixed <- NULL
+biv_fixed <- FIXED_STRUCTURAL
 
 run_sem_fit <- function(pp_data_in,
                         partition_in,
@@ -750,6 +751,7 @@ run_sem_fit <- function(pp_data_in,
         state_spaces = state_spaces_in,
         iter = sem_inner_iter_in, n_props = SEM_INNER_PROPS,
         change_factor = SEM_CHANGE_FACTOR, verbose = verbose_in,
+        stagnation_trigger_every = SEM_STAGNATION_TRIGGER_EVERY,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
@@ -937,7 +939,7 @@ fit_e <- function() {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
     )
   }, error = function(e) { cat("  Bivariate+KDE fit error:", e$message, "\n"); NULL })
 }
@@ -1403,7 +1405,7 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit E error: %s\n", bw_label, e$message))
@@ -1658,7 +1660,7 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
@@ -2208,7 +2210,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
-              maxit = VANILLA_MAXIT, fixed_params = NULL, trace = 0
+              maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
             )
           }, error = function(e) NULL)
           if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
