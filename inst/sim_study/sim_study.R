@@ -77,8 +77,8 @@ resolve_save_dir <- function() {
 }
 
 OMEGA <- c(0, 100, 0, 100)
-END_TIME <- 110
 TREATMENT_TIME <- 10
+END_TIME_BASE <- 110
 NX <- 10
 NY <- 10
 
@@ -183,6 +183,12 @@ N_PROPOSALS <- env_int("PP_LABEL_PROPOSALS", N_PROPOSALS, 1L)
 SEM_EM_ADAPTIVE_ITER <- env_int("PP_SEM_INNER_ITER", SEM_EM_ADAPTIVE_ITER, 1L)
 SEM_N_ITER <- env_int("PP_SEM_OUTER_ITER", SEM_N_ITER, 1L)
 SEM_N_LABELLINGS <- env_int("PP_SEM_N_LABELLINGS", SEM_N_LABELLINGS, 1L)
+POST_TIME_MULTIPLIER <- env_num("PP_POST_TIME_MULTIPLIER", 1, min_value = 0.1)
+END_TIME <- TREATMENT_TIME + POST_TIME_MULTIPLIER * (END_TIME_BASE - TREATMENT_TIME)
+if (!is.finite(END_TIME) || END_TIME <= TREATMENT_TIME) {
+  stop("Computed END_TIME is invalid; check PP_POST_TIME_MULTIPLIER.")
+}
+TIME_INT <- END_TIME - TREATMENT_TIME
 
 BASE_SEED <- 123L
 stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
@@ -202,7 +208,6 @@ SEM_UPDATE_STARTING <- tolower(Sys.getenv("PP_SEM_UPDATE_STARTING", "true")) %in
 SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS", "false")) %in% c("1", "true", "yes", "y")
 
 TREAT_PROP <- 0.5
-TIME_INT   <- END_TIME - TREATMENT_TIME
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 
 # ------------------------------------------------------------------
@@ -308,6 +313,7 @@ if (RUN_SEM_PILOT) {
           " | pilot_only=", PILOT_ONLY)
 }
 log_msg("Base seed=", BASE_SEED)
+log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=", END_TIME)
 log_msg("Output: ", SAVE_DIR)
 
 # ------------------------------------------------------------------
@@ -1614,6 +1620,7 @@ sim_study_results <- list(
     SEM_PILOT_SIMS = SEM_PILOT_SIMS,
     SEM_PILOT_CORES = SEM_PILOT_CORES,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
+    POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
   ),

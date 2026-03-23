@@ -10,15 +10,17 @@ set -euo pipefail
 #   --sims N    number of simulations / cores
 #   --test      quick test profile
 
-PP_SIMS=100
+PP_SIMS=32
 PP_TEST=""
 PP_MODE="${PP_MODE:-}"
+PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
+        --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -42,7 +44,7 @@ if [ -n "$PP_MODE" ]; then
         long|full|big)
             PP_TEST=""
             if [ "$HAVE_SIMS_ARG" -eq 0 ]; then
-                PP_SIMS=100
+                PP_SIMS=32
             fi
             ;;
         *)
@@ -103,9 +105,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME post_time_multiplier=$PP_POST_TIME_MULTIPLIER ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PKG_ROOT=$PKG_ROOT"
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PKG_ROOT=$PKG_ROOT"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -135,8 +137,11 @@ echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
+echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
+
+export PP_POST_TIME_MULTIPLIER
 
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
