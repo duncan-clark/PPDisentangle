@@ -600,6 +600,28 @@ get_sem_metric_trace <- function(fit_obj) {
   }
   NULL
 }
+
+# Lightweight wiring audit to ensure report labels map to the intended objects.
+build_fit_wiring_audit <- function(results_obj) {
+  defs <- data.frame(
+    Label = c("B", "D", "E", "F"),
+    `Result key` = c("fitB", "fitD", "fitE", "fitF"),
+    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE"),
+    `Labelling source` = c("Location", "SEM", "Location", "SEM"),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  defs$`Present in RDS` <- vapply(defs$`Result key`, function(k) !is.null(results_obj[[k]]), logical(1))
+  defs
+}
+```
+
+```{r tbl-fit-wiring-audit}
+#| label: tbl-fit-wiring-audit
+wiring_df <- build_fit_wiring_audit(results)
+kable(wiring_df, align = "lcccc",
+      caption = "Model wiring audit for the county-partition report tables/figures.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
 ## Marginal Parameters
@@ -735,7 +757,7 @@ if (length(plots) >= 2) {
 
 ```{r fig-sem-adaptive-loglik}
 #| label: fig-sem-adaptive-loglik
-#| fig-cap: "Adaptive SEM selected-label log-likelihood progression (county SEM fits)."
+#| fig-cap: "Adaptive SEM selected-proposal score progression (county SEM fits). This trace is stochastic and is not expected to be monotone."
 #| fig-height: 4
 sem_metric_rows <- list()
 sem_trace_D <- get_sem_metric_trace(results$fitD)
@@ -757,11 +779,17 @@ if (!is.null(sem_trace_F) && length(sem_trace_F) > 0) {
 if (length(sem_metric_rows) > 0) {
   sem_metric_df <- do.call(rbind, sem_metric_rows)
   sem_metric_df <- sem_metric_df[is.finite(sem_metric_df$LogLik), , drop = FALSE]
+  sem_metric_df <- sem_metric_df |>
+    dplyr::group_by(.data$Model) |>
+    dplyr::arrange(.data$Iteration, .by_group = TRUE) |>
+    dplyr::mutate(RunningBest = cummax(.data$LogLik)) |>
+    dplyr::ungroup()
   ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
     geom_line(linewidth = 0.9) +
+    geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
     scale_colour_manual(values = c("D: SEM Biv" = "#7570b3",
                                    "F: SEM Biv+KDE" = "#4d9221")) +
-    labs(x = "Adaptive SEM iteration", y = "Selected log-likelihood") +
+    labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "top")
 } else {
@@ -1248,7 +1276,7 @@ if (length(part_rows) > 0) {
 #| fig-height: 6
 if (exists("part_df") && nrow(part_df) > 0) {
   plot_df <- part_df
-  plot_df$is_county <- as.character(plot_df$Partition) == "county"
+  plot_df$is_county <- as.character(plot_df$Partition) == "County"
 
   param_long <- rbind(
     data.frame(plot_df[, c("Partition", "Model", "is_county")],
