@@ -556,6 +556,10 @@ fit_A_obj <- get_fit_by_letter("A", "fitB")
 fit_B_obj <- get_fit_by_letter("B", "fitD")
 fit_C_obj <- get_fit_by_letter("C", "fitE")
 fit_D_obj <- get_fit_by_letter("D", "fitF")
+fit_E_obj <- get_fit_by_letter("E")
+fit_F_obj <- get_fit_by_letter("F")
+fit_G_obj <- get_fit_by_letter("G")
+fit_H_obj <- get_fit_by_letter("H")
 fit_I_obj <- get_fit_by_letter("I", "fitG")
 fit_J_obj <- get_fit_by_letter("J", "fitH")
 
@@ -563,6 +567,10 @@ A_par <- if (!is.null(fit_A_obj)) fit_A_obj$params else NULL
 B_par <- if (!is.null(fit_B_obj)) fit_B_obj$params else NULL
 C_par <- if (!is.null(fit_C_obj)) fit_C_obj$params else NULL
 D_par <- if (!is.null(fit_D_obj)) fit_D_obj$params else NULL
+E_par <- if (!is.null(fit_E_obj)) fit_E_obj$params else NULL
+F_par <- if (!is.null(fit_F_obj)) fit_F_obj$params else NULL
+G_par <- if (!is.null(fit_G_obj)) fit_G_obj$params else NULL
+H_par <- if (!is.null(fit_H_obj)) fit_H_obj$params else NULL
 I_par <- if (!is.null(fit_I_obj)) fit_I_obj$params else NULL
 J_par <- if (!is.null(fit_J_obj)) fit_J_obj$params else NULL
 
@@ -574,8 +582,12 @@ safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
 model_defs <- list(
   list(id = "A", fit = "fits_named$A", label = "A: Naive", long = "A: Naive Biv", par = A_par),
   list(id = "B", fit = "fits_named$B", label = "B: SEM", long = "B: SEM Biv", par = B_par),
-  list(id = "C", fit = "fits_named$C", label = "C: Naive+KDE", long = "C: Naive+KDE", par = C_par),
-  list(id = "D", fit = "fits_named$D", label = "D: SEM+KDE", long = "D: SEM+KDE", par = D_par),
+  list(id = "C", fit = "fits_named$C", label = "C: Naive+KDE (ctrl-fixed)", long = "C: Naive+KDE (ctrl-fixed)", par = C_par),
+  list(id = "D", fit = "fits_named$D", label = "D: SEM+KDE (ctrl-fixed)", long = "D: SEM+KDE (ctrl-fixed)", par = D_par),
+  list(id = "E", fit = "fits_named$E", label = "E: Naive+KDE (all-free)", long = "E: Naive+KDE (all-free)", par = E_par),
+  list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (all-free)", long = "F: SEM+KDE (all-free)", par = F_par),
+  list(id = "G", fit = "fits_named$G", label = "G: Naive+KDE (struct-fixed)", long = "G: Naive+KDE (struct-fixed)", par = G_par),
+  list(id = "H", fit = "fits_named$H", label = "H: SEM+KDE (struct-fixed)", long = "H: SEM+KDE (struct-fixed)", par = H_par),
   list(id = "I", fit = "fits_named$I", label = "I: Decode", long = "I: Decode Biv", par = I_par),
   list(id = "J", fit = "fits_named$J", label = "J: Decode+KDE", long = "J: Decode+KDE", par = J_par)
 )
@@ -584,16 +596,24 @@ param_models <- Filter(function(m) !is.null(m$par), model_defs)
 fit_fill_colors <- c(
   "A: Naive Bivariate" = "#fc8d62",
   "B: SEM Bivariate" = "#8da0cb",
-  "C: Naive Biv+KDE" = "#e78ac3",
-  "D: SEM Biv+KDE" = "#a6d854",
+  "C: Naive Biv+KDE (ctrl-fixed)" = "#e78ac3",
+  "D: SEM Biv+KDE (ctrl-fixed)" = "#a6d854",
+  "E: Naive Biv+KDE (all-free)" = "#fdb462",
+  "F: SEM Biv+KDE (all-free)" = "#80b1d3",
+  "G: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
+  "H: SEM Biv+KDE (struct-fixed)" = "#b3de69",
   "I: Decode Bivariate" = "#66c2a5",
   "J: Decode Biv+KDE" = "#ffd92f"
 )
 fit_line_colors <- c(
   "A: Naive Bivariate" = "#d95f02",
   "B: SEM Bivariate" = "#7570b3",
-  "C: Naive Biv+KDE" = "#c51b7d",
-  "D: SEM Biv+KDE" = "#4d9221",
+  "C: Naive Biv+KDE (ctrl-fixed)" = "#c51b7d",
+  "D: SEM Biv+KDE (ctrl-fixed)" = "#4d9221",
+  "E: Naive Biv+KDE (all-free)" = "#e6550d",
+  "F: SEM Biv+KDE (all-free)" = "#3182bd",
+  "G: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
+  "H: SEM Biv+KDE (struct-fixed)" = "#33a02c",
   "I: Decode Bivariate" = "#1b9e77",
   "J: Decode Biv+KDE" = "#b8860b"
 )
@@ -619,10 +639,11 @@ get_sem_metric_trace <- function(fit_obj) {
 # Lightweight wiring audit to ensure report labels map to the intended objects.
 build_fit_wiring_audit <- function(results_obj) {
   defs <- data.frame(
-    Label = c("A", "B", "C", "D"),
-    `Result key` = c("fits_named$A", "fits_named$B", "fits_named$C", "fits_named$D"),
-    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE"),
-    `Labelling source` = c("Location", "SEM", "Location", "SEM"),
+    Label = c("A", "B", "C", "D", "E", "F", "G", "H"),
+    `Result key` = c("fits_named$A", "fits_named$B", "fits_named$C", "fits_named$D",
+                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H"),
+    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
+    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -716,7 +737,7 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "Label flips per relabelling iteration (raw and smoothed traces)."
+#| fig-cap: "SEM label flips per relabelling iteration for all county SEM fits (raw and smoothed traces)."
 #| fig-height: 4
 build_flip_df <- function(avg_flips, max_flips) {
   if (is.null(avg_flips) || is.null(max_flips)) return(NULL)
@@ -759,25 +780,15 @@ plot_flip_df <- function(df, ttl) {
 }
 
 plots <- list()
-for (nm in list(
-  list(kind = "sem", obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
-  list(kind = "sem", obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE"),
-  list(kind = "decode", obj = if (!is.null(fit_I_obj)) fit_I_obj$decode else NULL, lab = "I: Decode Biv"),
-  list(kind = "decode", obj = if (!is.null(fit_J_obj)) fit_J_obj$decode else NULL, lab = "J: Decode Biv+KDE")
-)) {
-  if (nm$kind == "sem" && !is.null(nm$obj) && !is.null(nm$obj$adaptive)) {
+sem_fit_convergence <- list(
+  list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
+  list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (all-free)"),
+  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)")
+)
+for (nm in sem_fit_convergence) {
+  if (!is.null(nm$obj) && !is.null(nm$obj$adaptive)) {
     df <- build_flip_df(nm$obj$adaptive$average_flips, nm$obj$adaptive$max_metric_flips)
-    p <- plot_flip_df(df, nm$lab)
-    if (!is.null(p)) plots[[length(plots)+1]] <- p
-  }
-  if (nm$kind == "decode" && !is.null(nm$obj)) {
-    if (!is.null(nm$obj$trace)) {
-      df <- build_flip_df(nm$obj$trace$average_flips, nm$obj$trace$max_metric_flips)
-    } else {
-      # Backward compatibility for older result files without decode traces.
-      nf <- if (!is.null(nm$obj$n_flips)) as.numeric(nm$obj$n_flips) else 0
-      df <- build_flip_df(c(nf, nf), c(nf, 0))
-    }
     p <- plot_flip_df(df, nm$lab)
     if (!is.null(p)) plots[[length(plots)+1]] <- p
   }
@@ -787,6 +798,9 @@ if (length(plots) >= 2) {
   do.call(gridExtra::grid.arrange, c(plots, ncol = ncol_use))
 } else if (length(plots) == 1) {
   print(plots[[1]])
+} else {
+  plot.new()
+  text(0.5, 0.5, "No SEM flip traces found for county SEM fits (B/D/F/H).")
 }
 ```
 
@@ -795,21 +809,20 @@ if (length(plots) >= 2) {
 #| fig-cap: "Adaptive SEM selected-proposal score progression (county SEM fits). This trace is stochastic and is not expected to be monotone."
 #| fig-height: 4
 sem_metric_rows <- list()
-sem_trace_D <- get_sem_metric_trace(fit_B_obj)
-sem_trace_F <- get_sem_metric_trace(fit_D_obj)
-if (!is.null(sem_trace_D) && length(sem_trace_D) > 0) {
-  sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(sem_trace_D),
-    LogLik = as.numeric(sem_trace_D),
-    Model = "B: SEM Biv"
-  )
-}
-if (!is.null(sem_trace_F) && length(sem_trace_F) > 0) {
-  sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(sem_trace_F),
-    LogLik = as.numeric(sem_trace_F),
-    Model = "D: SEM Biv+KDE"
-  )
+for (info in list(
+  list(obj = fit_B_obj, lab = "B: SEM Biv"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)")
+)) {
+  tr <- get_sem_metric_trace(info$obj)
+  if (!is.null(tr) && length(tr) > 0) {
+    sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
+      Iteration = seq_along(tr),
+      LogLik = as.numeric(tr),
+      Model = info$lab
+    )
+  }
 }
 if (length(sem_metric_rows) > 0) {
   sem_metric_df <- do.call(rbind, sem_metric_rows)
@@ -822,8 +835,12 @@ if (length(sem_metric_rows) > 0) {
   ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
     geom_line(linewidth = 0.9) +
     geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
-    scale_colour_manual(values = c("B: SEM Biv" = "#7570b3",
-                                   "D: SEM Biv+KDE" = "#4d9221")) +
+    scale_colour_manual(values = c(
+      "B: SEM Biv" = "#7570b3",
+      "D: SEM Biv+KDE (ctrl-fixed)" = "#4d9221",
+      "F: SEM Biv+KDE (all-free)" = "#3182bd",
+      "H: SEM Biv+KDE (struct-fixed)" = "#33a02c"
+    )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "top")
@@ -913,8 +930,10 @@ build_cm_from_labelling <- function(lab) {
 
 cm_D <- build_cm(if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, "B")
 cm_F <- build_cm(if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, "D")
+cm_H <- build_cm(if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, "F")
+cm_K <- build_cm(if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, "H")
 cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode)) fit_I_obj$decode$labelling else NULL)
-cm_H <- build_cm_from_labelling(if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode)) fit_J_obj$decode$labelling else NULL)
+cm_J <- build_cm_from_labelling(if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode)) fit_J_obj$decode$labelling else NULL)
 ```
 
 ### Fit B — SEM Bivariate ETAS
@@ -957,6 +976,46 @@ if (!is.null(cm_F)) {
 }
 ```
 
+### Fit F — SEM Bivariate + KDE (All-Free)
+
+```{r tbl-cm-F-allfree}
+#| label: tbl-cm-F-allfree
+if (!is.null(cm_H)) {
+  n_post_H <- sum(cm_H)
+  cm_H_pct <- round(cm_H / n_post_H * 100, 1)
+  cm_display_H <- cm_H
+  for (rn in rownames(cm_H)) for (cn in colnames(cm_H)) {
+    cm_display_H[rn, cn] <- paste0(cm_H[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
+  }
+  kable(cm_display_H,
+        caption = paste0("Fit F: Location vs SEM-inferred label (n = ", n_post_H,
+                         " post-treatment events)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_H)))
+}
+```
+
+### Fit H — SEM Bivariate + KDE (Structural Fixed)
+
+```{r tbl-cm-H-struct}
+#| label: tbl-cm-H-struct
+if (!is.null(cm_K)) {
+  n_post_K <- sum(cm_K)
+  cm_K_pct <- round(cm_K / n_post_K * 100, 1)
+  cm_display_K <- cm_K
+  for (rn in rownames(cm_K)) for (cn in colnames(cm_K)) {
+    cm_display_K[rn, cn] <- paste0(cm_K[rn, cn], "  (", cm_K_pct[rn, cn], "%)")
+  }
+  kable(cm_display_K,
+        caption = paste0("Fit H: Location vs SEM-inferred label (n = ", n_post_K,
+                         " post-treatment events)."),
+        align = "cc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_K)))
+}
+```
+
 ### Fit I — Decode Bivariate ETAS
 
 ```{r tbl-cm-G}
@@ -981,19 +1040,19 @@ if (!is.null(cm_G)) {
 
 ```{r tbl-cm-H}
 #| label: tbl-cm-H
-if (!is.null(cm_H)) {
-  n_post_H <- sum(cm_H)
-  cm_H_pct <- round(cm_H / n_post_H * 100, 1)
-  cm_display_H <- cm_H
-  for (rn in rownames(cm_H)) for (cn in colnames(cm_H)) {
-    cm_display_H[rn, cn] <- paste0(cm_H[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
+if (!is.null(cm_J)) {
+  n_post_H <- sum(cm_J)
+  cm_H_pct <- round(cm_J / n_post_H * 100, 1)
+  cm_display_H <- cm_J
+  for (rn in rownames(cm_J)) for (cn in colnames(cm_J)) {
+    cm_display_H[rn, cn] <- paste0(cm_J[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
   }
   kable(cm_display_H,
         caption = paste0("Fit J: Location vs Decode-inferred label (n = ", n_post_H,
                          " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_H)))
+    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_J)))
 }
 ```
 
@@ -1003,9 +1062,11 @@ if (!is.null(cm_H)) {
 #| label: tbl-cm-summary
 sum_rows <- list()
 for (info in list(list(cm = cm_D, lab = "B: SEM Bivariate"),
-                  list(cm = cm_F, lab = "D: SEM Bivariate+KDE"),
+                  list(cm = cm_F, lab = "D: SEM Bivariate+KDE (ctrl-fixed)"),
+                  list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"),
+                  list(cm = cm_K, lab = "H: SEM Bivariate+KDE (struct-fixed)"),
                   list(cm = cm_G, lab = "I: Decode Bivariate"),
-                  list(cm = cm_H, lab = "J: Decode Biv+KDE"))) {
+                  list(cm = cm_J, lab = "J: Decode Biv+KDE"))) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
@@ -1041,8 +1102,12 @@ ate_days <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 365
 biv_rows <- list(
   list(lab = "A: Naive Bivariate", ate = if (!is.null(fit_A_obj)) fit_A_obj$ate else NULL, louis = NULL),
   list(lab = "B: SEM Bivariate",   ate = if (!is.null(fit_B_obj)) fit_B_obj$ate else NULL, louis = if (!is.null(fit_B_obj)) fit_B_obj$louis else NULL),
-  list(lab = "C: Naive Biv+KDE",   ate = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL, louis = NULL),
-  list(lab = "D: SEM Biv+KDE",     ate = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL, louis = if (!is.null(fit_D_obj)) fit_D_obj$louis else NULL))
+  list(lab = "C: Naive Biv+KDE (ctrl-fixed)",   ate = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL, louis = NULL),
+  list(lab = "D: SEM Biv+KDE (ctrl-fixed)",     ate = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL, louis = if (!is.null(fit_D_obj)) fit_D_obj$louis else NULL),
+  list(lab = "E: Naive Biv+KDE (all-free)",     ate = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL, louis = NULL),
+  list(lab = "F: SEM Biv+KDE (all-free)",       ate = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL, louis = if (!is.null(fit_F_obj)) fit_F_obj$louis else NULL),
+  list(lab = "G: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL, louis = NULL),
+  list(lab = "H: SEM Biv+KDE (struct-fixed)",   ate = if (!is.null(fit_H_obj)) fit_H_obj$ate else NULL, louis = if (!is.null(fit_H_obj)) fit_H_obj$louis else NULL))
 if (!is.null(fit_I_obj) && !is.null(fit_I_obj$ate)) {
   biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Decode Bivariate", ate = fit_I_obj$ate, louis = NULL)
 }
@@ -1068,8 +1133,8 @@ if (!is.null(boot_obj) &&
 
 get_boot_summary <- function(model_label) {
   vals <- NULL
-  if (model_label == "C: Naive Biv+KDE" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (model_label == "D: SEM Biv+KDE" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
+  if (model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- vals[is.finite(vals)]
   if (length(vals) < 2) return(NULL)
@@ -1117,16 +1182,16 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   if (is.null(r$ate)) return(NULL)
   expected <- get_expected_totals(r$ate, n_tiles = n_cty)
   sim_totals <- get_total_effect_sim(r$ate, n_tiles = n_cty)
-  sim_total <- mean(sim_totals, na.rm = TRUE)
   c_mean <- mean(expected$c_total, na.rm = TRUE)
   t_mean <- mean(expected$t_total, na.rm = TRUE)
+  saved_diff_mean <- c_mean - t_mean
   sim_sd_total  <- sd(sim_totals, na.rm = TRUE)
   base_row <- data.frame(
     Model = r$lab,
-    `E[N(0)]` = round(c_mean, 0),
-    `E[N(1)]` = round(t_mean, 0),
-    `Total Saved` = round(sim_total, 0),
-    `SD` = round(sim_sd_total, 0),
+    `E[N(control everywhere)]` = round(c_mean, 0),
+    `E[N(actual treatment regime)]` = round(t_mean, 0),
+    `Saved = control - actual` = round(saved_diff_mean, 0),
+    `SD(saved)` = round(sim_sd_total, 0),
     `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
     check.names = FALSE
   )
@@ -1144,19 +1209,19 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
 }))
 kable(ate_biv,
       col.names = if (using_pre_bootstrap) {
-        c("Model", "E[N(0)]", "E[N(1)]",
-          paste0("Total Saved / ", n_cty, " counties / ", ate_days, "d"),
-          "SD", paste0("Spillover / ", ate_days, "d"))
+        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+          paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
+          "SD(saved)", paste0("Spillover / ", ate_days, "d"))
       } else {
-        c("Model", "E[N(0)]", "E[N(1)]",
-          paste0("Total Saved / ", n_cty, " counties / ", ate_days, "d"),
-          "SD", "Bootstrap SD", "Bootstrap 95% CI",
+        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+          paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
+          "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
           paste0("Spillover / ", ate_days, "d"))
       },
       caption = if (using_pre_bootstrap) {
-        paste0("All-or-nothing total saved over ", ate_days, " days (pre-bootstrap checkpoint).")
+        paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
       } else {
-        paste0("All-or-nothing total saved over ", ate_days, " days.")
+        paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
       },
       align = if (using_pre_bootstrap) "lccccc" else "lccccccc") |>
   kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
@@ -1164,8 +1229,8 @@ if (using_pre_bootstrap) {
   cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
 } else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
   labs <- c()
-  if (!is.null(boot_E_df)) labs <- c(labs, "C (Naive Biv+KDE)")
-  if (!is.null(boot_F_df)) labs <- c(labs, "D (SEM Biv+KDE)")
+  if (!is.null(boot_E_df)) labs <- c(labs, "C (Naive Biv+KDE ctrl-fixed)")
+  if (!is.null(boot_F_df)) labs <- c(labs, "D (SEM Biv+KDE ctrl-fixed)")
   cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
 }
 ```
@@ -1487,12 +1552,20 @@ safe_mu_ratio <- function(par) {
   if (!is.finite(denom) || is.na(denom) || abs(denom) < .Machine$double.eps) return(NA_real_)
   numer / denom
 }
-mu_ratio_E <- safe_mu_ratio(C_par)
-mu_ratio_F <- safe_mu_ratio(D_par)
+mu_ratio_C <- safe_mu_ratio(C_par)
+mu_ratio_D <- safe_mu_ratio(D_par)
+mu_ratio_E <- safe_mu_ratio(E_par)
+mu_ratio_F <- safe_mu_ratio(F_par)
+mu_ratio_G <- safe_mu_ratio(G_par)
+mu_ratio_H <- safe_mu_ratio(H_par)
 
-total_E_1yr <- if (!is.null(fit_C_obj) && !is.null(fit_C_obj$ate)) round(mean(get_total_effect_sim(fit_C_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
-total_F_1yr <- if (!is.null(fit_D_obj) && !is.null(fit_D_obj$ate)) round(mean(get_total_effect_sim(fit_D_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
-total_H_1yr <- if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) round(mean(get_total_effect_sim(fit_J_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_C_1yr <- if (!is.null(fit_C_obj) && !is.null(fit_C_obj$ate)) round(mean(get_total_effect_sim(fit_C_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_D_1yr <- if (!is.null(fit_D_obj) && !is.null(fit_D_obj$ate)) round(mean(get_total_effect_sim(fit_D_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_E_1yr <- if (!is.null(fit_E_obj) && !is.null(fit_E_obj$ate)) round(mean(get_total_effect_sim(fit_E_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_F_1yr <- if (!is.null(fit_F_obj) && !is.null(fit_F_obj$ate)) round(mean(get_total_effect_sim(fit_F_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_G_1yr <- if (!is.null(fit_G_obj) && !is.null(fit_G_obj$ate)) round(mean(get_total_effect_sim(fit_G_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_H_1yr <- if (!is.null(fit_H_obj) && !is.null(fit_H_obj$ate)) round(mean(get_total_effect_sim(fit_H_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
+total_J_1yr <- if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) round(mean(get_total_effect_sim(fit_J_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
 
 effect_direction <- function(x, tol = 10) {
   if (is.na(x)) return("unavailable")
@@ -1507,23 +1580,37 @@ spatially inhomogeneous background estimated from the first half of
 control pre-treatment data. This provides an independent estimate of
 the baseline seismicity pattern without using post-treatment data.
 
-**Background contrast (inhomogeneous only).** In Fit C (naive labels),
-the treated-region background rate $\mu_1$ is `r round(mu_ratio_E, 1)`$\times$
-higher than $\mu_0$. After SEM relabelling (Fit D), this ratio is
-`r round(mu_ratio_F, 1)`$\times$.
+**Background contrast (inhomogeneous variants).** The treated-to-control
+background ratio $\mu_1/\mu_0$ is:
+`r paste(sprintf("C=%.1fx, D=%.1fx, E=%.1fx, F=%.1fx, G=%.1fx, H=%.1fx",
+                 mu_ratio_C, mu_ratio_D, mu_ratio_E, mu_ratio_F, mu_ratio_G, mu_ratio_H), collapse = "")`.
 
 **All-or-nothing total saved (`r ate_days_interp`-day horizon).**
 
 ```{r interp-effects, results='asis'}
 effect_lines <- c(
-  paste0("- **Fit C (naive+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit D (SEM+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Interpretation:** In the inhomogeneous SEM model (F), treatment looks **",
-         effect_direction(total_F_1yr), "**; in the inhomogeneous naive model (E), treatment looks **",
-         effect_direction(total_E_1yr), "**.")
+  paste0("- **Fit C (naive+KDE, ctrl-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_C_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit D (SEM+KDE, ctrl-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_D_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit E (naive+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit F (SEM+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit G (naive+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_G_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit H (SEM+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_H_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  {
+    sem_totals <- c(total_D_1yr, total_F_1yr, total_H_1yr)
+    sem_totals <- sem_totals[is.finite(sem_totals)]
+    if (length(sem_totals) > 0L) {
+      paste0("- **Interpretation:** Across KDE variants, SEM fits range from **",
+             effect_direction(min(sem_totals)),
+             "** to **",
+             effect_direction(max(sem_totals)),
+             "**.")
+    } else {
+      "- **Interpretation:** KDE SEM variant effects are unavailable in this results file."
+    }
+  }
 )
-if (!is.na(total_H_1yr)) {
-  effect_lines <- c(effect_lines, paste0("- **Fit J (Decode+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_H_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
+if (!is.na(total_J_1yr)) {
+  effect_lines <- c(effect_lines, paste0("- **Fit J (Decode+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
 }
 cat(paste(effect_lines, collapse = "\n"), "\n")
 ```

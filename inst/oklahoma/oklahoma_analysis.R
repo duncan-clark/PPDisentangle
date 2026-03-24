@@ -153,6 +153,9 @@ if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
+SEM_WORKER_LOGS <- tolower(Sys.getenv("OK_SEM_WORKER_LOGS", "true")) %in% c("1", "true", "yes", "y")
+SEM_WORKER_LOG_VERBOSE <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_VERBOSE", if (SEM_WORKER_LOGS) "true" else "false")) %in% c("1", "true", "yes", "y")
+SEM_WORKER_LOG_SPLIT <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_SPLIT", "false")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 # Structural terms are fixed downstream after first-half pre-treatment calibration.
@@ -376,6 +379,8 @@ cat(sprintf("SEM proposal/event t_trunc (days): %s\n", sem_t_trunc_banner))
 cat(sprintf("SEM temporal relabel weight: %.3f\n", SEM_TEMPORAL_WEIGHT))
 cat(sprintf("B/D SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
+cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-main-log: %s\n",
+            SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
 cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
 
 analysis_start_time <- Sys.time()
@@ -407,6 +412,18 @@ mem_snapshot <- function() {
   sprintf("rss=%.1fMB gc_heap=%.1fMB",
           ifelse(is.finite(rss_mb), rss_mb, NA_real_),
           ifelse(is.finite(gc_mb), gc_mb, NA_real_))
+}
+sanitize_log_tag <- function(x) {
+  x <- tolower(as.character(x))
+  x <- gsub("[^a-z0-9._-]+", "_", x)
+  x <- gsub("_+", "_", x)
+  x <- gsub("^_|_$", "", x)
+  if (!nzchar(x)) x <- "sem_fit"
+  x
+}
+SEM_WORKER_LOG_DIR <- file.path(OUT_DIR, "worker_logs")
+if (SEM_WORKER_LOGS && !dir.exists(SEM_WORKER_LOG_DIR)) {
+  dir.create(SEM_WORKER_LOG_DIR, recursive = TRUE, showWarnings = FALSE)
 }
 
 # ============================================================================
@@ -836,22 +853,34 @@ run_sem_fit <- function(pp_data_in,
                         verbose_in = DF_VERBOSE,
                         label = "SEM") {
   t0 <- proc.time()[["elapsed"]]
+  sem_verbose_effective <- isTRUE(verbose_in)
+  sem_log_file <- NULL
+  if (SEM_WORKER_LOGS) {
+    sem_log_file <- file.path(
+      SEM_WORKER_LOG_DIR,
+      add_file_tag(sprintf("sem_%s_pid%d.log", sanitize_log_tag(label), Sys.getpid()))
+    )
+    if (SEM_WORKER_LOG_VERBOSE) sem_verbose_effective <- TRUE
+  }
   cat(sprintf("  [%s] start (n=%d, pid=%d, mem=%s)\n",
               label, nrow(pp_data_in), Sys.getpid(), mem_snapshot()))
+  if (!is.null(sem_log_file)) {
+    cat(sprintf("  [%s] worker sem log: %s\n", label, sem_log_file))
+  }
   run_one_sem <- function(pp_data_sem, init_params_sem, fixed_params_sem, sem_label) {
     adaptive_SEM(
       pp_data = pp_data_sem, partition = partition_in,
       partition_processes = partition_processes_in,
       statespace = win_km, time_window = windowT_post, treatment_time = 0,
       hawkes_params_control = A_ctrl, hawkes_params_treated = A_treat,
-      N_labellings = SEM_N_LABELLINGS, N_iter = SEM_N_ITER, verbose = verbose_in,
+      N_labellings = SEM_N_LABELLINGS, N_iter = SEM_N_ITER, verbose = sem_verbose_effective,
       model_type = "etas_bivariate",
       adaptive_control = list(
         param_update_cadence = SEM_PARAM_UPDATE,
         proposal_update_cadence = 1,
         state_spaces = state_spaces_in,
         iter = sem_inner_iter_in, n_props = SEM_INNER_PROPS,
-        change_factor = SEM_CHANGE_FACTOR, verbose = verbose_in,
+        change_factor = SEM_CHANGE_FACTOR, verbose = sem_verbose_effective,
         stagnation_trigger_every = SEM_STAGNATION_TRIGGER_EVERY,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
@@ -868,26 +897,51 @@ run_sem_fit <- function(pp_data_in,
       t_trunc = sem_t_trunc_in
     )
   }
-  out <- tryCatch({
-    pp_data_sem <- pp_data_in
-    init_params_sem <- init_params_in
-    if (SEM_WARMSTART_FIXED) {
-      fixed_all <- as.list(init_params_in)
-      cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters (mem=%s)...\n",
-                  label, mem_snapshot()))
-      warm_sem <- run_one_sem(pp_data_sem, init_params_sem, fixed_all, paste0(label, " warm"))
-      if (!is.null(warm_sem) && !is.null(warm_sem$adaptive$adaptive_labelling)) {
-        pp_data_sem <- warm_sem$adaptive$adaptive_labelling
+  run_sem_body <- function() {
+    tryCatch({
+      pp_data_sem <- pp_data_in
+      init_params_sem <- init_params_in
+      if (SEM_WARMSTART_FIXED) {
+        fixed_all <- as.list(init_params_in)
+        cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters (mem=%s)...\n",
+                    label, mem_snapshot()))
+        warm_sem <- run_one_sem(pp_data_sem, init_params_sem, fixed_all, paste0(label, " warm"))
+        if (!is.null(warm_sem) && !is.null(warm_sem$adaptive$adaptive_labelling)) {
+          pp_data_sem <- warm_sem$adaptive$adaptive_labelling
+        }
+        if (!is.null(warm_sem) && !is.null(warm_sem$etas_bivariate_params)) {
+          init_params_sem <- warm_sem$etas_bivariate_params
+        }
       }
-      if (!is.null(warm_sem) && !is.null(warm_sem$etas_bivariate_params)) {
-        init_params_sem <- warm_sem$etas_bivariate_params
-      }
-    }
-    run_one_sem(pp_data_sem, init_params_sem, fixed_params_in, label)
-  }, error = function(e) {
-    cat(sprintf("  [%s] error: %s\n", label, e$message))
-    NULL
-  })
+      run_one_sem(pp_data_sem, init_params_sem, fixed_params_in, label)
+    }, error = function(e) {
+      cat(sprintf("  [%s] error: %s\n", label, e$message))
+      NULL
+    })
+  }
+  out <- if (!is.null(sem_log_file)) {
+    out_local <- NULL
+    sem_log_con <- file(sem_log_file, open = "wt")
+    sem_msg_con <- file(sem_log_file, open = "at")
+    on.exit({
+      try(sink(type = "message"), silent = TRUE)
+      try(sink(), silent = TRUE)
+      try(close(sem_msg_con), silent = TRUE)
+      try(close(sem_log_con), silent = TRUE)
+    }, add = TRUE)
+    sink(sem_log_con, split = isTRUE(SEM_WORKER_LOG_SPLIT))
+    sink(sem_msg_con, type = "message")
+    cat(sprintf("[%s] sem-log-begin ts=%s pid=%d mem=%s verbose=%s\n",
+                label, format(Sys.time(), "%Y-%m-%d %H:%M:%S"), Sys.getpid(), mem_snapshot(),
+                sem_verbose_effective))
+    out_local <- run_sem_body()
+    cat(sprintf("[%s] sem-log-end ts=%s pid=%d mem=%s status=%s\n",
+                label, format(Sys.time(), "%Y-%m-%d %H:%M:%S"), Sys.getpid(), mem_snapshot(),
+                ifelse(is.null(out_local), "failed", "ok")))
+    out_local
+  } else {
+    run_sem_body()
+  }
   t1 <- proc.time()[["elapsed"]]
   cat(sprintf("  [%s] done in %.1fs (mem=%s)\n", label, t1 - t0, mem_snapshot()))
   out
