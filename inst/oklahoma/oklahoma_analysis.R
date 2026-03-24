@@ -904,16 +904,18 @@ D_treat <- A_treat
 # ============================================================================
 # 4E. Non-parametric background rate from first 50% of control pre-treatment
 # ============================================================================
-cat("\n--- Step 4E: KDE background rate from held-out control pre-treatment data ---\n")
+cat("\n--- Step 4E: KDE background rate from held-out pre-treatment data ---\n")
 
-pp_pre_holdout_ctrl <- pp_pre_holdout[pp_pre_holdout$location_process == "control", ]
-pp_pre_holdout_ctrl <- pp_pre_holdout_ctrl[order(pp_pre_holdout_ctrl$t), ]
+# Pre-treatment is treated as control-process everywhere; for KDE background
+# training, use the full held-out pre sample (50% by event-count split),
+# not only events in control-labelled counties.
+pp_pre_holdout_ctrl <- pp_pre_holdout[order(pp_pre_holdout$t), ]
 n_pre_holdout_ctrl <- nrow(pp_pre_holdout_ctrl)
 if (n_pre_holdout_ctrl < 2) {
-  stop("Insufficient held-out control pre-treatment events for KDE background estimation.")
+  stop("Insufficient held-out pre-treatment events for KDE background estimation.")
 }
 
-cat(sprintf("  Held-out control pre-treatment events for KDE: %d\n",
+cat(sprintf("  Held-out pre-treatment events for KDE: %d\n",
             n_pre_holdout_ctrl))
 
 kde_training <- pp_pre_holdout_ctrl
@@ -993,7 +995,7 @@ tryCatch({
     scale_fill_viridis_c(name = "KDE rate", option = "C") +
     coord_equal() +
     labs(title = "Inhomogeneous Background Rate (KDE)",
-         subtitle = "Estimated from held-out first 50% of pre-treatment (control only)",
+         subtitle = "Estimated from held-out first 50% of pre-treatment events",
          x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
