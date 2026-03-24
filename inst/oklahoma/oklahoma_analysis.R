@@ -679,8 +679,10 @@ apply_pre_init_etas <- function(start_par) {
 apply_pre_init_biv <- function(par_vec) {
   out <- par_vec
   out[c("mu_0", "mu_1")] <- PRE_CTRL_BOOT_PARAMS$mu
-  out[c("A_00", "A_11", "A_01", "A_10")] <- PRE_CTRL_BOOT_PARAMS$A
-  out[c("alpha_m_00", "alpha_m_11", "alpha_m_01", "alpha_m_10")] <- PRE_CTRL_BOOT_PARAMS$alpha_m
+  # Keep cross-excitation starts weak (from init_bivariate_from_independent)
+  # to avoid supercritical proposal simulations at SEM initialization.
+  out[c("A_00", "A_11")] <- PRE_CTRL_BOOT_PARAMS$A
+  out[c("alpha_m_00", "alpha_m_11")] <- PRE_CTRL_BOOT_PARAMS$alpha_m
   out[c("c", "p", "D", "gamma", "q")] <- unlist(PRE_CTRL_BOOT_PARAMS[c("c", "p", "D", "gamma", "q")])
   out
 }
