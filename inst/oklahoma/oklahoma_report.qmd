@@ -56,8 +56,9 @@ SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
 candidate_out_dirs <- unique(c(
-  file.path(SCRIPT_DIR, "output"),
-  file.path(dirname(dirname(SCRIPT_DIR)), "output")
+  file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma"),
+  file.path(dirname(dirname(SCRIPT_DIR)), "output"),
+  file.path(SCRIPT_DIR, "output")
 ))
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",

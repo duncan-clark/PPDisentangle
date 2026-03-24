@@ -60,14 +60,46 @@ tryCatch({
 }, error = function(e) {
   stop("Failed to load local PPDisentangle source via pkgload::load_all(): ", e$message)
 })
-# Canonical output path at repo root, with mirror to legacy script-local output.
-OUT_DIR  <- file.path(REPO_DIR, "output")
-LEGACY_OUT_DIR <- file.path(REPO_DIR, "inst", "oklahoma", "output")
+# Canonical output path at repo root:
+#   output/oklahoma/
+# Keep legacy mirrors for backward compatibility.
+OUT_DIR  <- file.path(REPO_DIR, "output", "oklahoma")
+LEGACY_OUT_DIRS <- unique(c(
+  file.path(REPO_DIR, "output"),
+  file.path(REPO_DIR, "inst", "oklahoma", "output")
+))
 PLOT_DIR <- file.path(OUT_DIR, "plots")
-for (d in c(OUT_DIR, PLOT_DIR)) {
+for (d in unique(c(OUT_DIR, PLOT_DIR, LEGACY_OUT_DIRS))) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE)
 }
-if (!dir.exists(LEGACY_OUT_DIR)) dir.create(LEGACY_OUT_DIR, recursive = TRUE)
+copy_to_legacy_out_dirs <- function(src_path) {
+  copied_paths <- character(0)
+  src_dir <- normalizePath(dirname(src_path), winslash = "/", mustWork = FALSE)
+  for (legacy_dir in LEGACY_OUT_DIRS) {
+    legacy_dir_norm <- normalizePath(legacy_dir, winslash = "/", mustWork = FALSE)
+    if (identical(src_dir, legacy_dir_norm)) next
+    legacy_path <- file.path(legacy_dir, basename(src_path))
+    ok <- file.copy(src_path, legacy_path, overwrite = TRUE)
+    if (isTRUE(ok)) {
+      copied_paths <- c(copied_paths, legacy_path)
+    } else {
+      cat(sprintf("Warning: failed to mirror %s to legacy path: %s\n",
+                  basename(src_path), legacy_path))
+    }
+  }
+  unique(copied_paths)
+}
+write_lines_to_legacy_out_dirs <- function(lines, filename) {
+  out_paths <- character(0)
+  for (legacy_dir in LEGACY_OUT_DIRS) {
+    legacy_dir_norm <- normalizePath(legacy_dir, winslash = "/", mustWork = FALSE)
+    if (identical(legacy_dir_norm, normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE))) next
+    target <- file.path(legacy_dir, filename)
+    writeLines(lines, target)
+    out_paths <- c(out_paths, target)
+  }
+  unique(out_paths)
+}
 SLURM_JOB_ID_RAW <- trimws(Sys.getenv("SLURM_JOB_ID", ""))
 FILE_TAG <- if (nzchar(SLURM_JOB_ID_RAW)) paste0("_job", SLURM_JOB_ID_RAW) else ""
 add_file_tag <- function(filename) {
@@ -2464,11 +2496,7 @@ results_pre_bootstrap <- list(
 pre_bootstrap_out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results_pre_bootstrap.rds"))
 saveRDS(results_pre_bootstrap, pre_bootstrap_out_file)
 cat(sprintf("Pre-bootstrap checkpoint saved to: %s\n", pre_bootstrap_out_file))
-legacy_pre_bootstrap_out_file <- file.path(LEGACY_OUT_DIR, add_file_tag("oklahoma_results_pre_bootstrap.rds"))
-if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
-               normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
-  invisible(file.copy(pre_bootstrap_out_file, legacy_pre_bootstrap_out_file, overwrite = TRUE))
-}
+legacy_pre_bootstrap_out_files <- copy_to_legacy_out_dirs(pre_bootstrap_out_file)
 rm(results_pre_bootstrap)
 invisible(gc(verbose = FALSE))
 
@@ -2801,10 +2829,14 @@ invisible(gc(verbose = FALSE))
     unlink(pre_bootstrap_out_file, force = TRUE)
     cat(sprintf("Deleted pre-bootstrap checkpoint: %s\n", pre_bootstrap_out_file))
   }
-  if (exists("legacy_pre_bootstrap_out_file", inherits = FALSE) &&
-      file.exists(legacy_pre_bootstrap_out_file)) {
-    unlink(legacy_pre_bootstrap_out_file, force = TRUE)
-    cat(sprintf("Deleted legacy pre-bootstrap checkpoint: %s\n", legacy_pre_bootstrap_out_file))
+  if (exists("legacy_pre_bootstrap_out_files", inherits = FALSE) &&
+      length(legacy_pre_bootstrap_out_files) > 0L) {
+    for (legacy_path in legacy_pre_bootstrap_out_files) {
+      if (file.exists(legacy_path)) {
+        unlink(legacy_path, force = TRUE)
+        cat(sprintf("Deleted legacy pre-bootstrap checkpoint: %s\n", legacy_path))
+      }
+    }
   }
   bootstrap_elapsed <- proc.time()[["elapsed"]] - t_bootstrap
 }
@@ -3126,16 +3158,11 @@ saveRDS(results, out_file)
 cat(sprintf("Results saved to: %s\n", out_file))
 cat(sprintf("Plots saved to:   %s\n", PLOT_DIR))
 
-# Mirror latest results into legacy output path so older workflows stay fresh.
-legacy_out_file <- file.path(LEGACY_OUT_DIR, add_file_tag("oklahoma_results.rds"))
-if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
-               normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
-  copied <- file.copy(out_file, legacy_out_file, overwrite = TRUE)
-  if (copied) {
-    cat(sprintf("Results mirrored to legacy path: %s\n", legacy_out_file))
-  } else {
-    cat(sprintf("Warning: failed to mirror results to legacy path: %s\n", legacy_out_file))
-  }
+# Mirror latest results into legacy output paths so older workflows stay fresh.
+copied_legacy_out_files <- copy_to_legacy_out_dirs(out_file)
+if (length(copied_legacy_out_files) > 0L) {
+  cat("Results mirrored to legacy paths:\n")
+  cat(paste0("  - ", copied_legacy_out_files, collapse = "\n"), "\n")
 }
 
 # Keep report outputs synchronized with the newest results.
@@ -3229,10 +3256,7 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
       )
       stamp_root <- file.path(OUT_DIR, add_file_tag("last_run_sync_stamp.txt"))
       writeLines(stamp_lines, stamp_root)
-      if (!identical(normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE),
-                     normalizePath(LEGACY_OUT_DIR, winslash = "/", mustWork = FALSE))) {
-        writeLines(stamp_lines, file.path(LEGACY_OUT_DIR, add_file_tag("last_run_sync_stamp.txt")))
-      }
+      write_lines_to_legacy_out_dirs(stamp_lines, add_file_tag("last_run_sync_stamp.txt"))
       cat("Sync stamp written for Google Drive change detection.\n")
       if ("html" %in% REPORT_FORMATS) {
         cat(sprintf("Timestamped report (from results mtime %s): %s\n",

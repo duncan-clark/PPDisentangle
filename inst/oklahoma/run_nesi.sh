@@ -289,8 +289,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   cd "$PKG_ROOT"
   git pull origin main 2>/dev/null || true
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  OUTPUT_DIR="$PKG_ROOT/inst/oklahoma/output"
-  mkdir -p "$OUTPUT_DIR"
+  OUTPUT_DIR="$PKG_ROOT/output/oklahoma"
+  LEGACY_OUTPUT_DIR="$PKG_ROOT/inst/oklahoma/output"
+  mkdir -p "$OUTPUT_DIR" "$LEGACY_OUTPUT_DIR"
 
   EXTRA_SBATCH=""
   if [ "$PP_CORES" -gt 72 ]; then
@@ -319,8 +320,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     "$SCRIPT_DIR/run_nesi.sh")
 
   echo "Job $JOB_ID submitted"
-  echo "SLURM out: inst/oklahoma/output/${JOB_ID}_oklahoma_slurm.out"
-  echo "SLURM err: inst/oklahoma/output/${JOB_ID}_oklahoma_slurm.err"
+  echo "SLURM out: output/oklahoma/${JOB_ID}_oklahoma_slurm.out"
+  echo "SLURM err: output/oklahoma/${JOB_ID}_oklahoma_slurm.err"
   exit 0
 fi
 
@@ -329,6 +330,7 @@ fi
 # ----------------------------
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/inst/oklahoma/output"
+mkdir -p "$PKG_ROOT/output/oklahoma"
 
 echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"

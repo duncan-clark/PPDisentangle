@@ -18,12 +18,14 @@ bash inst/sim_study/run_nesi.sh --mode long       # long-run mode preset
 Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs):
 
 ```
-inst/sim_study/output/
+output/sim_study/
   <JOB_ID>.rds           # full results and plots
   <JOB_ID>.log           # R log
   <JOB_ID>_slurm.out     # SLURM stdout
   <JOB_ID>_slurm.err     # SLURM stderr
 ```
+
+Legacy mirror (kept for compatibility): `inst/sim_study/output/`
 
 ## OOM during ATE estimation
 
@@ -51,4 +53,4 @@ PP_LOG_MEMORY=1 bash inst/sim_study/run_nesi.sh --test
 PP_SKIP_CRAZY_PARAMS=1 bash inst/sim_study/run_nesi.sh --test
 ```
 
-Check `inst/sim_study/output/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.
+Check `output/sim_study/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.

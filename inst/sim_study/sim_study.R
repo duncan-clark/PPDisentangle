@@ -6,7 +6,7 @@
 #   Rscript sim_study.R --small          # local, reduced
 #   sbatch run_nesi.sh --sims 100        # NeSI cluster
 #
-# Output: inst/sim_study/output/{JOB_ID}.rds  inst/sim_study/output/{JOB_ID}.log
+# Output (canonical): output/sim_study/{JOB_ID}.rds  output/sim_study/{JOB_ID}.log
 
 prepend_user_lib_paths <- function() {
   user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
@@ -65,7 +65,7 @@ N_SIMS_ARG <- if (length(sims_arg) > 0 && length(args) >= sims_arg + 1L)
 
 ON_CLUSTER <- nzchar(Sys.getenv("SLURM_JOB_ID")) || FORCE_CLUSTER
 
-resolve_save_dir <- function() {
+resolve_save_dirs <- function() {
   args_full <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args_full, value = TRUE)
   script_dir <- if (length(file_arg) > 0L) {
@@ -73,7 +73,16 @@ resolve_save_dir <- function() {
   } else {
     file.path(getwd(), "inst", "sim_study")
   }
-  file.path(script_dir, "output")
+  repo_dir <- if (basename(script_dir) == "sim_study" &&
+                  basename(dirname(script_dir)) == "inst") {
+    normalizePath(dirname(dirname(script_dir)), winslash = "/", mustWork = FALSE)
+  } else {
+    normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+  }
+  list(
+    canonical = file.path(repo_dir, "output", "sim_study"),
+    legacy = file.path(script_dir, "output")
+  )
 }
 
 OMEGA <- c(0, 100, 0, 100)
@@ -101,7 +110,6 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 200
   SEM_N_ITER <- 1
   SEM_N_LABELLINGS <- 5
-  SAVE_DIR <- resolve_save_dir()
 } else if (ON_CLUSTER) {
   N_CORES <- as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", "100"))
   SIM_SIZE <- 100
@@ -114,7 +122,6 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 2000
   SEM_N_ITER <- 100
   SEM_N_LABELLINGS <- 10
-  SAVE_DIR <- resolve_save_dir()
 } else if (SMALL) {
   N_CORES <- min(8L, local_core_default)
   SIM_SIZE <- N_CORES
@@ -126,7 +133,6 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 100
   SEM_N_ITER <- 10
   SEM_N_LABELLINGS <- 10
-  SAVE_DIR <- resolve_save_dir()
 } else {
   N_CORES <- local_core_default
   SIM_SIZE <- N_CORES
@@ -138,8 +144,11 @@ if (TEST) {
   SEM_EM_ADAPTIVE_ITER <- 1000
   SEM_N_ITER <- 3
   SEM_N_LABELLINGS <- max(10, N_PROPOSALS %/% 10)
-  SAVE_DIR <- resolve_save_dir()
 }
+
+save_dirs <- resolve_save_dirs()
+SAVE_DIR <- save_dirs$canonical
+LEGACY_SAVE_DIR <- save_dirs$legacy
 
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
@@ -216,7 +225,22 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
 if (JOB_ID == "") JOB_ID <- paste0("local_", format(Sys.time(), "%Y%m%d_%H%M%S"))
 
-dir.create(SAVE_DIR, showWarnings = FALSE, recursive = TRUE)
+for (d in unique(c(SAVE_DIR, LEGACY_SAVE_DIR))) {
+  dir.create(d, showWarnings = FALSE, recursive = TRUE)
+}
+save_dir_norm <- normalizePath(SAVE_DIR, winslash = "/", mustWork = FALSE)
+legacy_save_dir_norm <- normalizePath(LEGACY_SAVE_DIR, winslash = "/", mustWork = FALSE)
+mirror_to_legacy <- !identical(save_dir_norm, legacy_save_dir_norm)
+mirror_to_legacy_file <- function(src_path) {
+  if (!mirror_to_legacy) return(NA_character_)
+  dest <- file.path(LEGACY_SAVE_DIR, basename(src_path))
+  ok <- file.copy(src_path, dest, overwrite = TRUE)
+  if (!isTRUE(ok)) {
+    warning(sprintf("Failed to mirror %s to legacy path %s", basename(src_path), dest))
+    return(NA_character_)
+  }
+  dest
+}
 LOG_FILE <- file.path(SAVE_DIR, paste0(JOB_ID, ".log"))
 log_con <- file(LOG_FILE, open = "wt")
 on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
@@ -314,7 +338,10 @@ if (RUN_SEM_PILOT) {
 }
 log_msg("Base seed=", BASE_SEED)
 log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=", END_TIME)
-log_msg("Output: ", SAVE_DIR)
+log_msg("Output (canonical): ", SAVE_DIR)
+if (mirror_to_legacy) {
+  log_msg("Output (legacy mirror): ", LEGACY_SAVE_DIR)
+}
 
 # ------------------------------------------------------------------
 # Helper: create a parallel cluster with PPDisentangle loaded
@@ -1629,7 +1656,16 @@ sim_study_results <- list(
 
 outfile <- file.path(SAVE_DIR, paste0(JOB_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
+legacy_outfile <- mirror_to_legacy_file(outfile)
+if (isTRUE(mirror_to_legacy)) {
+  flush(log_con)
+  legacy_log_file <- mirror_to_legacy_file(LOG_FILE)
+}
 log_msg("Results: ", outfile)
 log_msg("Log:     ", LOG_FILE)
+if (isTRUE(mirror_to_legacy)) {
+  if (!is.na(legacy_outfile)) log_msg("Results (legacy mirror): ", legacy_outfile)
+  if (!is.na(legacy_log_file)) log_msg("Log (legacy mirror):     ", legacy_log_file)
+}
 log_msg("=== DONE ", JOB_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
 close(log_con)

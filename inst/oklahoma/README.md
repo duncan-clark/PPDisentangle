@@ -121,21 +121,21 @@ quarto render oklahoma_report.qmd
 
 Running `oklahoma_analysis.R` now does the following automatically on success:
 
-1. Saves results and plots to the repo-level `output/`
-2. Mirrors `oklahoma_results.rds` to `inst/oklahoma/output/` for legacy compatibility
+1. Saves results and plots to `output/oklahoma/`
+2. Mirrors core artifacts to legacy paths (`output/` and `inst/oklahoma/output/`) for compatibility
 3. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
 4. Writes `last_run_sync_stamp.txt` to output folders to trigger cloud sync tools
 
 Primary artifacts:
 
-- `oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
-- `output/plots/partition_map.png` — county partition (treated vs control)
-- `output/plots/pp_pre_treatment.png` — pre-treatment point pattern
-- `output/plots/pp_post_treatment.png` — post-treatment (location labels)
-- `output/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
-- `output/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
-- `output/plots/sem_flips_indep.png` — SEM convergence (independent)
-- `output/plots/sem_flips_biv.png` — SEM convergence (bivariate)
+- `output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
+- `output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
+- `output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
+- `output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)
+- `output/oklahoma/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
+- `output/oklahoma/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
+- `output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
+- `output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
 
 ## Data
 

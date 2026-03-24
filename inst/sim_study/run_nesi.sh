@@ -71,8 +71,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
     git pull origin main 2>/dev/null || true
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    OUTPUT_DIR="$PKG_ROOT/inst/sim_study/output"
-    mkdir -p "$OUTPUT_DIR"
+    OUTPUT_DIR="$PKG_ROOT/output/sim_study"
+    LEGACY_OUTPUT_DIR="$PKG_ROOT/inst/sim_study/output"
+    mkdir -p "$OUTPUT_DIR" "$LEGACY_OUTPUT_DIR"
 
     CPUS="$PP_SIMS"
     if [ "$CPUS" -lt 1 ]; then
@@ -119,14 +120,14 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         "$SCRIPT_DIR/run_nesi.sh")
 
     echo "Job $JOB_ID submitted"
-    echo "  Results: inst/sim_study/output/$JOB_ID.rds"
-    echo "  Log:     inst/sim_study/output/$JOB_ID.log"
-    echo "  SLURM:   inst/sim_study/output/${JOB_ID}_slurm.out"
+    echo "  Results: output/sim_study/$JOB_ID.rds"
+    echo "  Log:     output/sim_study/$JOB_ID.log"
+    echo "  SLURM:   output/sim_study/${JOB_ID}_slurm.out"
     exit 0
 fi
 
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/inst/sim_study/output"
+mkdir -p "$PKG_ROOT/output/sim_study" "$PKG_ROOT/inst/sim_study/output"
 
 if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
     echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
