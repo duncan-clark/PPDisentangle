@@ -96,6 +96,10 @@ VANILLA_STARTS <- list(
 
 SEM_N_LABELLINGS  <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_N_ITER        <- if (QUICK_CHECK) 1 else if (TEST_MODE) 2 else 10
+env_sem_n_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_ITER", "")))
+if (!is.na(env_sem_n_iter) && env_sem_n_iter > 0L) {
+  SEM_N_ITER <- env_sem_n_iter
+}
 SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 1000
 env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER", "")))
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
@@ -113,6 +117,14 @@ SEM_TEMPORAL_SCALE_DAYS <- 15
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
 SEM_OUTER_MAXIT_BIV   <- if (QUICK_CHECK) 30 else if (TEST_MODE) 100 else 60
+env_sem_outer_maxit <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_MAXIT", "")))
+if (!is.na(env_sem_outer_maxit) && env_sem_outer_maxit > 0L) {
+  SEM_OUTER_MAXIT <- env_sem_outer_maxit
+}
+env_sem_outer_maxit_biv <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_MAXIT_BIV", "")))
+if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
+  SEM_OUTER_MAXIT_BIV <- env_sem_outer_maxit_biv
+}
 SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "true")) %in% c("1", "true", "yes", "y")
 # Keep Decode iterations separate from SEM inner iterations.
 DECODE_ITER <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 200

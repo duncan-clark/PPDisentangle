@@ -14,6 +14,9 @@ set -euo pipefail
 PP_CORES="${PP_CORES:-32}"
 PP_BOOT_REPS="${PP_BOOT_REPS:-}"
 PP_SEM_INNER="${PP_SEM_INNER:-100}"
+PP_SEM_N_ITER="${PP_SEM_N_ITER:-}"
+PP_SEM_OUTER_MAXIT="${PP_SEM_OUTER_MAXIT:-}"
+PP_SEM_OUTER_MAXIT_BIV="${PP_SEM_OUTER_MAXIT_BIV:-}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
 PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E}"
@@ -28,6 +31,9 @@ PP_SEED="${PP_SEED:-1}"
 CORES_EXPLICIT=0
 MEM_EXPLICIT=0
 SEM_INNER_EXPLICIT=0
+SEM_N_ITER_EXPLICIT=0
+SEM_OUTER_MAXIT_EXPLICIT=0
+SEM_OUTER_MAXIT_BIV_EXPLICIT=0
 SENS_SEM_INNER_EXPLICIT=0
 BOOT_SEM_INNER_EXPLICIT=0
 BOOT_TARGETS_EXPLICIT=0
@@ -47,6 +53,9 @@ while [[ "$#" -gt 0 ]]; do
     --sims) PP_CORES="$2"; CORES_EXPLICIT=1; shift 2 ;;  # alias: match sim_study launcher UX
     --boot-reps) PP_BOOT_REPS="$2"; BOOT_REPS_EXPLICIT=1; shift 2 ;;
     --sem-inner) PP_SEM_INNER="$2"; SEM_INNER_EXPLICIT=1; shift 2 ;;
+    --sem-n-iter) PP_SEM_N_ITER="$2"; SEM_N_ITER_EXPLICIT=1; shift 2 ;;
+    --sem-outer-maxit) PP_SEM_OUTER_MAXIT="$2"; SEM_OUTER_MAXIT_EXPLICIT=1; shift 2 ;;
+    --sem-outer-maxit-biv) PP_SEM_OUTER_MAXIT_BIV="$2"; SEM_OUTER_MAXIT_BIV_EXPLICIT=1; shift 2 ;;
     --sens-sem-inner) PP_SENS_SEM_INNER="$2"; SENS_SEM_INNER_EXPLICIT=1; shift 2 ;;
     --boot-sem-inner) PP_BOOT_SEM_INNER="$2"; BOOT_SEM_INNER_EXPLICIT=1; shift 2 ;;
     --boot-targets) PP_BOOT_TARGETS="$2"; BOOT_TARGETS_EXPLICIT=1; shift 2 ;;
@@ -68,6 +77,9 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=16; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=1; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=20; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=20; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
@@ -81,6 +93,9 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=200; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=120; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=40; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=200; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=50; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
@@ -94,6 +109,9 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=2; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=100; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=40; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=20; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
@@ -105,6 +123,9 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=12; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=60; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
@@ -118,6 +139,9 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=12; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=10; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=60; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
@@ -153,6 +177,15 @@ if [ -z "$PP_BOOT_REPS" ]; then
 fi
 if [ -z "$PP_SENS_SEM_INNER" ]; then
   PP_SENS_SEM_INNER="$PP_SEM_INNER"
+fi
+if [ -z "$PP_SEM_N_ITER" ]; then
+  PP_SEM_N_ITER=10
+fi
+if [ -z "$PP_SEM_OUTER_MAXIT" ]; then
+  PP_SEM_OUTER_MAXIT=220
+fi
+if [ -z "$PP_SEM_OUTER_MAXIT_BIV" ]; then
+  PP_SEM_OUTER_MAXIT_BIV=60
 fi
 if [ -z "$PP_BOOT_SEM_INNER" ]; then
   PP_BOOT_SEM_INNER="$PP_SEM_INNER"
@@ -212,11 +245,11 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     echo "Note: using milan partition for >72 cores."
   fi
 
-  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
+  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
-  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER kde_variants=$PP_KDE_VARIANT_MODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER kde_variants=$PP_KDE_VARIANT_MODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -244,7 +277,7 @@ echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
-echo "boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
+echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo ""
@@ -429,6 +462,9 @@ export OK_BOOT_OUTER_CAP_MEMSAFE="${JOB_CORES}"
 export OK_RUN_DECODE=false
 export OK_VERBOSE=false
 export OK_SEM_INNER_ITER="$PP_SEM_INNER"
+export OK_SEM_N_ITER="$PP_SEM_N_ITER"
+export OK_SEM_OUTER_MAXIT="$PP_SEM_OUTER_MAXIT"
+export OK_SEM_OUTER_MAXIT_BIV="$PP_SEM_OUTER_MAXIT_BIV"
 export OK_SENS_SEM_INNER_ITER="$PP_SENS_SEM_INNER"
 if [ "$PP_RUN_SENSITIVITY" = "1" ] || [ "$PP_RUN_SENSITIVITY" = "true" ] || [ "$PP_RUN_SENSITIVITY" = "yes" ]; then
   export OK_RUN_SENSITIVITY=true
@@ -460,6 +496,9 @@ if [ -n "${PP_MODE:-}" ]; then
     export OK_RUN_SENSITIVITY=true
     export OK_RUN_BOOTSTRAP_ATE=true
     export OK_SEM_INNER_ITER=2
+    export OK_SEM_N_ITER=1
+    export OK_SEM_OUTER_MAXIT=20
+    export OK_SEM_OUTER_MAXIT_BIV=20
     export OK_SENS_SEM_INNER_ITER=2
     export OK_BOOT_SEM_INNER_ITER=2
     export OK_BOOT_OUTER_CORES="${JOB_CORES}"
@@ -471,6 +510,7 @@ fi
 if [ "$PP_SETUP_TEST" = "1" ]; then
   echo "Applying setup-test profile: main SEM inner=100, decode inner=2, sensitivity inner=2, bootstrap inner=2, sequential bootstrap."
   export OK_SEM_INNER_ITER=100
+  export OK_SEM_N_ITER=1
   export OK_DECODE_ITER=2
   export OK_SENS_SEM_INNER_ITER=2
   export OK_BOOT_SEM_INNER_ITER=2
