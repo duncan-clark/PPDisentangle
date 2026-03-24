@@ -19,6 +19,7 @@ PP_SEM_OUTER_MAXIT="${PP_SEM_OUTER_MAXIT:-}"
 PP_SEM_OUTER_MAXIT_BIV="${PP_SEM_OUTER_MAXIT_BIV:-}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
+PP_BOOT_REFIT_SCOPE="${PP_BOOT_REFIT_SCOPE:-}"
 PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E}"
 PP_KDE_VARIANT_MODE="${PP_KDE_VARIANT_MODE:-}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
@@ -37,6 +38,7 @@ SEM_OUTER_MAXIT_EXPLICIT=0
 SEM_OUTER_MAXIT_BIV_EXPLICIT=0
 SENS_SEM_INNER_EXPLICIT=0
 BOOT_SEM_INNER_EXPLICIT=0
+BOOT_REFIT_SCOPE_EXPLICIT=0
 BOOT_TARGETS_EXPLICIT=0
 KDE_VARIANT_MODE_EXPLICIT=0
 SETUP_TEST_EXPLICIT=0
@@ -61,6 +63,7 @@ while [[ "$#" -gt 0 ]]; do
     --sem-outer-maxit-biv) PP_SEM_OUTER_MAXIT_BIV="$2"; SEM_OUTER_MAXIT_BIV_EXPLICIT=1; shift 2 ;;
     --sens-sem-inner) PP_SENS_SEM_INNER="$2"; SENS_SEM_INNER_EXPLICIT=1; shift 2 ;;
     --boot-sem-inner) PP_BOOT_SEM_INNER="$2"; BOOT_SEM_INNER_EXPLICIT=1; shift 2 ;;
+    --boot-refit-scope) PP_BOOT_REFIT_SCOPE="$2"; BOOT_REFIT_SCOPE_EXPLICIT=1; shift 2 ;;
     --boot-targets) PP_BOOT_TARGETS="$2"; BOOT_TARGETS_EXPLICIT=1; shift 2 ;;
     --kde-variant-mode) PP_KDE_VARIANT_MODE="$2"; KDE_VARIANT_MODE_EXPLICIT=1; shift 2 ;;
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
@@ -86,6 +89,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=20; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
@@ -103,6 +107,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=40; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=200; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=50; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
@@ -120,6 +125,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=20; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
@@ -128,16 +134,18 @@ if [ -n "$PP_MODE" ]; then
     default)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=12; fi
+      # Full/default production profile: enable enough refits for stable ATE SD.
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=20; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=60; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="partial"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
@@ -145,16 +153,18 @@ if [ -n "$PP_MODE" ]; then
     long|full|big)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=12; fi
+      # Full/default production profile: enable enough refits for stable ATE SD.
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=20; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=10; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=60; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="partial"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
@@ -198,6 +208,16 @@ if [ -z "$PP_SEM_OUTER_MAXIT_BIV" ]; then
 fi
 if [ -z "$PP_BOOT_SEM_INNER" ]; then
   PP_BOOT_SEM_INNER="$PP_SEM_INNER"
+fi
+if [ -z "$PP_BOOT_REFIT_SCOPE" ]; then
+  PP_BOOT_REFIT_SCOPE="none"
+fi
+boot_refit_norm="$(echo "$PP_BOOT_REFIT_SCOPE" | tr '[:upper:]' '[:lower:]')"
+if [ "$boot_refit_norm" = "none" ] || [ "$boot_refit_norm" = "partial" ] || [ "$boot_refit_norm" = "full" ]; then
+  PP_BOOT_REFIT_SCOPE="$boot_refit_norm"
+else
+  echo "Invalid --boot-refit-scope '$PP_BOOT_REFIT_SCOPE' (expected: none | partial | full)"
+  exit 1
 fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
   PP_BOOT_OUTER_CORES="$PP_CORES"
@@ -264,11 +284,11 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     echo "Note: using milan partition for >72 cores."
   fi
 
-  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_RUN_DECODE=$PP_RUN_DECODE,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
+  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_REFIT_SCOPE=$PP_BOOT_REFIT_SCOPE,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_RUN_DECODE=$PP_RUN_DECODE,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
-  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER kde_variants=$PP_KDE_VARIANT_MODE decode=$PP_RUN_DECODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE kde_variants=$PP_KDE_VARIANT_MODE decode=$PP_RUN_DECODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -296,7 +316,7 @@ echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
-echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
+echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual} decode=$PP_RUN_DECODE"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo ""
@@ -492,6 +512,7 @@ else
 fi
 export OK_RUN_BOOTSTRAP_ATE=true
 export OK_BOOT_N_REPS="$PP_BOOT_REPS"
+export OK_BOOT_REFIT_SCOPE="$PP_BOOT_REFIT_SCOPE"
 export OK_BOOT_TARGETS="$PP_BOOT_TARGETS"
 export OK_KDE_VARIANT_MODE="$PP_KDE_VARIANT_MODE"
 export OK_BOOT_SEM_INNER_ITER="$PP_BOOT_SEM_INNER"

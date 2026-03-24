@@ -1480,8 +1480,15 @@ if (!is.null(bws) && length(bws) > 0) {
 n_cty_interp <- cfg$n_counties
 ate_days_interp <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 100
 
-mu_ratio_E <- bt(E_par,"mu") / bc(E_par,"mu")
-mu_ratio_F <- bt(F_par,"mu") / bc(F_par,"mu")
+safe_mu_ratio <- function(par) {
+  if (is.null(par)) return(NA_real_)
+  denom <- safe_bc(par, "mu")
+  numer <- safe_bt(par, "mu")
+  if (!is.finite(denom) || is.na(denom) || abs(denom) < .Machine$double.eps) return(NA_real_)
+  numer / denom
+}
+mu_ratio_E <- safe_mu_ratio(C_par)
+mu_ratio_F <- safe_mu_ratio(D_par)
 
 total_E_1yr <- if (!is.null(fit_C_obj) && !is.null(fit_C_obj$ate)) round(mean(get_total_effect_sim(fit_C_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA
 total_F_1yr <- if (!is.null(fit_D_obj) && !is.null(fit_D_obj$ate)) round(mean(get_total_effect_sim(fit_D_obj$ate, n_tiles = n_cty_interp), na.rm=TRUE), 0) else NA

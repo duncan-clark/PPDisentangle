@@ -733,7 +733,7 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -1013,7 +1013,7 @@ fit_e <- function(init_params = biv_init_E,
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = if (OK_VERBOSE) 1 else 0
+      maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = 0
     )
   }, error = function(e) {
     cat(sprintf("  [%s] bivariate+KDE fit error: %s\n", fit_label, e$message))
@@ -2502,7 +2502,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
-              maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+              maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0
             )
           }, error = function(e) NULL)
           if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
@@ -2533,6 +2533,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             partition_processes_in = partition_processes,
             state_spaces_in = state_spaces,
             init_params_in = F_params,
+            fixed_params_in = SENSITIVITY_FIXED_PARAMS,
             background_rate_var_in = "W",
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
             verbose_in = FALSE,
