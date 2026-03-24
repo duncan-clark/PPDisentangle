@@ -483,6 +483,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    points_tile_index = NULL,
                                                    model_type = "hawkes",
                                                    ...) {
+  proposal_trace <- isTRUE(verbose) &&
+    (tolower(Sys.getenv("OK_SEM_PROPOSAL_TIMING", "true")) %in% c("1", "true", "yes", "y"))
   dat <- pp_data
   if (is.null(dat$inferred_process)) {
     dat$inferred_process <- dat$location_process
@@ -526,11 +528,16 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 
   # For bivariate ETAS, simulate jointly and compare per-process counts
   if (is_biv_etas) {
+    if (proposal_trace) {
+      cat(sprintf("    [proposal-sim] start model=etas_bivariate n_pts=%d t_window=[%.3f, %.3f]\n",
+                  nrow(dat), windowT[1], windowT[2]))
+    }
     biv_params <- dots$etas_bivariate_params
     if (is.null(biv_params)) {
       biv_params <- init_bivariate_from_independent(
         hawkes_params_control, hawkes_params_treated)
     }
+    t_sim <- proc.time()[3]
     sim_data <- generate_inhomogeneous_etas_bivariate(
       Omega = statespace, partition = partition, time_window = windowT,
       partition_processes = partition_process,
@@ -539,6 +546,11 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       state_spaces = state_spaces, filtration = filtration,
       t_trunc = dots$t_trunc
     )
+    if (proposal_trace) {
+      cat(sprintf("    [proposal-sim] generated n=%d in %.2fs (t_trunc=%s)\n",
+                  nrow(sim_data), proc.time()[3] - t_sim,
+                  ifelse(is.null(dots$t_trunc), "none", as.character(signif(as.numeric(dots$t_trunc), 6)))))
+    }
     if (nrow(sim_data) > 0L && any(sim_data$t <= windowT[1])) {
       sim_data <- sim_data[sim_data$t > windowT[1], , drop = FALSE]
     }
@@ -577,6 +589,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     thin_control <- 0
     sim_inds <- numeric(0)
   } else {
+    if (proposal_trace) {
+      cat(sprintf("    [proposal-sim] start model=%s(control-only)\n",
+                  ifelse(is_etas, "etas", "hawkes")))
+    }
     gen_args <- list(
       Omega = statespace, partition = partition, time_window = windowT,
       partition_processes = partition_process,
@@ -592,7 +608,12 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     }
     extra <- dots[!names(dots) %in% c("m0", "beta_gr", "mag_pool")]
     gen_args <- c(gen_args, extra)
+    t_sim_ctrl <- proc.time()[3]
     sim_data <- do.call(gen_fn, gen_args)
+    if (proposal_trace) {
+      cat(sprintf("    [proposal-sim] control-side generated n=%d in %.2fs\n",
+                  nrow(sim_data), proc.time()[3] - t_sim_ctrl))
+    }
     sim_data <- sim_data[sim_data$t > windowT[1], ]
     sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
@@ -740,7 +761,16 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   }
   extra_t <- dots[!names(dots) %in% c("m0", "beta_gr", "mag_pool")]
   gen_args_t <- c(gen_args_t, extra_t)
+  if (proposal_trace) {
+    cat(sprintf("    [proposal-sim] start model=%s(treated-only)\n",
+                ifelse(is_etas, "etas", "hawkes")))
+  }
+  t_sim_treat <- proc.time()[3]
   sim_data_t <- do.call(gen_fn, gen_args_t)
+  if (proposal_trace) {
+    cat(sprintf("    [proposal-sim] treated-side generated n=%d in %.2fs\n",
+                nrow(sim_data_t), proc.time()[3] - t_sim_treat))
+  }
   sim_data_t <- sim_data_t[sim_data_t$t > windowT[1], ]
   sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition))
   where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
@@ -1015,7 +1045,8 @@ em_style_labelling <- function(pp_data,
           NULL
         }
         post_proposals <- lapply(1:n_props, function(j) {
-          simulation_labeling_hawkes_hawkes_fast(
+          t_prop <- proc.time()[3]
+          prop_out <- simulation_labeling_hawkes_hawkes_fast(
             post_data, partition = partition, partition_process = partition_processes,
             statespace = statespace, state_spaces = state_spaces,
             windowT = time_window,
@@ -1028,6 +1059,12 @@ em_style_labelling <- function(pp_data,
             points_tile_index = post_inds, filt_by_proc = filt_by_proc,
             model_type = model_type, ...
           )
+          if (verbose && sem_timing_verbose) {
+            flips_j <- sum(post_data$inferred_process != prop_out$inferred_process, na.rm = TRUE)
+            cat(sprintf("    [proposal %d/%d] done in %.2fs flips=%d\n",
+                        j, n_props, proc.time()[3] - t_prop, flips_j))
+          }
+          prop_out
         })
         # Proposals preserve post_data ordering; avoid redundant per-proposal sort.
         labelling_proposals <- lapply(post_proposals, as.data.frame)

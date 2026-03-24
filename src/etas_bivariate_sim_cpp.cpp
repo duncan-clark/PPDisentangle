@@ -1,4 +1,7 @@
 #include <Rcpp.h>
+#include <cstdlib>
+#include <cctype>
+#include <string>
 using namespace Rcpp;
 
 //' Simulate bivariate ETAS offspring via BFS branching
@@ -45,6 +48,20 @@ List sim_etas_bivariate_children_cpp(
   bool do_trunc = (t_trunc > 0.0);
   bool use_gr = (beta_gr > 0.0);
   int pool_n = mag_pool.size();
+  int progress_every = 10000;
+  bool progress_verbose = false;
+  const char* env_prog = std::getenv("OK_SIM_PROGRESS_VERBOSE");
+  if (env_prog != NULL) {
+    std::string s(env_prog);
+    for (size_t i = 0; i < s.size(); ++i) s[i] = std::tolower(s[i]);
+    progress_verbose = (s == "1" || s == "true" || s == "yes" || s == "y");
+  }
+  const char* env_step = std::getenv("OK_SIM_PROGRESS_EVERY");
+  if (env_step != NULL) {
+    int step = std::atoi(env_step);
+    if (step > 0) progress_every = step;
+  }
+  int next_progress = progress_every;
 
   double cdf_max = do_trunc ?
     (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
@@ -132,6 +149,16 @@ List sim_etas_bivariate_children_cpp(
         out_x.push_back(new_x); out_y.push_back(new_y);
         out_t.push_back(new_t); out_m.push_back(new_mag);
         out_p.push_back(child);
+        if (progress_verbose) {
+          int n_now = static_cast<int>(out_p.size());
+          if (n_now >= next_progress) {
+            Rcpp::Rcout << "got to " << next_progress
+                        << " simulated offspring points"
+                        << " (queue=" << q_x.size()
+                        << ", head=" << head << ")\n";
+            next_progress += progress_every;
+          }
+        }
       }
     }
   }
