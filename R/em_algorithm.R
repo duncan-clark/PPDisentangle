@@ -377,7 +377,8 @@ adaptive_SEM <- function(pp_data,
           hawkes_params_control = hawkes_params_control,
           hawkes_params_treated = t_params[[length(t_params)]],
           change_factor = adaptive_control$change_factor,
-          filtration = pre, proximity_weight = 0, verbose = FALSE,
+          filtration = pre, proximity_weight = 0,
+          verbose = isTRUE(adaptive_control$verbose),
           model_type = model_type, ...
         )
       })

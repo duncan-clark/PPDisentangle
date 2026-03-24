@@ -859,6 +859,8 @@ em_style_labelling <- function(pp_data,
                                temporal_weight = 0,
                                temporal_scale_days = NULL,
                                ...) {
+  sem_timing_verbose <- tolower(Sys.getenv("OK_SEM_TIMING_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
+  sem_proposal_verbose <- tolower(Sys.getenv("OK_SEM_PROPOSAL_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
   dots <- list(...)
   base_change_factor <- as.numeric(change_factor)
   if (!is.finite(base_change_factor) || base_change_factor <= 0) {
@@ -974,6 +976,10 @@ em_style_labelling <- function(pp_data,
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
     t_samp <- proc.time()[3]
+    if (verbose && sem_timing_verbose) {
+      cat(sprintf("  [Iter %d/%d] start: n_post=%d change_factor=%.4f\n",
+                  i, iter, nrow(post_data), current_change_factor))
+    }
     trigger_explore <- (no_flip_streak > 0L) && ((no_flip_streak %% stagnation_trigger_every) == 0L)
     proposal_change_factor <- if (trigger_explore) {
       min(base_change_factor, current_change_factor * 2)
@@ -1015,7 +1021,8 @@ em_style_labelling <- function(pp_data,
             windowT = time_window,
             hawkes_params_control = control_par[[length(control_par)]],
             hawkes_params_treated = treated_par[[length(treated_par)]],
-            change_factor = proposal_change_factor, filtration = pre_for_proposals, verbose = FALSE,
+            change_factor = proposal_change_factor, filtration = pre_for_proposals,
+            verbose = isTRUE(verbose) && isTRUE(sem_proposal_verbose),
             temporal_weight = temporal_weight,
             temporal_scale_days = temporal_scale_days,
             points_tile_index = post_inds, filt_by_proc = filt_by_proc,
@@ -1050,6 +1057,11 @@ em_style_labelling <- function(pp_data,
     }))
     t_samp <- proc.time()[3] - t_samp
     total_sampling <- total_sampling + t_samp
+    if (verbose && sem_timing_verbose) {
+      cat(sprintf("  [Iter %d/%d] proposals ready: n=%d sampling=%.2fs\n",
+                  i, iter, length(labelling_proposals), t_samp))
+      cat(sprintf("  [Iter %d/%d] likelihood evaluation starting\n", i, iter))
+    }
 
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
@@ -1177,11 +1189,17 @@ em_style_labelling <- function(pp_data,
     best_metric_idx <- which.max(metric)
     t_lik <- proc.time()[3] - t_lik
     total_likelihood <- total_likelihood + t_lik
+    if (verbose && sem_timing_verbose) {
+      cat(sprintf("  [Iter %d/%d] likelihood evaluation done: %.2fs\n", i, iter, t_lik))
+    }
 
     if (!is.null(param_update_cadence)) {
       if ((i %% param_update_cadence) == 0 | i == iter) {
         t_param_start <- proc.time()[3]
         if (verbose) print("Updating Parameters")
+        if (verbose && sem_timing_verbose) {
+          cat(sprintf("  [Iter %d/%d] parameter update starting\n", i, iter))
+        }
 
         mml_post <- max_metric_labelling
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
