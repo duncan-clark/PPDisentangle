@@ -23,6 +23,7 @@ PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E}"
 PP_KDE_VARIANT_MODE="${PP_KDE_VARIANT_MODE:-}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
 PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
+PP_RUN_DECODE="${PP_RUN_DECODE:-0}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
@@ -42,9 +43,11 @@ SETUP_TEST_EXPLICIT=0
 BOOT_REPS_EXPLICIT=0
 BOOT_OUTER_CORES_EXPLICIT=0
 RUN_SENS_EXPLICIT=0
+RUN_DECODE_EXPLICIT=0
 if [ -n "$PP_BOOT_REPS" ]; then BOOT_REPS_EXPLICIT=1; fi
 if [ -n "$PP_BOOT_OUTER_CORES" ]; then BOOT_OUTER_CORES_EXPLICIT=1; fi
 if [ "$PP_RUN_SENSITIVITY" != "auto" ]; then RUN_SENS_EXPLICIT=1; fi
+if [ "$PP_RUN_DECODE" != "0" ]; then RUN_DECODE_EXPLICIT=1; fi
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -62,6 +65,7 @@ while [[ "$#" -gt 0 ]]; do
     --kde-variant-mode) PP_KDE_VARIANT_MODE="$2"; KDE_VARIANT_MODE_EXPLICIT=1; shift 2 ;;
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
     --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
+    --run-decode) PP_RUN_DECODE="$2"; RUN_DECODE_EXPLICIT=1; shift 2 ;;
     --setup-test) PP_SETUP_TEST=1; SETUP_TEST_EXPLICIT=1; shift ;;
     --mem) PP_MEM="$2"; MEM_EXPLICIT=1; shift 2 ;;
     --time) PP_TIME="$2"; shift 2 ;;
@@ -86,6 +90,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
+      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
       ;;
     quick)
@@ -102,6 +107,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
       ;;
     test|setup-test)
@@ -116,6 +122,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=64G; fi
       ;;
     default)
@@ -132,6 +139,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       ;;
     long|full|big)
@@ -148,6 +156,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       ;;
     *)
@@ -213,6 +222,16 @@ if [ "$PP_RUN_SENSITIVITY" = "auto" ]; then
   fi
 fi
 
+decode_norm="$(echo "$PP_RUN_DECODE" | tr '[:upper:]' '[:lower:]')"
+if [ "$decode_norm" = "1" ] || [ "$decode_norm" = "true" ] || [ "$decode_norm" = "yes" ] || [ "$decode_norm" = "y" ]; then
+  PP_RUN_DECODE=1
+elif [ "$decode_norm" = "0" ] || [ "$decode_norm" = "false" ] || [ "$decode_norm" = "no" ] || [ "$decode_norm" = "n" ] || [ -z "$decode_norm" ]; then
+  PP_RUN_DECODE=0
+else
+  echo "Invalid --run-decode '$PP_RUN_DECODE' (expected: 0/1 or true/false)"
+  exit 1
+fi
+
 # ----------------------------
 # Paths
 # ----------------------------
@@ -245,11 +264,11 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     echo "Note: using milan partition for >72 cores."
   fi
 
-  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
+  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_RUN_DECODE=$PP_RUN_DECODE,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
-  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER kde_variants=$PP_KDE_VARIANT_MODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER kde_variants=$PP_KDE_VARIANT_MODE decode=$PP_RUN_DECODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -278,7 +297,7 @@ echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
-echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
+echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual} decode=$PP_RUN_DECODE"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo ""
 
@@ -490,8 +509,7 @@ fi
 if [ -n "${PP_MODE:-}" ]; then
   mode_norm_runtime="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
   if [ "$mode_norm_runtime" = "very-quick" ] || [ "$mode_norm_runtime" = "veryquick" ] || [ "$mode_norm_runtime" = "smoke" ]; then
-    echo "Applying very-quick profile: decode+sens+bootstrap enabled with 2 inner iterations."
-    export OK_RUN_DECODE=true
+    echo "Applying very-quick profile: sensitivity+bootstrap enabled with 2 inner iterations."
     export OK_DECODE_ITER=2
     export OK_RUN_SENSITIVITY=true
     export OK_RUN_BOOTSTRAP_ATE=true
@@ -508,7 +526,7 @@ if [ -n "${PP_MODE:-}" ]; then
 fi
 
 if [ "$PP_SETUP_TEST" = "1" ]; then
-  echo "Applying setup-test profile: main SEM inner=100, decode inner=2, sensitivity inner=2, bootstrap inner=2, sequential bootstrap."
+  echo "Applying setup-test profile: main SEM inner=100, sensitivity inner=2, bootstrap inner=2, sequential bootstrap."
   export OK_SEM_INNER_ITER=100
   export OK_SEM_N_ITER=1
   export OK_DECODE_ITER=2
@@ -524,8 +542,11 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
     export OK_RUN_SENSITIVITY=false
   fi
   export OK_BOOT_TARGETS="E,F"
-  export OK_RUN_DECODE=true
   export OK_RUN_BOOTSTRAP_ATE=true
+fi
+
+if [ "$PP_RUN_DECODE" = "1" ]; then
+  export OK_RUN_DECODE=true
 fi
 
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/oklahoma/oklahoma_analysis.R" 2>&1
