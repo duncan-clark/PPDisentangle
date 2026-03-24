@@ -433,6 +433,24 @@ adaptive_SEM <- function(pp_data,
     } else {
       outer_maxit
     }
+    outer_optim_trace <- if (!is.null(adaptive_control$outer_optim_trace)) {
+      suppressWarnings(as.integer(adaptive_control$outer_optim_trace))
+    } else if (isTRUE(verbose)) {
+      1L
+    } else {
+      0L
+    }
+    if (!is.finite(outer_optim_trace) || is.na(outer_optim_trace) || outer_optim_trace < 0L) {
+      outer_optim_trace <- 0L
+    }
+    outer_optim_report <- if (!is.null(adaptive_control$outer_optim_report)) {
+      suppressWarnings(as.integer(adaptive_control$outer_optim_report))
+    } else {
+      10L
+    }
+    if (!is.finite(outer_optim_report) || is.na(outer_optim_report) || outer_optim_report < 1L) {
+      outer_optim_report <- 10L
+    }
 
     if (is_biv_etas) {
       # --- Bivariate ETAS: joint optimization over 15-parameter vector ---
@@ -502,6 +520,8 @@ adaptive_SEM <- function(pp_data,
         cat("\n--- Outer optim: bivariate ETAS (joint) ---\n")
         cat(sprintf("  starting par: %s\n",
                     paste(biv_names, signif(biv_par, 5), sep = "=", collapse = "  ")))
+        cat(sprintf("  optim control: trace=%d report=%d maxit=%d\n",
+                    outer_optim_trace, outer_optim_report, outer_maxit_biv))
       }
 
       t0 <- proc.time()[3]
@@ -512,7 +532,12 @@ adaptive_SEM <- function(pp_data,
         }
         biv_res <- tryCatch(
           optim(par = biv_par[biv_fr_idx], fn = biv_wrap, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 0, maxit = outer_maxit_biv)),
+                control = list(
+                  fnscale = -1,
+                  trace = outer_optim_trace,
+                  REPORT = outer_optim_report,
+                  maxit = outer_maxit_biv
+                )),
           error = function(e) {
             cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
             list(par = biv_par[biv_fr_idx], convergence = -99)
@@ -522,7 +547,12 @@ adaptive_SEM <- function(pp_data,
       } else {
         biv_res <- tryCatch(
           optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 0, maxit = outer_maxit_biv)),
+                control = list(
+                  fnscale = -1,
+                  trace = outer_optim_trace,
+                  REPORT = outer_optim_report,
+                  maxit = outer_maxit_biv
+                )),
           error = function(e) {
             cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
             list(par = biv_par, convergence = -99)
@@ -594,6 +624,8 @@ adaptive_SEM <- function(pp_data,
         cat(sprintf("  [%s] starting par: %s\n", process_label,
                     paste(all_names, signif(full_vec, 5), sep = "=", collapse = "  ")))
         cat(sprintf("  [%s] starting lik: %s\n", process_label, signif(obj_fn(full_vec), 6)))
+        cat(sprintf("  [%s] optim control: trace=%d report=%d maxit=%d\n",
+                    process_label, outer_optim_trace, outer_optim_report, outer_maxit))
       }
 
       t0 <- proc.time()[3]
@@ -604,7 +636,12 @@ adaptive_SEM <- function(pp_data,
         }
         res <- tryCatch(
           optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 0, maxit = outer_maxit)),
+                control = list(
+                  fnscale = -1,
+                  trace = outer_optim_trace,
+                  REPORT = outer_optim_report,
+                  maxit = outer_maxit
+                )),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec[fr_idx], convergence = -99) }
         )
         out_par <- full_vec; out_par[fr_idx] <- res$par
@@ -612,7 +649,12 @@ adaptive_SEM <- function(pp_data,
       } else {
         res <- tryCatch(
           optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
-                control = list(fnscale = -1, trace = 0, maxit = outer_maxit)),
+                control = list(
+                  fnscale = -1,
+                  trace = outer_optim_trace,
+                  REPORT = outer_optim_report,
+                  maxit = outer_maxit
+                )),
           error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec, convergence = -99) }
         )
       }
