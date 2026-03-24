@@ -947,7 +947,11 @@ kde_variant_specs <- list(
   control_only_fixed = list(
     id = "control_only_fixed",
     label = "control-only productivity fixed",
-    fixed_params = as.list(PRE_CTRL_BOOT_PARAMS[c("mu_0", "A_00", "alpha_m_00")])
+    fixed_params = list(
+      mu_0 = PRE_CTRL_BOOT_PARAMS$mu,
+      A_00 = PRE_CTRL_BOOT_PARAMS$A,
+      alpha_m_00 = PRE_CTRL_BOOT_PARAMS$alpha_m
+    )
   ),
   productivity_free = list(
     id = "productivity_free",
@@ -1032,77 +1036,179 @@ fit_f <- function(init_params = biv_init_F,
 }
 
 primary_kde_spec <- kde_variant_specs[[kde_primary_variant_id]]
-cat("\n--- Step 4F+4B dispatch: running B and E in parallel ---\n")
-be_jobs <- c("B", "E")
-run_be_job <- function(tag) {
+cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
+fit_jobs_all <- list(
+  list(kind = "A_hom_naive", variant_id = NA_character_),
+  list(kind = "B_hom_sem", variant_id = NA_character_)
+)
+for (vid in kde_variant_ids) {
+  fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "C_kde_naive", variant_id = vid)
+  fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "D_kde_sem", variant_id = vid)
+}
+run_all_fit_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
   out <- NULL
-  if (tag == "B") {
+  fit_label <- NA_character_
+  kind <- job$kind
+  vid <- job$variant_id
+  if (kind == "A_hom_naive") {
+    fit_label <- "Fit A"
     out <- fit_b()
-  } else if (tag == "E") {
+  } else if (kind == "B_hom_sem") {
+    fit_label <- "Fit B"
+    out <- fit_d()
+  } else if (kind == "C_kde_naive") {
+    spec <- kde_variant_specs[[vid]]
+    fit_label <- kde_fit_label("E", vid)
     out <- fit_e(
       init_params = biv_init_E,
-      fixed_params = primary_kde_spec$fixed_params,
-      fit_label = kde_fit_label("E", primary_kde_spec$id)
+      fixed_params = spec$fixed_params,
+      fit_label = fit_label
+    )
+  } else if (kind == "D_kde_sem") {
+    spec <- kde_variant_specs[[vid]]
+    fit_label <- kde_fit_label("F", vid)
+    out <- fit_f(
+      init_params = biv_init_F,
+      fixed_params = spec$fixed_params,
+      fit_label = fit_label
     )
   }
-  list(tag = tag, obj = out, elapsed = proc.time()[["elapsed"]] - t0)
+  list(
+    kind = kind,
+    variant_id = vid,
+    fit_label = fit_label,
+    obj = out,
+    elapsed = proc.time()[["elapsed"]] - t0
+  )
 }
-if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1L) {
-  fit_be_out <- run_parallel(
-    be_jobs, run_be_job,
-    cores = min(length(be_jobs), N_CORES),
-    label = "fit-be-jobs"
+if (N_CORES > 1L && length(fit_jobs_all) > 1L) {
+  fit_all_out <- run_parallel(
+    fit_jobs_all, run_all_fit_job,
+    cores = min(length(fit_jobs_all), N_CORES),
+    label = "fit-all-county-jobs"
   )
 } else {
-  fit_be_out <- lapply(be_jobs, run_be_job)
+  fit_all_out <- lapply(fit_jobs_all, run_all_fit_job)
 }
-fit_be_out <- as.list(fit_be_out)
-get_be_obj <- function(tag) {
-  idx <- which(vapply(fit_be_out, function(z) identical(z$tag, tag), logical(1)))
+fit_all_out <- as.list(fit_all_out)
+get_fit_out <- function(kind, variant_id = NA_character_) {
+  idx <- which(vapply(
+    fit_all_out,
+    function(z) identical(z$kind, kind) && identical(as.character(z$variant_id), as.character(variant_id)),
+    logical(1)
+  ))
   if (length(idx) < 1L) return(NULL)
-  fit_be_out[[idx[1]]]$obj
+  fit_all_out[[idx[1]]]
 }
-get_be_elapsed <- function(tag) {
-  idx <- which(vapply(fit_be_out, function(z) identical(z$tag, tag), logical(1)))
-  if (length(idx) < 1L) return(NA_real_)
-  fit_be_out[[idx[1]]]$elapsed
-}
-fitB <- get_be_obj("B")
-fitE <- get_be_obj("E")
-fit_B_elapsed <- get_be_elapsed("B")
-fit_E_elapsed <- get_be_elapsed("E")
+
+fit_A_row <- get_fit_out("A_hom_naive")
+fit_B_row <- get_fit_out("B_hom_sem")
+fitB <- if (!is.null(fit_A_row)) fit_A_row$obj else NULL
+semD <- if (!is.null(fit_B_row)) fit_B_row$obj else NULL
+fit_B_elapsed <- if (!is.null(fit_A_row)) fit_A_row$elapsed else NA_real_
+fit_D_elapsed <- if (!is.null(fit_B_row)) fit_B_row$elapsed else NA_real_
 add_timing_row(
   stage = "fit_B_naive_bivariate",
   elapsed_sec = fit_B_elapsed,
   status = if (!is.null(fitB)) "ok" else "failed",
-  detail = "elapsed from B/E joint dispatch"
+  detail = "elapsed from unified fit dispatch"
 )
 add_timing_row(
-  stage = "fit_E_naive_bivariate_kde",
-  elapsed_sec = fit_E_elapsed,
-  status = if (!is.null(fitE)) "ok" else "failed",
-  detail = "elapsed from B/E joint dispatch"
+  stage = "fit_D_sem_bivariate",
+  elapsed_sec = fit_D_elapsed,
+  status = if (!is.null(semD)) "ok" else "failed",
+  detail = "elapsed from unified fit dispatch"
 )
-semF <- NULL
 
 B_params <- if (!is.null(fitB)) fitB$par else biv_init
 B_loglik <- if (!is.null(fitB)) fitB$value else NA_real_
-cat("  Fit B params:", paste(biv_names, round(B_params, 4), sep = "=", collapse = ", "), "\n")
-E_params <- if (!is.null(fitE)) fitE$par else biv_init_E
-E_loglik <- if (!is.null(fitE)) fitE$value else NA_real_
-cat("  Fit C params:", paste(biv_names, round(E_params, 4), sep = "=", collapse = ", "), "\n")
-kde_variant_fits$E[[kde_primary_variant_id]] <- list(
-  id = primary_kde_spec$id,
-  label = primary_kde_spec$label,
-  fixed_params = primary_kde_spec$fixed_params,
-  fit = fitE,
-  params = E_params,
-  objective = E_loglik
-)
-F_params <- biv_init_F
-F_ctrl <- A_ctrl
-F_treat <- A_treat
+cat("  Fit A params:", paste(biv_names, round(B_params, 4), sep = "=", collapse = ", "), "\n")
+if (!is.null(semD)) {
+  D_params <- semD$etas_bivariate_params
+  D_ctrl <- semD$hawkes_params_control
+  D_treat <- semD$hawkes_params_treated
+  cat("  Fit B params:", paste(biv_names, round(D_params, 4), sep = "=", collapse = ", "), "\n")
+} else {
+  D_params <- biv_init_D
+  D_ctrl <- A_ctrl
+  D_treat <- A_treat
+  cat("  Fit B failed, falling back to naive initialization.\n")
+}
+
+fitE <- NULL
+semF <- NULL
+for (vid in kde_variant_ids) {
+  spec <- kde_variant_specs[[vid]]
+  row_e <- get_fit_out("C_kde_naive", vid)
+  row_f <- get_fit_out("D_kde_sem", vid)
+  fitE_var <- if (!is.null(row_e)) row_e$obj else NULL
+  semF_var <- if (!is.null(row_f)) row_f$obj else NULL
+  E_var_params <- if (!is.null(fitE_var)) fitE_var$par else biv_init_E
+  E_var_loglik <- if (!is.null(fitE_var)) fitE_var$value else NA_real_
+  F_var_params <- if (!is.null(semF_var)) semF_var$etas_bivariate_params else biv_init_F
+  F_var_ctrl <- if (!is.null(semF_var)) semF_var$hawkes_params_control else A_ctrl
+  F_var_treat <- if (!is.null(semF_var)) semF_var$hawkes_params_treated else A_treat
+
+  kde_variant_fits$E[[vid]] <- list(
+    id = spec$id,
+    label = spec$label,
+    fixed_params = spec$fixed_params,
+    fit = fitE_var,
+    params = E_var_params,
+    objective = E_var_loglik
+  )
+  kde_variant_fits$F[[vid]] <- list(
+    id = spec$id,
+    label = spec$label,
+    fixed_params = spec$fixed_params,
+    fit = semF_var,
+    params = F_var_params,
+    hawkes_params_control = F_var_ctrl,
+    hawkes_params_treated = F_var_treat
+  )
+
+  if (identical(vid, kde_primary_variant_id)) {
+    fitE <- fitE_var
+    semF <- semF_var
+    E_params <- E_var_params
+    E_loglik <- E_var_loglik
+    F_params <- F_var_params
+    F_ctrl <- F_var_ctrl
+    F_treat <- F_var_treat
+    add_timing_row(
+      stage = "fit_E_naive_bivariate_kde",
+      elapsed_sec = if (!is.null(row_e)) row_e$elapsed else NA_real_,
+      status = if (!is.null(fitE_var)) "ok" else "failed",
+      detail = "elapsed from unified fit dispatch"
+    )
+    add_timing_row(
+      stage = "fit_F_sem_bivariate_kde",
+      elapsed_sec = if (!is.null(row_f)) row_f$elapsed else NA_real_,
+      status = if (!is.null(semF_var)) "ok" else "failed",
+      detail = "elapsed from unified fit dispatch"
+    )
+    cat("  Fit C params:", paste(biv_names, round(E_var_params, 4), sep = "=", collapse = ", "), "\n")
+    cat("  Fit D params:", paste(biv_names, round(F_var_params, 4), sep = "=", collapse = ", "), "\n")
+  } else {
+    add_timing_row(
+      stage = sprintf("fit_E_kde_variant_%s", spec$id),
+      elapsed_sec = if (!is.null(row_e)) row_e$elapsed else NA_real_,
+      status = if (!is.null(fitE_var)) "ok" else "failed",
+      detail = "elapsed from unified fit dispatch"
+    )
+    add_timing_row(
+      stage = sprintf("fit_F_kde_variant_%s", spec$id),
+      elapsed_sec = if (!is.null(row_f)) row_f$elapsed else NA_real_,
+      status = if (!is.null(semF_var)) "ok" else "failed",
+      detail = "elapsed from unified fit dispatch"
+    )
+    cat(sprintf("  %s params: %s\n", kde_fit_label("E", spec$id),
+                paste(biv_names, round(E_var_params, 4), sep = "=", collapse = ", ")))
+    cat(sprintf("  %s params: %s\n", kde_fit_label("F", spec$id),
+                paste(biv_names, round(F_var_params, 4), sep = "=", collapse = ", ")))
+  }
+}
 
 # ============================================================================
 # 4H. Decode: hard-EM / coordinate-ascent relabelling (county only)
@@ -1340,149 +1446,60 @@ G_params <- NULL
 H_params <- NULL
 pp_post_decode_G <- NULL
 pp_post_decode_H <- NULL
-cat("\n--- Step 4I/4J: SEM (B/D) + Decode (I/J) joint fit dispatch ---\n")
-fit_jobs <- c("D", "F")
-if (RUN_DECODE) fit_jobs <- c(fit_jobs, "G", "H")
-
-run_one_fit_job <- function(tag) {
-  t0 <- proc.time()[["elapsed"]]
-  # Debug mode: force identical RNG streams across B/D/I/J fit jobs.
-  if (isTRUE(OK_IDENTICAL_RANDOMNESS)) {
-    if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
-      set.seed(OK_GLOBAL_SEED)
+cat("\n--- Step 4I/4J: Decode (I/J) dispatch ---\n")
+if (RUN_DECODE) {
+  decode_jobs <- c("I", "J")
+  run_one_decode_job <- function(tag) {
+    t0 <- proc.time()[["elapsed"]]
+    out_obj <- NULL
+    if (tag == "I") {
+      out_obj <- decode_hard_em_bivariate(
+        start_labelling = pp_all,
+        init_params = B_params,
+        label = "Decode-SEM Biv",
+        background_rate_var = NULL,
+        decode_iter = DECODE_ITER,
+        icm_passes = 1L,
+        icm_cadence = 25L,
+        target_update_cadence = 5L,
+        implied_sims = 1L
+      )
+    } else if (tag == "J") {
+      out_obj <- decode_hard_em_bivariate(
+        start_labelling = pp_all_bg,
+        init_params = E_params,
+        label = "Decode-SEM Biv+KDE",
+        background_rate_var = "W",
+        decode_iter = DECODE_ITER,
+        icm_passes = 1L,
+        icm_cadence = 25L,
+        target_update_cadence = 5L,
+        implied_sims = 1L
+      )
     }
+    list(tag = tag, obj = out_obj, elapsed = proc.time()[["elapsed"]] - t0)
+  }
+  if (N_CORES > 1L && length(decode_jobs) > 1L) {
+    decode_out <- run_parallel(
+      decode_jobs, run_one_decode_job,
+      cores = min(length(decode_jobs), N_CORES),
+      label = "decode-jobs"
+    )
   } else {
-    fit_seed_base <- suppressWarnings(as.integer(Sys.getenv("OK_FIT_JOB_SEED_BASE", Sys.getenv("SLURM_JOB_ID", ""))))
-    if (is.finite(fit_seed_base) && !is.na(fit_seed_base)) {
-      tag_offset <- match(tag, c("D", "F", "G", "H"))
-      if (is.na(tag_offset)) tag_offset <- 0L
-      set.seed(fit_seed_base + as.integer(tag_offset))
-    }
+    decode_out <- lapply(decode_jobs, run_one_decode_job)
   }
-  out_obj <- NULL
-  if (tag == "D") {
-    out_obj <- fit_d()
+  decode_out <- as.list(decode_out)
+  get_decode_job <- function(tag) {
+    idx <- which(vapply(decode_out, function(z) identical(z$tag, tag), logical(1)))
+    if (length(idx) < 1L) return(NULL)
+    decode_out[[idx[1]]]
   }
-  if (tag == "F" && is.null(out_obj)) {
-    out_obj <- fit_f(
-      init_params = biv_init_F,
-      fixed_params = primary_kde_spec$fixed_params,
-      fit_label = kde_fit_label("F", primary_kde_spec$id)
-    )
-  }
-  if (tag == "G" && is.null(out_obj)) {
-    out_obj <- decode_hard_em_bivariate(
-      start_labelling = pp_all,
-      init_params = B_params,
-      label = "Decode-SEM Biv",
-      background_rate_var = NULL,
-      decode_iter = DECODE_ITER,
-      icm_passes = 1L,
-      icm_cadence = 25L,
-      target_update_cadence = 5L,
-      implied_sims = 1L
-    )
-  }
-  if (tag == "H" && is.null(out_obj)) {
-    out_obj <- decode_hard_em_bivariate(
-      start_labelling = pp_all_bg,
-      init_params = E_params,
-      label = "Decode-SEM Biv+KDE",
-      background_rate_var = "W",
-      decode_iter = DECODE_ITER,
-      icm_passes = 1L,
-      icm_cadence = 25L,
-      target_update_cadence = 5L,
-      implied_sims = 1L
-    )
-  }
-  elapsed <- proc.time()[["elapsed"]] - t0
-  list(tag = tag, obj = out_obj, elapsed = elapsed)
-}
-
-if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(fit_jobs) > 1) {
-  # Single outer parallel layer only.
-  fit_out <- run_parallel(
-    fit_jobs, run_one_fit_job,
-    cores = min(length(fit_jobs), N_CORES),
-    label = "fit-jobs"
-  )
-} else {
-  fit_out <- lapply(fit_jobs, run_one_fit_job)
-}
-fit_out <- as.list(fit_out)
-
-get_fit_job <- function(tag) {
-  idx <- which(vapply(fit_out, function(z) identical(z$tag, tag), logical(1)))
-  if (length(idx) == 0) return(NULL)
-  fit_out[[idx[1]]]$obj
-}
-
-get_fit_elapsed <- function(tag) {
-  idx <- which(vapply(fit_out, function(z) identical(z$tag, tag), logical(1)))
-  if (length(idx) == 0) return(NA_real_)
-  fit_out[[idx[1]]]$elapsed
-}
-
-semD <- get_fit_job("D")
-semF <- get_fit_job("F")
-if (RUN_DECODE) {
-  decode_D <- get_fit_job("G")
-  decode_F <- get_fit_job("H")
-}
-
-if (!is.null(semD)) {
-  D_params <- semD$etas_bivariate_params
-  D_ctrl <- semD$hawkes_params_control
-  D_treat <- semD$hawkes_params_treated
-  cat("  SEM-biv completed in", round(semD$time, 1), "s\n")
-  cat("  Bivariate params:", paste(biv_names, round(D_params, 4), sep = "=", collapse = ", "), "\n")
-} else {
-  D_params <- biv_init_D
-  D_ctrl <- A_ctrl
-  D_treat <- A_treat
-  cat("  SEM-biv failed, falling back to naive.\n")
-}
-fit_D_elapsed <- get_fit_elapsed("D")
-add_timing_row(
-  stage = "fit_D_sem_bivariate",
-  elapsed_sec = fit_D_elapsed,
-  status = if (!is.null(semD)) "ok" else "failed",
-  detail = "elapsed from joint fit dispatch"
-)
-
-if (!is.null(semF)) {
-  F_params <- semF$etas_bivariate_params
-  F_ctrl <- semF$hawkes_params_control
-  F_treat <- semF$hawkes_params_treated
-  cat("  SEM-biv+KDE completed in", round(semF$time, 1), "s\n")
-  cat("  Bivariate params:", paste(biv_names, round(F_params, 4), sep = "=", collapse = ", "), "\n")
-} else {
-  F_params <- biv_init_F
-  F_ctrl <- A_ctrl
-  F_treat <- A_treat
-  cat("  SEM-biv+KDE failed, falling back to naive.\n")
-}
-fit_F_elapsed <- get_fit_elapsed("F")
-add_timing_row(
-  stage = "fit_F_sem_bivariate_kde",
-  elapsed_sec = fit_F_elapsed,
-  status = if (!is.null(semF)) "ok" else "failed",
-  detail = "elapsed from joint fit dispatch"
-)
-kde_variant_fits$F[[kde_primary_variant_id]] <- list(
-  id = primary_kde_spec$id,
-  label = primary_kde_spec$label,
-  fixed_params = primary_kde_spec$fixed_params,
-  fit = semF,
-  params = F_params,
-  hawkes_params_control = F_ctrl,
-  hawkes_params_treated = F_treat
-)
-
-if (RUN_DECODE) {
-  decode_D_time <- get_fit_elapsed("G")
-  decode_F_time <- get_fit_elapsed("H")
+  row_i <- get_decode_job("I")
+  row_j <- get_decode_job("J")
+  decode_D <- if (!is.null(row_i)) row_i$obj else NULL
+  decode_F <- if (!is.null(row_j)) row_j$obj else NULL
+  decode_D_time <- if (!is.null(row_i)) row_i$elapsed else NA_real_
+  decode_F_time <- if (!is.null(row_j)) row_j$elapsed else NA_real_
   if (is.finite(decode_D_time)) cat("  Decode-biv completed in", round(decode_D_time, 1), "s\n")
   if (is.finite(decode_F_time)) cat("  Decode-biv+KDE completed in", round(decode_F_time, 1), "s\n")
   G_params <- if (!is.null(decode_D)) decode_D$params else NULL
@@ -1493,102 +1510,14 @@ if (RUN_DECODE) {
     stage = "fit_G_decode_bivariate",
     elapsed_sec = decode_D_time,
     status = if (!is.null(decode_D)) "ok" else "failed",
-    detail = "elapsed from joint fit dispatch"
+    detail = "elapsed from decode dispatch"
   )
   add_timing_row(
     stage = "fit_H_decode_bivariate_kde",
     elapsed_sec = decode_F_time,
     status = if (!is.null(decode_F)) "ok" else "failed",
-    detail = "elapsed from joint fit dispatch"
+    detail = "elapsed from decode dispatch"
   )
-}
-
-extra_kde_variant_ids <- setdiff(kde_variant_ids, kde_primary_variant_id)
-if (length(extra_kde_variant_ids) > 0L) {
-  cat("\n--- Step 4K: Additional county KDE variant fits (E/F) ---\n")
-  variant_jobs <- unlist(lapply(extra_kde_variant_ids, function(vid) {
-    list(
-      list(variant_id = vid, fit_type = "E"),
-      list(variant_id = vid, fit_type = "F")
-    )
-  }), recursive = FALSE)
-  run_one_variant_job <- function(job) {
-    t0 <- proc.time()[["elapsed"]]
-    vid <- job$variant_id
-    fit_type <- job$fit_type
-    spec <- kde_variant_specs[[vid]]
-    fit_obj <- NULL
-    if (fit_type == "E") {
-      fit_obj <- fit_e(
-        init_params = biv_init_E,
-        fixed_params = spec$fixed_params,
-        fit_label = kde_fit_label("E", spec$id)
-      )
-    } else {
-      fit_obj <- fit_f(
-        init_params = biv_init_F,
-        fixed_params = spec$fixed_params,
-        fit_label = kde_fit_label("F", spec$id)
-      )
-    }
-    list(
-      variant_id = vid,
-      fit_type = fit_type,
-      fit = fit_obj,
-      elapsed = proc.time()[["elapsed"]] - t0
-    )
-  }
-  if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1L && length(variant_jobs) > 1L) {
-    variant_out <- run_parallel(
-      variant_jobs, run_one_variant_job,
-      cores = min(length(variant_jobs), N_CORES),
-      label = "kde-variant-fits"
-    )
-  } else {
-    variant_out <- lapply(variant_jobs, run_one_variant_job)
-  }
-  for (res in variant_out) {
-    spec <- kde_variant_specs[[res$variant_id]]
-    if (res$fit_type == "E") {
-      fitE_var <- res$fit
-      E_var_params <- if (!is.null(fitE_var)) fitE_var$par else biv_init_E
-      E_var_loglik <- if (!is.null(fitE_var)) fitE_var$value else NA_real_
-      kde_variant_fits$E[[res$variant_id]] <- list(
-        id = spec$id,
-        label = spec$label,
-        fixed_params = spec$fixed_params,
-        fit = fitE_var,
-        params = E_var_params,
-        objective = E_var_loglik
-      )
-      add_timing_row(
-        stage = sprintf("fit_E_kde_variant_%s", spec$id),
-        elapsed_sec = res$elapsed,
-        status = if (!is.null(fitE_var)) "ok" else "failed"
-      )
-      cat("    E params:", paste(biv_names, round(E_var_params, 4), sep = "=", collapse = ", "), "\n")
-    } else {
-      semF_var <- res$fit
-      F_var_params <- if (!is.null(semF_var)) semF_var$etas_bivariate_params else biv_init_F
-      F_var_ctrl <- if (!is.null(semF_var)) semF_var$hawkes_params_control else A_ctrl
-      F_var_treat <- if (!is.null(semF_var)) semF_var$hawkes_params_treated else A_treat
-      kde_variant_fits$F[[res$variant_id]] <- list(
-        id = spec$id,
-        label = spec$label,
-        fixed_params = spec$fixed_params,
-        fit = semF_var,
-        params = F_var_params,
-        hawkes_params_control = F_var_ctrl,
-        hawkes_params_treated = F_var_treat
-      )
-      add_timing_row(
-        stage = sprintf("fit_F_kde_variant_%s", spec$id),
-        elapsed_sec = res$elapsed,
-        status = if (!is.null(semF_var)) "ok" else "failed"
-      )
-      cat("    F params:", paste(biv_names, round(F_var_params, 4), sep = "=", collapse = ", "), "\n")
-    }
-  }
 }
 
 # ============================================================================
