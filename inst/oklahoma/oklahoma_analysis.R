@@ -120,9 +120,9 @@ SEM_T_TRUNC_DAYS_USER <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_
 if (!is.finite(SEM_T_TRUNC_DAYS_USER) || is.na(SEM_T_TRUNC_DAYS_USER) || SEM_T_TRUNC_DAYS_USER <= 0) {
   SEM_T_TRUNC_DAYS_USER <- NA_real_
 }
-SEM_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_REL", "0.95")))
+SEM_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_REL", "0.05")))
 if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 0 || SEM_T_TRUNC_REL >= 1) {
-  SEM_T_TRUNC_REL <- 0.95
+  SEM_T_TRUNC_REL <- 0.05
 }
 SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
 SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_pre50"
