@@ -394,6 +394,20 @@ add_timing_row <- function(stage, elapsed_sec, status = "ok", detail = NA_charac
     stringsAsFactors = FALSE
   )
 }
+mem_snapshot <- function() {
+  gc_mb <- tryCatch(sum(gc(verbose = FALSE)[, 2], na.rm = TRUE), error = function(e) NA_real_)
+  rss_mb <- tryCatch({
+    status_path <- "/proc/self/status"
+    if (!file.exists(status_path)) return(NA_real_)
+    vmrss <- grep("^VmRSS:", readLines(status_path, warn = FALSE), value = TRUE)
+    if (length(vmrss) < 1L) return(NA_real_)
+    kb <- suppressWarnings(as.numeric(gsub("[^0-9]", "", vmrss[1])))
+    if (!is.finite(kb) || is.na(kb)) NA_real_ else kb / 1024
+  }, error = function(e) NA_real_)
+  sprintf("rss=%.1fMB gc_heap=%.1fMB",
+          ifelse(is.finite(rss_mb), rss_mb, NA_real_),
+          ifelse(is.finite(gc_mb), gc_mb, NA_real_))
+}
 
 # ============================================================================
 # 1. Data loading
@@ -822,7 +836,8 @@ run_sem_fit <- function(pp_data_in,
                         verbose_in = DF_VERBOSE,
                         label = "SEM") {
   t0 <- proc.time()[["elapsed"]]
-  cat(sprintf("  [%s] start (n=%d, pid=%d)\n", label, nrow(pp_data_in), Sys.getpid()))
+  cat(sprintf("  [%s] start (n=%d, pid=%d, mem=%s)\n",
+              label, nrow(pp_data_in), Sys.getpid(), mem_snapshot()))
   run_one_sem <- function(pp_data_sem, init_params_sem, fixed_params_sem, sem_label) {
     adaptive_SEM(
       pp_data = pp_data_sem, partition = partition_in,
@@ -858,7 +873,8 @@ run_sem_fit <- function(pp_data_in,
     init_params_sem <- init_params_in
     if (SEM_WARMSTART_FIXED) {
       fixed_all <- as.list(init_params_in)
-      cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters...\n", label))
+      cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters (mem=%s)...\n",
+                  label, mem_snapshot()))
       warm_sem <- run_one_sem(pp_data_sem, init_params_sem, fixed_all, paste0(label, " warm"))
       if (!is.null(warm_sem) && !is.null(warm_sem$adaptive$adaptive_labelling)) {
         pp_data_sem <- warm_sem$adaptive$adaptive_labelling
@@ -873,7 +889,7 @@ run_sem_fit <- function(pp_data_in,
     NULL
   })
   t1 <- proc.time()[["elapsed"]]
-  cat(sprintf("  [%s] done in %.1fs\n", label, t1 - t0))
+  cat(sprintf("  [%s] done in %.1fs (mem=%s)\n", label, t1 - t0, mem_snapshot()))
   out
 }
 
@@ -1124,8 +1140,8 @@ run_all_fit_job <- function(job) {
   fit_label <- NA_character_
   kind <- job$kind
   vid <- job$variant_id
-  cat(sprintf("    [fit-job:%s/%s] start pid=%d\n",
-              kind, ifelse(is.na(vid), "base", vid), Sys.getpid()))
+  cat(sprintf("    [fit-job:%s/%s] start pid=%d mem=%s\n",
+              kind, ifelse(is.na(vid), "base", vid), Sys.getpid(), mem_snapshot()))
   if (kind == "A_hom_naive") {
     fit_label <- "Fit A"
     out <- fit_b()
@@ -1150,9 +1166,9 @@ run_all_fit_job <- function(job) {
     )
   }
   elapsed <- proc.time()[["elapsed"]] - t0
-  cat(sprintf("    [fit-job:%s/%s] done in %.1fs status=%s\n",
+  cat(sprintf("    [fit-job:%s/%s] done in %.1fs status=%s mem=%s\n",
               kind, ifelse(is.na(vid), "base", vid), elapsed,
-              ifelse(is.null(out), "failed", "ok")))
+              ifelse(is.null(out), "failed", "ok"), mem_snapshot()))
   list(
     kind = kind,
     variant_id = vid,
@@ -1531,7 +1547,7 @@ if (RUN_DECODE) {
   run_one_decode_job <- function(tag) {
     t0 <- proc.time()[["elapsed"]]
     out_obj <- NULL
-    cat(sprintf("    [decode-job:%s] start pid=%d\n", tag, Sys.getpid()))
+    cat(sprintf("    [decode-job:%s] start pid=%d mem=%s\n", tag, Sys.getpid(), mem_snapshot()))
     if (tag == "I") {
       out_obj <- decode_hard_em_bivariate(
         start_labelling = pp_all,
@@ -1558,8 +1574,8 @@ if (RUN_DECODE) {
       )
     }
     elapsed <- proc.time()[["elapsed"]] - t0
-    cat(sprintf("    [decode-job:%s] done in %.1fs status=%s\n",
-                tag, elapsed, ifelse(is.null(out_obj), "failed", "ok")))
+    cat(sprintf("    [decode-job:%s] done in %.1fs status=%s mem=%s\n",
+                tag, elapsed, ifelse(is.null(out_obj), "failed", "ok"), mem_snapshot()))
     list(tag = tag, obj = out_obj, elapsed = elapsed)
   }
   if (N_CORES > 1L && length(decode_jobs) > 1L) {
@@ -1962,8 +1978,8 @@ cat(sprintf("  Sensitivity jobs: %d bandwidth + %d partition = %d total\n",
 
 run_sensitivity_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
-  cat(sprintf("    [sensitivity:%s/%s] start pid=%d\n",
-              as.character(job$type), as.character(job$id), Sys.getpid()))
+  cat(sprintf("    [sensitivity:%s/%s] start pid=%d mem=%s\n",
+              as.character(job$type), as.character(job$id), Sys.getpid(), mem_snapshot()))
   if (identical(job$type, "bandwidth")) {
     out <- run_kde_bandwidth_fit(job$payload)
   } else if (identical(job$type, "partition")) {
@@ -1972,9 +1988,9 @@ run_sensitivity_job <- function(job) {
     out <- NULL
   }
   elapsed <- proc.time()[["elapsed"]] - t0
-  cat(sprintf("    [sensitivity:%s/%s] done in %.1fs status=%s\n",
+  cat(sprintf("    [sensitivity:%s/%s] done in %.1fs status=%s mem=%s\n",
               as.character(job$type), as.character(job$id), elapsed,
-              ifelse(is.null(out), "failed", "ok")))
+              ifelse(is.null(out), "failed", "ok"), mem_snapshot()))
   list(type = job$type, id = job$id, out = out)
 }
 
@@ -2542,7 +2558,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
 
   run_boot_rep <- function(rep_id) {
     t0_rep <- proc.time()[["elapsed"]]
-    cat(sprintf("    [bootstrap:rep-%d] start pid=%d\n", as.integer(rep_id), Sys.getpid()))
+    cat(sprintf("    [bootstrap:rep-%d] start pid=%d mem=%s\n",
+                as.integer(rep_id), Sys.getpid(), mem_snapshot()))
     if (isTRUE(OK_BOOT_IDENTICAL_RANDOMNESS)) {
       if (!is.na(BOOT_SEED)) {
         set.seed(BOOT_SEED)
@@ -2640,8 +2657,9 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     } else {
       0L
     }
-    cat(sprintf("    [bootstrap:rep-%d] done in %.1fs successful_targets=%d/%d\n",
-                as.integer(rep_id), elapsed_rep, as.integer(ok_count), as.integer(length(ok_targets))))
+    cat(sprintf("    [bootstrap:rep-%d] done in %.1fs successful_targets=%d/%d mem=%s\n",
+                as.integer(rep_id), elapsed_rep, as.integer(ok_count), as.integer(length(ok_targets)),
+                mem_snapshot()))
     out
   }
 

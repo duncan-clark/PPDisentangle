@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --time=72:00:00
-#SBATCH --mem=48G
+#SBATCH --mem=96G
 
 set -euo pipefail
 
@@ -101,7 +101,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=192G; fi
       ;;
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
@@ -119,7 +119,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=192G; fi
       ;;
     test|setup-test)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=1; fi
@@ -135,7 +135,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=64G; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=128G; fi
       ;;
     default)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
@@ -154,7 +154,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=400G; fi
       ;;
     long|full|big)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
@@ -173,7 +173,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=400G; fi
       ;;
     *)
       echo "Unknown --mode '$PP_MODE' (expected: very-quick | quick | default | test | long)"
@@ -183,7 +183,7 @@ if [ -n "$PP_MODE" ]; then
 fi
 
 MEM_PER_CORE_GB="${PP_MEM_PER_CORE_GB:-2}"
-MEM_MAX_GB="${PP_MEM_MAX_GB:-200}"
+MEM_MAX_GB="${PP_MEM_MAX_GB:-400}"
 MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
 if [ -z "$PP_MEM" ]; then
   MEM_GB=$(( PP_CORES * MEM_PER_CORE_GB ))
