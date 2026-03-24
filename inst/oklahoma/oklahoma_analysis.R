@@ -236,7 +236,8 @@ run_parallel <- function(X, FUN, cores, label = "job") {
                 label, proc.time()[["elapsed"]] - t0))
     return(out)
   }
-  cl <- parallel::makePSOCKcluster(cores_use)
+  # Stream worker stdout/stderr into the main job log for progress visibility.
+  cl <- parallel::makePSOCKcluster(cores_use, outfile = "")
   on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
   if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
     parallel::clusterExport(cl, varlist = c("REPO_DIR"), envir = .GlobalEnv)
@@ -1051,6 +1052,8 @@ run_all_fit_job <- function(job) {
   fit_label <- NA_character_
   kind <- job$kind
   vid <- job$variant_id
+  cat(sprintf("    [fit-job:%s/%s] start pid=%d\n",
+              kind, ifelse(is.na(vid), "base", vid), Sys.getpid()))
   if (kind == "A_hom_naive") {
     fit_label <- "Fit A"
     out <- fit_b()
@@ -1074,12 +1077,16 @@ run_all_fit_job <- function(job) {
       fit_label = fit_label
     )
   }
+  elapsed <- proc.time()[["elapsed"]] - t0
+  cat(sprintf("    [fit-job:%s/%s] done in %.1fs status=%s\n",
+              kind, ifelse(is.na(vid), "base", vid), elapsed,
+              ifelse(is.null(out), "failed", "ok")))
   list(
     kind = kind,
     variant_id = vid,
     fit_label = fit_label,
     obj = out,
-    elapsed = proc.time()[["elapsed"]] - t0
+    elapsed = elapsed
   )
 }
 if (N_CORES > 1L && length(fit_jobs_all) > 1L) {
@@ -1452,6 +1459,7 @@ if (RUN_DECODE) {
   run_one_decode_job <- function(tag) {
     t0 <- proc.time()[["elapsed"]]
     out_obj <- NULL
+    cat(sprintf("    [decode-job:%s] start pid=%d\n", tag, Sys.getpid()))
     if (tag == "I") {
       out_obj <- decode_hard_em_bivariate(
         start_labelling = pp_all,
@@ -1477,7 +1485,10 @@ if (RUN_DECODE) {
         implied_sims = 1L
       )
     }
-    list(tag = tag, obj = out_obj, elapsed = proc.time()[["elapsed"]] - t0)
+    elapsed <- proc.time()[["elapsed"]] - t0
+    cat(sprintf("    [decode-job:%s] done in %.1fs status=%s\n",
+                tag, elapsed, ifelse(is.null(out_obj), "failed", "ok")))
+    list(tag = tag, obj = out_obj, elapsed = elapsed)
   }
   if (N_CORES > 1L && length(decode_jobs) > 1L) {
     decode_out <- run_parallel(
@@ -1876,6 +1887,9 @@ cat(sprintf("  Sensitivity jobs: %d bandwidth + %d partition = %d total\n",
             length(kde_bandwidth_specs), length(all_partitions), length(sensitivity_jobs)))
 
 run_sensitivity_job <- function(job) {
+  t0 <- proc.time()[["elapsed"]]
+  cat(sprintf("    [sensitivity:%s/%s] start pid=%d\n",
+              as.character(job$type), as.character(job$id), Sys.getpid()))
   if (identical(job$type, "bandwidth")) {
     out <- run_kde_bandwidth_fit(job$payload)
   } else if (identical(job$type, "partition")) {
@@ -1883,6 +1897,10 @@ run_sensitivity_job <- function(job) {
   } else {
     out <- NULL
   }
+  elapsed <- proc.time()[["elapsed"]] - t0
+  cat(sprintf("    [sensitivity:%s/%s] done in %.1fs status=%s\n",
+              as.character(job$type), as.character(job$id), elapsed,
+              ifelse(is.null(out), "failed", "ok")))
   list(type = job$type, id = job$id, out = out)
 }
 
@@ -2446,6 +2464,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   }
 
   run_boot_rep <- function(rep_id) {
+    t0_rep <- proc.time()[["elapsed"]]
+    cat(sprintf("    [bootstrap:rep-%d] start pid=%d\n", as.integer(rep_id), Sys.getpid()))
     if (isTRUE(OK_BOOT_IDENTICAL_RANDOMNESS)) {
       if (!is.na(BOOT_SEED)) {
         set.seed(BOOT_SEED)
@@ -2534,6 +2554,15 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     )
     if (length(rm_vars) > 0L) rm(list = rm_vars)
     invisible(gc(verbose = FALSE))
+    elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
+    ok_targets <- names(out)[names(out) %in% c("E", "F")]
+    ok_count <- if (length(ok_targets) > 0) {
+      sum(vapply(out[ok_targets], function(x) !is.null(x) && isTRUE(x$ok), logical(1)))
+    } else {
+      0L
+    }
+    cat(sprintf("    [bootstrap:rep-%d] done in %.1fs successful_targets=%d/%d\n",
+                as.integer(rep_id), elapsed_rep, as.integer(ok_count), as.integer(length(ok_targets))))
     out
   }
 
