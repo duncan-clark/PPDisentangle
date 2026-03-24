@@ -505,6 +505,29 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   dots <- list(...)
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
+  sem_prop_branching_max <- suppressWarnings(as.numeric(
+    Sys.getenv("OK_SEM_PROPOSAL_BRANCHING_MAX", "0.98")
+  ))
+  if (!is.finite(sem_prop_branching_max) || sem_prop_branching_max <= 0) {
+    sem_prop_branching_max <- NA_real_
+  }
+  beta_guard <- suppressWarnings(as.numeric(dots$beta_gr))
+  if (!is.finite(beta_guard) || beta_guard <= 0) beta_guard <- 1.0
+  spectral_radius_proxy <- function(par_obj, beta_gr) {
+    get_num <- function(nm, default = NA_real_) {
+      v <- suppressWarnings(as.numeric(par_obj[[nm]]))
+      if (length(v) < 1L || !is.finite(v[[1]])) return(default)
+      v[[1]]
+    }
+    b00 <- get_num("A_00", 0) * exp(get_num("alpha_m_00", 0) / beta_gr)
+    b11 <- get_num("A_11", 0) * exp(get_num("alpha_m_11", 0) / beta_gr)
+    b01 <- get_num("A_01", 0) * exp(get_num("alpha_m_01", 0) / beta_gr)
+    b10 <- get_num("A_10", 0) * exp(get_num("alpha_m_10", 0) / beta_gr)
+    if (!all(is.finite(c(b00, b11, b01, b10)))) return(Inf)
+    disc <- (b00 - b11)^2 + 4 * b01 * b10
+    if (!is.finite(disc) || disc < 0) return(Inf)
+    0.5 * ((b00 + b11) + sqrt(disc))
+  }
   if (!is.finite(temporal_weight)) temporal_weight <- 0
   temporal_weight <- min(max(temporal_weight, 0), 1)
   if (is.null(temporal_scale_days) || !is.finite(temporal_scale_days) || temporal_scale_days <= 0) {
@@ -536,6 +559,21 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     if (is.null(biv_params)) {
       biv_params <- init_bivariate_from_independent(
         hawkes_params_control, hawkes_params_treated)
+    }
+    if (is.finite(sem_prop_branching_max)) {
+      rho_hat <- spectral_radius_proxy(biv_params, beta_guard)
+      if (is.finite(rho_hat) && rho_hat > sem_prop_branching_max) {
+        scale_fac <- sem_prop_branching_max / rho_hat
+        for (nm in c("A_00", "A_11", "A_01", "A_10")) {
+          biv_params[[nm]] <- as.numeric(biv_params[[nm]]) * scale_fac
+        }
+        if (proposal_trace) {
+          cat(sprintf(
+            "    [proposal-sim] branching guard: rho=%.3f > %.3f, scaling A by %.4f\n",
+            rho_hat, sem_prop_branching_max, scale_fac
+          ))
+        }
+      }
     }
     t_sim <- proc.time()[3]
     sim_data <- generate_inhomogeneous_etas_bivariate(
