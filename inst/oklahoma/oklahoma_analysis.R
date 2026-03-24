@@ -112,11 +112,23 @@ if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_IN
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_CHANGE_FACTOR <- 0.01
 SEM_STAGNATION_TRIGGER_EVERY <- 50
-SEM_TEMPORAL_WEIGHT <- if (QUICK_CHECK) 0.2 else if (TEST_MODE) 0.4 else 0.6
+SEM_TEMPORAL_WEIGHT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_TEMPORAL_WEIGHT", "0")))
+if (!is.finite(SEM_TEMPORAL_WEIGHT) || is.na(SEM_TEMPORAL_WEIGHT)) SEM_TEMPORAL_WEIGHT <- 0
+SEM_TEMPORAL_WEIGHT <- min(max(SEM_TEMPORAL_WEIGHT, 0), 1)
 SEM_TEMPORAL_SCALE_DAYS <- 15
+SEM_T_TRUNC_DAYS_USER <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "")))
+if (!is.finite(SEM_T_TRUNC_DAYS_USER) || is.na(SEM_T_TRUNC_DAYS_USER) || SEM_T_TRUNC_DAYS_USER <= 0) {
+  SEM_T_TRUNC_DAYS_USER <- NA_real_
+}
+SEM_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_REL", "0.95")))
+if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 0 || SEM_T_TRUNC_REL >= 1) {
+  SEM_T_TRUNC_REL <- 0.95
+}
+SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
+SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_pre50"
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
-SEM_OUTER_MAXIT_BIV   <- if (QUICK_CHECK) 30 else if (TEST_MODE) 100 else 60
+SEM_OUTER_MAXIT_BIV   <- 1000
 env_sem_outer_maxit <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_MAXIT", "")))
 if (!is.na(env_sem_outer_maxit) && env_sem_outer_maxit > 0L) {
   SEM_OUTER_MAXIT <- env_sem_outer_maxit
@@ -140,7 +152,7 @@ KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
-DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
+DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 # Structural terms are fixed downstream after first-half pre-treatment calibration.
@@ -335,7 +347,16 @@ run_parallel <- function(X, FUN, cores, label = "job") {
   out
 }
 
-mode_label <- if (QUICK_CHECK) "QUICK_CHECK" else if (TEST_MODE) "TEST" else "FULL"
+pp_mode_env <- trimws(Sys.getenv("PP_MODE", ""))
+mode_label <- if (nzchar(pp_mode_env)) {
+  toupper(pp_mode_env)
+} else if (QUICK_CHECK) {
+  "QUICK_CHECK"
+} else if (TEST_MODE) {
+  "TEST"
+} else {
+  "FULL"
+}
 cat("=== Oklahoma County-Based ETAS Analysis ===\n")
 cat(sprintf("Mode: %s | SEM iters: %d | Change factor: %.3f | Cores: %d\n",
             mode_label, SEM_N_ITER, SEM_CHANGE_FACTOR,
@@ -346,6 +367,13 @@ cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
+sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
+  as.character(signif(SEM_T_TRUNC_DAYS, 4))
+} else {
+  sprintf("auto(from pre-50 estimate, rel=%.3f)", SEM_T_TRUNC_REL)
+}
+cat(sprintf("SEM proposal/event t_trunc (days): %s\n", sem_t_trunc_banner))
+cat(sprintf("SEM temporal relabel weight: %.3f\n", SEM_TEMPORAL_WEIGHT))
 cat(sprintf("B/D SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
@@ -576,6 +604,29 @@ if (is.null(PRE_CTRL_BOOT_PARAMS)) {
                                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
                                D = STRUCT_INIT$D, gamma = STRUCT_INIT$gamma, q = STRUCT_INIT$q)
 }
+compute_temporal_trunc_from_pre <- function(c_param, p_param, rel_level = SEM_T_TRUNC_REL) {
+  c_param <- suppressWarnings(as.numeric(c_param))
+  p_param <- suppressWarnings(as.numeric(p_param))
+  rel_level <- suppressWarnings(as.numeric(rel_level))
+  if (!is.finite(c_param) || !is.finite(p_param) || !is.finite(rel_level) ||
+      c_param <= 0 || p_param <= 0 || rel_level <= 0 || rel_level >= 1) {
+    return(NULL)
+  }
+  # Solve ((t + c) / c)^(-p) = rel_level for t.
+  t_cut <- c_param * ((rel_level)^(-1 / p_param) - 1)
+  if (!is.finite(t_cut) || t_cut <= 0) return(NULL)
+  as.numeric(t_cut)
+}
+if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
+  SEM_T_TRUNC_DAYS <- compute_temporal_trunc_from_pre(PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, SEM_T_TRUNC_REL)
+  if (is.null(SEM_T_TRUNC_DAYS)) {
+    SEM_T_TRUNC_SOURCE <- "none"
+  } else {
+    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_pre50(rel=%.3f)", SEM_T_TRUNC_REL)
+  }
+} else {
+  SEM_T_TRUNC_SOURCE <- "env"
+}
 
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
@@ -584,6 +635,9 @@ cat(sprintf("  Pre-treatment full ETAS init: mu=%.4f, A=%.4f, alpha_m=%.4f, c=%.
             PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
+cat(sprintf("  SEM t_trunc resolved from %s: %s days\n",
+            SEM_T_TRUNC_SOURCE,
+            if (is.null(SEM_T_TRUNC_DAYS)) "none" else as.character(signif(SEM_T_TRUNC_DAYS, 5))))
 
 apply_pre_init_etas <- function(start_par) {
   out <- start_par
@@ -733,7 +787,8 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0,
+      t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
 }
@@ -762,6 +817,7 @@ run_sem_fit <- function(pp_data_in,
                         background_rate_var_in = NULL,
                         use_pre_history_for_biv_in = TRUE,
                         treated_background_zero_before_in = 0,
+                        sem_t_trunc_in = SEM_T_TRUNC_DAYS,
                         sem_inner_iter_in = SEM_INNER_ITER,
                         verbose_in = DF_VERBOSE,
                         label = "SEM") {
@@ -793,7 +849,8 @@ run_sem_fit <- function(pp_data_in,
       etas_bivariate_params = init_params_sem,
       background_rate_var = background_rate_var_in,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
-      treated_background_zero_before = treated_background_zero_before_in
+      treated_background_zero_before = treated_background_zero_before_in,
+      t_trunc = sem_t_trunc_in
     )
   }
   out <- tryCatch({
@@ -1013,7 +1070,8 @@ fit_e <- function(init_params = biv_init_E,
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = 0,
+      t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) {
     cat(sprintf("  [%s] bivariate+KDE fit error: %s\n", fit_label, e$message))
@@ -1581,7 +1639,8 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+      t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit C error: %s\n", bw_label, e$message))
@@ -1837,7 +1896,8 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
-      maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0
+      maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+      t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
@@ -2290,6 +2350,9 @@ results_pre_bootstrap <- list(
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
+    SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
+    SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
@@ -2502,7 +2565,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
-              maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0
+              maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+              t_trunc = SEM_T_TRUNC_DAYS
             )
           }, error = function(e) NULL)
           if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
@@ -2943,6 +3007,9 @@ results <- list(
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
+    SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
+    SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,

@@ -508,6 +508,21 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   if (is.null(temporal_scale_days) || !is.finite(temporal_scale_days) || temporal_scale_days <= 0) {
     temporal_scale_days <- max(1, as.numeric(windowT[2] - windowT[1]) / 5)
   }
+  use_precompute <- (proximity_weight > 0 || temporal_weight > 0)
+  inds_int <- as.integer(inds)
+  tile_members <- NULL
+  if (use_precompute) {
+    valid_idx <- which(is.finite(inds_int) & inds_int >= 1L & inds_int <= partition$n)
+    tile_members <- split(valid_idx, factor(inds_int[valid_idx], levels = seq_len(partition$n)))
+  }
+  time_weight_base <- NULL
+  if (use_precompute && temporal_weight > 0) {
+    dt_all <- pmax(dat$t - windowT[1], 0)
+    tw_all <- exp(-dt_all / temporal_scale_days)
+    if (all(is.finite(tw_all)) && sum(tw_all) > 0) {
+      time_weight_base <- tw_all
+    }
+  }
 
   # For bivariate ETAS, simulate jointly and compare per-process counts
   if (is_biv_etas) {
@@ -524,12 +539,24 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       state_spaces = state_spaces, filtration = filtration,
       t_trunc = dots$t_trunc
     )
-    sim_data <- sim_data[sim_data$t > windowT[1], ]
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
-    sim_proc <- if ("process" %in% names(sim_data)) sim_data$process else
-                  ifelse(sim_data$process_id == 0, "control", "treated")
-    sim_ctrl_inds <- sim_inds[sim_proc == "control"]
-    sim_treat_inds <- sim_inds[sim_proc == "treated"]
+    if (nrow(sim_data) > 0L && any(sim_data$t <= windowT[1])) {
+      sim_data <- sim_data[sim_data$t > windowT[1], , drop = FALSE]
+    }
+    sim_inds <- if (!is.null(sim_data$tile_index)) {
+      as.numeric(sim_data$tile_index)
+    } else {
+      as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    }
+    if ("process_id" %in% names(sim_data)) {
+      sim_pid <- as.integer(sim_data$process_id)
+      sim_ctrl_inds <- sim_inds[sim_pid == 0L]
+      sim_treat_inds <- sim_inds[sim_pid == 1L]
+    } else {
+      sim_proc <- if ("process" %in% names(sim_data)) sim_data$process else
+                    ifelse(sim_data$process_id == 0, "control", "treated")
+      sim_ctrl_inds <- sim_inds[sim_proc == "control"]
+      sim_treat_inds <- sim_inds[sim_proc == "treated"]
+    }
 
     where_to_thin <- tabulate(control_inds, nbins = partition$n) -
                      tabulate(sim_ctrl_inds, nbins = partition$n)
@@ -600,17 +627,28 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 
     attractor_idx <- which(dat$inferred_process == target_label)
     has_attractors <- length(attractor_idx) > 0
+    geom_weight_raw <- NULL
 
     if (has_attractors) {
       win_box <- owin(range(dat$x), range(dat$y))
       X_attract <- ppp(dat$x[attractor_idx], dat$y[attractor_idx], window = win_box, check = FALSE)
+      if (use_precompute && proximity_weight > 0) {
+        relabel_idx <- which(dat$inferred_process == relabel_label)
+        if (length(relabel_idx) > 0) {
+          X_relabel <- ppp(dat$x[relabel_idx], dat$y[relabel_idx], window = win_box, check = FALSE)
+          dists_all <- nncross(X_relabel, X_attract)$dist
+          geom_weight_raw <- numeric(n_pts)
+          geom_weight_raw[relabel_idx] <- 1 / (dists_all + 1e-4)
+        }
+      }
     }
 
-    for (i in 1:length(partition_thins)) {
+    for (i in seq_len(length(partition_thins))) {
       n_thin <- partition_thins[i]
       if (length(n_thin) == 0 || is.na(n_thin) || n_thin <= 0) next
 
-      in_tile_idx <- which(inds == i)
+      in_tile_idx <- if (use_precompute) tile_members[[i]] else which(inds == i)
+      if (is.null(in_tile_idx) || length(in_tile_idx) == 0) next
       candidates <- in_tile_idx[dat$inferred_process[in_tile_idx] == relabel_label]
       if (length(in_tile_idx) == 1L && n_thin > 0) {
         changes <- in_tile_idx
@@ -622,13 +660,22 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       sampling_weights <- NULL
       base_weights <- NULL
       if (has_attractors && length(candidates) > 0 && proximity_weight > 0) {
-        X_cand <- ppp(dat$x[candidates], dat$y[candidates], window = win_box, check = FALSE)
-        dists <- nncross(X_cand, X_attract)$dist
-        geom_weights <- 1 / (dists + 1e-4)
-        if (sum(geom_weights) > 0) {
-          geom_weights <- geom_weights / sum(geom_weights)
+        if (use_precompute && !is.null(geom_weight_raw)) {
+          geom_weights <- geom_weight_raw[candidates]
+          if (all(is.finite(geom_weights)) && sum(geom_weights) > 0) {
+            geom_weights <- geom_weights / sum(geom_weights)
+          } else {
+            geom_weights <- rep(1 / length(candidates), length(candidates))
+          }
         } else {
-          geom_weights <- rep(1 / length(candidates), length(candidates))
+          X_cand <- ppp(dat$x[candidates], dat$y[candidates], window = win_box, check = FALSE)
+          dists <- nncross(X_cand, X_attract)$dist
+          geom_weights <- 1 / (dists + 1e-4)
+          if (sum(geom_weights) > 0) {
+            geom_weights <- geom_weights / sum(geom_weights)
+          } else {
+            geom_weights <- rep(1 / length(candidates), length(candidates))
+          }
         }
         uni_weights <- rep(1 / length(candidates), length(candidates))
         base_weights <- (proximity_weight * geom_weights) + ((1 - proximity_weight) * uni_weights)
@@ -637,8 +684,12 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       }
 
       if (length(candidates) > 0 && temporal_weight > 0) {
-        dt <- pmax(dat$t[candidates] - windowT[1], 0)
-        time_weights <- exp(-dt / temporal_scale_days)
+        time_weights <- if (use_precompute && !is.null(time_weight_base)) {
+          time_weight_base[candidates]
+        } else {
+          dt <- pmax(dat$t[candidates] - windowT[1], 0)
+          exp(-dt / temporal_scale_days)
+        }
         if (!any(is.finite(time_weights)) || sum(time_weights, na.rm = TRUE) <= 0) {
           time_weights <- rep(1 / length(candidates), length(candidates))
         } else {
@@ -714,10 +765,11 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     if (sum(probs_t) > 0) {
       probs_t <- probs_t / sum(probs_t)
       partition_thins_t <- rmultinom(1, n_total_t, prob = probs_t)
-      for (i in 1:length(partition_thins_t)) {
+      for (i in seq_len(length(partition_thins_t))) {
         n_thin <- partition_thins_t[i]
         if (length(n_thin) == 0 || is.na(n_thin) || n_thin <= 0) next
-        in_tile_idx <- which(inds == i)
+        in_tile_idx <- if (use_precompute) tile_members[[i]] else which(inds == i)
+        if (is.null(in_tile_idx) || length(in_tile_idx) == 0) next
         candidates_t <- in_tile_idx[dat$inferred_process[in_tile_idx] == relabel_label_t]
         if (length(in_tile_idx) == 1L && n_thin > 0) {
           changes <- in_tile_idx
@@ -727,8 +779,12 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
         if (length(candidates_t) == 0) next
         sampling_weights_t <- NULL
         if (temporal_weight > 0) {
-          dt_t <- pmax(dat$t[candidates_t] - windowT[1], 0)
-          tw_t <- exp(-dt_t / temporal_scale_days)
+          tw_t <- if (use_precompute && !is.null(time_weight_base)) {
+            time_weight_base[candidates_t]
+          } else {
+            dt_t <- pmax(dat$t[candidates_t] - windowT[1], 0)
+            exp(-dt_t / temporal_scale_days)
+          }
           if (all(is.finite(tw_t)) && sum(tw_t) > 0) {
             sampling_weights_t <- tw_t / sum(tw_t)
           }
@@ -827,6 +883,22 @@ em_style_labelling <- function(pp_data,
     NULL
   }
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
+  sem_outer_maxit <- if ("outer_maxit" %in% names(dots)) {
+    suppressWarnings(as.integer(dots$outer_maxit))
+  } else {
+    NA_integer_
+  }
+  if (!is.finite(sem_outer_maxit) || is.na(sem_outer_maxit) || sem_outer_maxit < 1L) {
+    sem_outer_maxit <- 1000L
+  }
+  sem_outer_maxit_biv <- if ("outer_maxit_biv" %in% names(dots)) {
+    suppressWarnings(as.integer(dots$outer_maxit_biv))
+  } else {
+    NA_integer_
+  }
+  if (!is.finite(sem_outer_maxit_biv) || is.na(sem_outer_maxit_biv) || sem_outer_maxit_biv < 1L) {
+    sem_outer_maxit_biv <- sem_outer_maxit
+  }
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
   biv_etas_params <- dots$etas_bivariate_params
@@ -896,6 +968,8 @@ em_style_labelling <- function(pp_data,
   total_param_update <- 0
   current_change_factor <- change_factor
   no_flip_streak <- 0L
+  progress_every <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PROGRESS_EVERY", "25")))
+  if (!is.finite(progress_every) || is.na(progress_every) || progress_every < 1L) progress_every <- 0L
 
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
@@ -1126,6 +1200,41 @@ em_style_labelling <- function(pp_data,
           # Parameter updates should also account for pre-treatment control history.
           mml_full <- rbind(pre_data, mml_post)
           mml_full <- mml_full[order(mml_full$t), , drop = FALSE]
+          process_id_full <- if ("inferred_process" %in% names(mml_full)) {
+            as.integer(mml_full$inferred_process == "treated")
+          } else if ("process" %in% names(mml_full)) {
+            as.integer(mml_full$process == "treated")
+          } else if ("location_process" %in% names(mml_full)) {
+            as.integer(mml_full$location_process == "treated")
+          } else {
+            rep(0L, nrow(mml_full))
+          }
+          areaS_0 <- spatstat.geom::area(control_state_space)
+          areaS_1 <- spatstat.geom::area(treated_state_space)
+          if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- 1
+          if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
+          W_0 <- rep(1.0, nrow(mml_full))
+          W_1 <- rep(1.0, nrow(mml_full))
+          W_0[inside.owin(mml_full$x, mml_full$y, treated_state_space)] <- 0
+          W_1[inside.owin(mml_full$x, mml_full$y, control_state_space)] <- 0
+          if (!is.null(background_rate_var) && background_rate_var %in% names(mml_full)) {
+            W_cov <- as.numeric(mml_full[[background_rate_var]])
+            W_cov[!is.finite(W_cov)] <- 0
+            min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+            if (!is.finite(min_pos)) min_pos <- 1e-12
+            W_cov[W_cov <= 0] <- min_pos
+            W_0 <- W_0 * W_cov
+            W_1 <- W_1 * W_cov
+          }
+          if (!is.null(treated_background_zero_before)) {
+            W_1[mml_full$t < as.numeric(treated_background_zero_before)] <- 0
+          }
+          biv_precomp <- list(
+            W_0 = W_0, W_1 = W_1,
+            areaS_0 = areaS_0, areaS_1 = areaS_1,
+            process_id = process_id_full
+          )
+          m0_full <- if ("mag" %in% names(mml_full)) min(mml_full$mag, na.rm = TRUE) else NULL
           biv_obj <- function(par15) {
             loglik_etas_bivariate(
               params = par15, realiz = mml_full,
@@ -1134,7 +1243,9 @@ em_style_labelling <- function(pp_data,
               treated_state_space = treated_state_space,
               background_rate_var = background_rate_var,
               treated_background_zero_before = treated_background_zero_before,
-              t_trunc = t_trunc
+              m0 = m0_full,
+              t_trunc = t_trunc,
+              precomp = biv_precomp
             )
           }
           if (length(fixed_idx) > 0) {
@@ -1144,14 +1255,14 @@ em_style_labelling <- function(pp_data,
             }
             biv_res <- tryCatch(
               optim(par = biv_free, fn = biv_wrap, method = "Nelder-Mead",
-                    control = list(fnscale = -1, trace = 0, maxit = 1000)),
+                    control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit_biv)),
               error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_free) }
             )
             biv_par[free_idx] <- biv_res$par
           } else {
             biv_res <- tryCatch(
               optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
-                    control = list(fnscale = -1, trace = 0, maxit = 1000)),
+                    control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit_biv)),
               error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_par) }
             )
             biv_par <- biv_res$par
@@ -1181,7 +1292,7 @@ em_style_labelling <- function(pp_data,
             }
             res <- tryCatch(
               optim(par = free_par, fn = wrap_fn, method = "Nelder-Mead",
-                    control = list(fnscale = -1, trace = 0, maxit = 1000), ...),
+                    control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit), ...),
               error = function(e) { cat("  error fitting", label, ":", e$message, "\n"); list(par = free_par) }
             )
             out <- full_vec; out[free_idx] <- res$par
@@ -1189,7 +1300,7 @@ em_style_labelling <- function(pp_data,
           } else {
             res <- tryCatch(
               optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
-                    control = list(fnscale = -1, trace = 0, maxit = 1000), ...),
+                    control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit), ...),
               error = function(e) { cat("  error fitting", label, ":", e$message, "\n"); list(par = full_vec) }
             )
           }
@@ -1235,10 +1346,10 @@ em_style_labelling <- function(pp_data,
         } # end non-bivariate param update
         total_param_update <- total_param_update + (proc.time()[3] - t_param_start)
         if (verbose) {
-          print("Estimated Hawkes Params")
+          print("Estimated model params")
           print("treated:"); print(unlist(treated_par[[length(treated_par)]]))
           print("control:"); print(unlist(control_par[[length(control_par)]]))
-          print(paste0("Updating hawkes params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
+          print(paste0("Updating model params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
         }
         current_metric_cache <- NA_real_
       }
@@ -1298,6 +1409,10 @@ em_style_labelling <- function(pp_data,
                      "): excluded starting-data proposal this iter, proposal change_factor=",
                      signif(proposal_change_factor, 4)))
       }
+    } else if (progress_every > 0L && (i == 1L || i == iter || (i %% progress_every) == 0L)) {
+      # Compact heartbeat for long runs when full SEM tracing is disabled.
+      cat(sprintf("  [SEM progress] iter=%d/%d accepted_flips=%d avg_flips=%.1f metric=%.4f change_factor=%.4f\n",
+                  i, iter, max_diff, average, metric_vec[i], current_change_factor))
     }
   }
   final_labelling <- rbind(pre_data, max_metric_labelling)

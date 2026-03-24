@@ -86,25 +86,36 @@ loglik_etas_bivariate <- function(params,
   if (is.null(m0)) m0 <- min(realiz$mag)
 
   # Build process_id vector (0 = control, 1 = treated)
-  if ("inferred_process" %in% names(realiz)) {
+  dots <- list(...)
+  precomp <- dots$precomp
+  if (!is.null(precomp) && !is.null(precomp$process_id) && length(precomp$process_id) == n) {
+    process_id <- as.integer(precomp$process_id)
+  } else if ("inferred_process" %in% names(realiz)) {
     proc_col <- realiz$inferred_process
+    if (is.character(proc_col)) {
+      process_id <- as.integer(proc_col == "treated")
+    } else {
+      process_id <- as.integer(proc_col)
+    }
   } else if ("process" %in% names(realiz)) {
     proc_col <- realiz$process
+    if (is.character(proc_col)) {
+      process_id <- as.integer(proc_col == "treated")
+    } else {
+      process_id <- as.integer(proc_col)
+    }
   } else if ("location_process" %in% names(realiz)) {
     proc_col <- realiz$location_process
+    if (is.character(proc_col)) {
+      process_id <- as.integer(proc_col == "treated")
+    } else {
+      process_id <- as.integer(proc_col)
+    }
   } else {
     stop("realiz must have an inferred_process, process, or location_process column")
   }
-  if (is.character(proc_col)) {
-    process_id <- as.integer(proc_col == "treated")
-  } else {
-    process_id <- as.integer(proc_col)
-  }
 
   # Background weights: W_0 = 0 in treated region, W_1 = 0 in control region
-  dots <- list(...)
-  precomp <- dots$precomp
-
   if (!is.null(precomp)) {
     W_0     <- precomp$W_0
     W_1     <- precomp$W_1
@@ -528,6 +539,7 @@ generate_inhomogeneous_etas_bivariate <- function(
   }
 
   tile_idx <- as.integer(tileindex(result$x, result$y, partition))
+  result$tile_index <- tile_idx
   result$location_process <- partition_processes[pmin(pmax(tile_idx, 1), length(partition_processes))]
   result$location_process[is.na(tile_idx)] <- "control"
   result$process <- ifelse(result$process_id == 0, "control", "treated")

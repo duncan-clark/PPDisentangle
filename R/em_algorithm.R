@@ -143,7 +143,8 @@ adaptive_SEM <- function(pp_data,
       temporal_weight = adaptive_control$temporal_weight,
       temporal_scale_days = adaptive_control$temporal_scale_days,
       fixed_params = adaptive_control$fixed_params,
-      verbose = TRUE,
+      # Respect caller-configured SEM verbosity instead of forcing full trace.
+      verbose = isTRUE(adaptive_control$verbose),
       model_type = model_type,
       ...
     )
