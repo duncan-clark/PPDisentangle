@@ -162,7 +162,9 @@ loglik_etas <- function(params,
 
   # Smooth stability barrier on the univariate ETAS branching ratio eta; the
   # penalty activates only when eta exceeds `stability_barrier_start`.
-  if (is.finite(stability_barrier_weight) && stability_barrier_weight > 0) {
+  barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
+  if (!is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
+  if (barrier_weight > 0) {
     beta_eff <- suppressWarnings(as.numeric(beta_gr))
     if (!is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
       mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
@@ -182,7 +184,7 @@ loglik_etas <- function(params,
     if (!is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
     excess <- max(0, eta - barrier_start)
     if (excess > 0) {
-      loglik <- loglik - stability_barrier_weight * (excess ^ barrier_power)
+      loglik <- loglik - barrier_weight * (excess ^ barrier_power)
     }
   }
   return(loglik)
