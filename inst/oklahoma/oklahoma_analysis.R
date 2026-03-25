@@ -263,7 +263,7 @@ SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
 SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
 if (!is.finite(SENS_CORES) || is.na(SENS_CORES) || SENS_CORES < 1L) SENS_CORES <- 1L
 SENS_CORES <- max(1L, min(SENS_CORES, N_CORES))
-ATE_SIM_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
+ATE_SIM_CORES_DEFAULT <- 1L
 ATE_SIM_CORES <- suppressWarnings(as.integer(ifelse(nzchar(ATE_SIM_CORES_RAW), ATE_SIM_CORES_RAW, as.character(ATE_SIM_CORES_DEFAULT))))
 if (!is.finite(ATE_SIM_CORES) || is.na(ATE_SIM_CORES) || ATE_SIM_CORES < 1L) ATE_SIM_CORES <- 1L
 ATE_SIM_CORES <- max(1L, min(ATE_SIM_CORES, N_CORES))
@@ -378,6 +378,30 @@ run_parallel <- function(X, FUN, cores, label = "job") {
     }
   )
   cat(sprintf("  [parallel:%s] done in %.1fs (psock)\n",
+              label, proc.time()[["elapsed"]] - t0))
+  out
+}
+
+run_parallel_on_cluster <- function(cl, X, FUN, label = "job") {
+  n <- length(X)
+  t0 <- proc.time()[["elapsed"]]
+  cl_size <- tryCatch(length(cl), error = function(e) NA_integer_)
+  cat(sprintf("  [parallel:%s] start: n=%d cores=%d backend=psock(reuse)\n",
+              label, n, ifelse(is.finite(cl_size), cl_size, 0L)))
+  if (n <= 1L) {
+    out <- lapply(X, FUN)
+    cat(sprintf("  [parallel:%s] done in %.1fs (sequential)\n",
+                label, proc.time()[["elapsed"]] - t0))
+    return(out)
+  }
+  out <- tryCatch(
+    parallel::parLapply(cl, X, FUN),
+    error = function(e) {
+      warning(sprintf("PSOCK(reuse) failed for %s; falling back to sequential: %s", label, e$message))
+      lapply(X, FUN)
+    }
+  )
+  cat(sprintf("  [parallel:%s] done in %.1fs (psock(reuse))\n",
               label, proc.time()[["elapsed"]] - t0))
   out
 }
@@ -2216,11 +2240,20 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
       c(c_count = length(c_sim$t), t_count = length(t_sim$t))
     }
     sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
-      run_parallel(
-        as.list(seq_len(ATE_N_SIMS)), run_one_sim,
-        cores = min(ATE_SIM_CORES, ATE_N_SIMS),
-        label = "ate-sim"
-      )
+      if (!is.null(ate_cl_reuse)) {
+        run_parallel_on_cluster(
+          ate_cl_reuse,
+          as.list(seq_len(ATE_N_SIMS)),
+          run_one_sim,
+          label = "ate-sim"
+        )
+      } else {
+        run_parallel(
+          as.list(seq_len(ATE_N_SIMS)), run_one_sim,
+          cores = min(ATE_SIM_CORES, ATE_N_SIMS),
+          label = "ate-sim"
+        )
+      }
     } else {
       lapply(seq_len(ATE_N_SIMS), run_one_sim)
     }
@@ -2277,6 +2310,38 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
          analytic = analytic,
          analytic_saved = analytic_saved)
   }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
+}
+
+ate_cl_reuse <- NULL
+ate_cl_reuse_cores <- max(1L, min(ATE_SIM_CORES, ATE_N_SIMS))
+if (PARALLEL_BACKEND == "psock" && N_CORES > 1 && ATE_N_SIMS > 1 && ate_cl_reuse_cores > 1L) {
+  cat(sprintf("  [parallel:ate-sim] initializing reusable PSOCK pool: cores=%d\n", ate_cl_reuse_cores))
+  ate_cl_reuse <- parallel::makePSOCKcluster(ate_cl_reuse_cores, outfile = "")
+  on.exit({
+    if (!is.null(ate_cl_reuse)) {
+      try(parallel::stopCluster(ate_cl_reuse), silent = TRUE)
+      ate_cl_reuse <<- NULL
+    }
+  }, add = TRUE)
+  if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
+    parallel::clusterExport(ate_cl_reuse, varlist = c("REPO_DIR"), envir = .GlobalEnv)
+  }
+  parallel::clusterEvalQ(ate_cl_reuse, {
+    suppressPackageStartupMessages({
+      library(spatstat)
+      library(sf)
+      library(tigris)
+      library(data.table)
+      library(dplyr)
+      library(ggplot2)
+      library(parallel)
+    })
+    if (exists("REPO_DIR", inherits = TRUE) && requireNamespace("pkgload", quietly = TRUE)) {
+      try(pkgload::load_all(REPO_DIR, quiet = TRUE, export_all = TRUE, helpers = FALSE, attach_testthat = FALSE),
+          silent = TRUE)
+    }
+    NULL
+  })
 }
 
 t_ate_B <- proc.time()[["elapsed"]]

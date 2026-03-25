@@ -152,6 +152,7 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
     }
   }
   thin_control <- thin_control * change_factor
+  if (!is.finite(thin_control) || is.na(thin_control)) thin_control <- 0
   if (thin_control < 0) {
     thin_control <- rpois(1, max(-thin_control, 1))
     where_to_thin <- -where_to_thin
@@ -165,9 +166,10 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
   }
   if (thin_control > 0) {
     probs <- where_to_thin
+    probs[!is.finite(probs)] <- 0
     probs <- probs - min(0, min(probs))
-    if (sum(probs) == 0) probs <- rep(1 / length(probs), length(probs))
-    probs <- probs / sum(probs)
+    if (sum(probs, na.rm = TRUE) <= 0) probs <- rep(1 / length(probs), length(probs))
+    probs <- probs / sum(probs, na.rm = TRUE)
     partition_thins <- rmultinom(1, thin_control, prob = probs)
     total_changes <- 0
     for (i in 1:length(partition_thins)) {
@@ -210,6 +212,7 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
     }
   }
   thin_treated <- thin_treated * change_factor
+  if (!is.finite(thin_treated) || is.na(thin_treated)) thin_treated <- 0
   if (thin_treated < 0) {
     thin_treated <- rpois(1, max(-thin_treated, 1))
     where_to_thin <- -where_to_thin
@@ -223,15 +226,16 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
   }
   if (thin_treated > 0) {
     probs <- where_to_thin
+    probs[!is.finite(probs)] <- 0
     probs <- probs - min(0, min(probs))
-    if (sum(probs) == 0) probs <- rep(1 / length(probs), length(probs))
-    probs <- probs / sum(probs)
+    if (sum(probs, na.rm = TRUE) <= 0) probs <- rep(1 / length(probs), length(probs))
+    probs <- probs / sum(probs, na.rm = TRUE)
     probs[control_tiles] <- 0
-    if (sum(probs) <= 0) {
+    if (sum(probs, na.rm = TRUE) <= 0) {
       thin_treated <- 0
       partition_thins <- c()
     } else {
-      probs <- probs / sum(probs)
+      probs <- probs / sum(probs, na.rm = TRUE)
       partition_thins <- rmultinom(1, thin_treated, prob = probs)
     }
     for (i in 1:length(partition_thins)) {
@@ -661,6 +665,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   } # end non-bivariate branch
 
   thin_control <- thin_control * change_factor
+  if (!is.finite(thin_control) || is.na(thin_control)) thin_control <- 0
 
   if (thin_control < 0) {
     n_total_change <- rpois(1, max(-thin_control, 1))
@@ -679,9 +684,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 
   if (n_total_change > 0) {
     probs <- where_to_thin
+    probs[!is.finite(probs)] <- 0
     probs <- probs - min(0, min(probs))
-    if (sum(probs) == 0) probs <- rep(1 / length(probs), length(probs))
-    probs <- probs / sum(probs)
+    if (sum(probs, na.rm = TRUE) <= 0) probs <- rep(1 / length(probs), length(probs))
+    probs <- probs / sum(probs, na.rm = TRUE)
     partition_thins <- rmultinom(1, n_total_change, prob = probs)
 
     attractor_idx <- which(dat$inferred_process == target_label)
@@ -814,6 +820,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
   } # end non-bivariate branch
   thin_treated <- (length(treated_inds) - length(sim_inds_t)) * change_factor
+  if (!is.finite(thin_treated) || is.na(thin_treated)) thin_treated <- 0
   if (thin_treated < 0) {
     n_total_t <- rpois(1, max(-thin_treated, 1))
     where_to_thin_t <- -where_to_thin_t
@@ -826,12 +833,13 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   }
   if (n_total_t > 0) {
     probs_t <- where_to_thin_t
+    probs_t[!is.finite(probs_t)] <- 0
     probs_t <- probs_t - min(0, min(probs_t))
-    if (sum(probs_t) == 0) probs_t <- rep(1 / length(probs_t), length(probs_t))
-    probs_t <- probs_t / sum(probs_t)
+    if (sum(probs_t, na.rm = TRUE) <= 0) probs_t <- rep(1 / length(probs_t), length(probs_t))
+    probs_t <- probs_t / sum(probs_t, na.rm = TRUE)
     probs_t[control_tiles] <- 0
-    if (sum(probs_t) > 0) {
-      probs_t <- probs_t / sum(probs_t)
+    if (sum(probs_t, na.rm = TRUE) > 0) {
+      probs_t <- probs_t / sum(probs_t, na.rm = TRUE)
       partition_thins_t <- rmultinom(1, n_total_t, prob = probs_t)
       for (i in seq_len(length(partition_thins_t))) {
         n_thin <- partition_thins_t[i]

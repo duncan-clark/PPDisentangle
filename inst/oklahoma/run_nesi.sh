@@ -516,7 +516,8 @@ export OK_MEMORY_SAFE=true
 export OK_PARALLEL_BACKEND=psock
 export OK_CORES="${JOB_CORES}"
 export OK_SENS_CORES="${JOB_CORES}"
-export OK_ATE_SIM_CORES="${JOB_CORES}"
+# Default ATE sims to single-core execution unless explicitly overridden.
+export OK_ATE_SIM_CORES="${OK_ATE_SIM_CORES:-${PP_ATE_SIM_CORES:-1}}"
 export OK_BOOT_OUTER_CAP_MEMSAFE="${JOB_CORES}"
 export OK_RUN_DECODE=false
 export OK_VERBOSE=false
