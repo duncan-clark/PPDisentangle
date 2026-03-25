@@ -687,24 +687,62 @@ kable(wiring_df, align = "lcccc",
 
 ```{r tbl-params}
 #| label: tbl-params
-pr <- c("mu","A","alpha_m")
-pl <- c("$\\mu$","$A$","$\\alpha_m$")
-tbl <- data.frame(Parameter = pl)
-for (m in param_models) {
-  tbl[[paste0(m$id, "_c")]] <- sapply(pr, function(p) bc(m$par, p))
-  tbl[[paste0(m$id, "_t")]] <- sapply(pr, function(p) bt(m$par, p))
+beta_proxy <- suppressWarnings(as.numeric(unlist(cfg$BETA_GR, use.names = FALSE)))
+beta_proxy <- beta_proxy[is.finite(beta_proxy)]
+beta_proxy <- if (length(beta_proxy) > 0) beta_proxy[[1]] else 2.3
+
+eta_proxy <- function(mu, A, alpha_m, beta_gr = beta_proxy) {
+  if (!all(is.finite(c(mu, A, alpha_m, beta_gr))) || beta_gr <= 0) return(NA_real_)
+  A * exp(alpha_m / beta_gr)
 }
-rownames(tbl) <- NULL
-align_vec <- paste0("l", paste(rep("cc", length(param_models)), collapse = ""))
-col_names <- c("", unlist(lapply(param_models, function(m) c(paste0(m$id, ":ctrl"), paste0(m$id, ":treat")))))
-header <- c(" " = 1)
-for (m in param_models) header[m$long] <- 2
-kable(tbl, digits = 4, escape = FALSE, align = align_vec,
-      col.names = col_names,
-      caption = "Marginal ETAS parameters across available bivariate fits.") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
+
+param_rows <- do.call(rbind, lapply(param_models, function(m) {
+  mu_c <- bc(m$par, "mu"); A_c <- bc(m$par, "A"); a_c <- bc(m$par, "alpha_m")
+  mu_t <- bt(m$par, "mu"); A_t <- bt(m$par, "A"); a_t <- bt(m$par, "alpha_m")
+  eta_c <- eta_proxy(mu_c, A_c, a_c)
+  eta_t <- eta_proxy(mu_t, A_t, a_t)
+  rbind(
+    data.frame(
+      Fit = m$long, Process = "Control",
+      mu = mu_c, A = A_c, alpha_m = a_c,
+      branch_proxy = eta_c,
+      mu_branch_proxy = if (is.finite(mu_c) && is.finite(eta_c)) mu_c * eta_c else NA_real_,
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      Fit = m$long, Process = "Treated",
+      mu = mu_t, A = A_t, alpha_m = a_t,
+      branch_proxy = eta_t,
+      mu_branch_proxy = if (is.finite(mu_t) && is.finite(eta_t)) mu_t * eta_t else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  )
+}))
+
+param_rows$Fit <- factor(param_rows$Fit, levels = vapply(param_models, function(m) m$long, character(1)))
+param_rows <- param_rows[order(param_rows$Fit, param_rows$Process), , drop = FALSE]
+rownames(param_rows) <- NULL
+fit_end_rows <- which(param_rows$Process == "Treated")
+
+tbl_k <- kable(
+  param_rows,
+  digits = 4,
+  align = "llrrrrr",
+  col.names = c("Fit", "Process", "mu", "A", "alpha_m", "Branch proxy (A*exp(alpha/beta))", "mu * branch proxy"),
+  caption = paste0(
+    "Marginal ETAS parameters and branching proxies by fit. ",
+    "Double separators mark fit boundaries. ",
+    "Branch proxy uses beta=", signif(beta_proxy, 4), "."
+  ),
+  booktabs = TRUE,
+  linesep = "",
+  hline_after = fit_end_rows
+)
+
+tbl_k |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE,
                 font_size = 8, latex_options = c("scale_down", "hold_position")) |>
-  add_header_above(header)
+  row_spec(fit_end_rows, extra_css = "border-bottom: 3px double #444;")
 ```
 
 ## Cross-excitation

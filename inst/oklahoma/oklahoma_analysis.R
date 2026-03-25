@@ -2453,6 +2453,77 @@ if (exists("t_ate_H", inherits = FALSE)) {
   add_timing_row("ate_H", NA_real_, "skipped", "decode disabled or unavailable")
 }
 
+# Sensitivity ATE payloads are computed before pre-bootstrap checkpoint so
+# pre-bootstrap results can fully render partition/bandwidth sections.
+cat("\n--- Step 6a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
+
+# ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
+kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
+  if (is.null(kf) || is.null(kf$E_params) || is.null(kf$F_params)) return(NULL)
+  em <- extract_marginals(kf$E_params)
+  fm <- extract_marginals(kf$F_params)
+  list(
+    label = kf$label,
+    multiplier = kf$multiplier,
+    sigma = kf$sigma,
+    E_params = kf$E_params,
+    F_params = kf$F_params,
+    n_relabel = kf$n_relabel,
+    ate_E = tryCatch(
+      ate_estim_fast(em$ctrl, em$treat, kf$pp_post_bg,
+                     sprintf("BW %s naive biv+KDE", kf$label),
+                     n_tiles_used = partition$n,
+                     treated_idx_used = treated_idx),
+      error = function(e) NULL
+    ),
+    ate_F = tryCatch(
+      ate_estim_fast(fm$ctrl, fm$treat, kf$pp_post_sem,
+                     sprintf("BW %s SEM biv+KDE", kf$label),
+                     n_tiles_used = partition$n,
+                     treated_idx_used = treated_idx),
+      error = function(e) NULL
+    )
+  )
+})
+
+# ATE for alternative partitions
+ate_partitions <- lapply(partition_results, function(pr) {
+  if (pr$label == "county") return(NULL)
+  em <- extract_marginals(pr$E_params)
+  fm <- extract_marginals(pr$F_params)
+  part_info <- all_partitions[[pr$label]]
+  pp_post_part <- assign_to_partition(pp_post[, c("x", "y", "t", "mag")], part_info)
+  pp_post_part_bg <- rbind(
+    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "control", ],
+                         part_info$state_spaces$control, lambda_im)$new_df,
+    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "treated", ],
+                         part_info$state_spaces$treated, lambda_im)$new_df
+  )
+  pp_post_part_bg <- pp_post_part_bg[order(pp_post_part_bg$t), ]
+  pp_post_sem_part <- if (!is.null(pr$pp_post_sem)) {
+    pr$pp_post_sem
+  } else if (!is.null(pr$semF) && !is.null(pr$semF$adaptive$adaptive_labelling)) {
+    pr$semF$adaptive$adaptive_labelling
+  } else {
+    pp_post_part_bg
+  }
+  pp_post_sem_part <- pp_post_sem_part[pp_post_sem_part$t >= 0, ]
+  list(
+    ate_E = tryCatch(
+      ate_estim_fast(em$ctrl, em$treat, pp_post_part_bg,
+                     sprintf("%s naive biv+KDE", pr$label),
+                     n_tiles_used = pr$n_tiles,
+                     treated_idx_used = part_info$treated_idx),
+      error = function(e) NULL),
+    ate_F = tryCatch(
+      ate_estim_fast(fm$ctrl, fm$treat, pp_post_sem_part,
+                     sprintf("%s SEM biv+KDE", pr$label),
+                     n_tiles_used = pr$n_tiles,
+                     treated_idx_used = part_info$treated_idx),
+      error = function(e) NULL)
+  )
+})
+
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
 # even if bootstrap gets interrupted or OOM-killed.
 cat("\n--- Step 6a checkpoint: saving pre-bootstrap results ---\n")
@@ -2511,6 +2582,9 @@ results_pre_bootstrap <- list(
   fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
   fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
   bootstrap_ate = NULL,
+  partition_results = partition_results,
+  ate_partitions = ate_partitions,
+  kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   kde_info = list(
     bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
@@ -2948,72 +3022,8 @@ if (is.finite(bootstrap_elapsed)) {
   add_timing_row("bootstrap_ate_total", NA_real_, "skipped", "disabled")
 }
 
-# ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
-kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
-  if (is.null(kf) || is.null(kf$E_params) || is.null(kf$F_params)) return(NULL)
-  em <- extract_marginals(kf$E_params)
-  fm <- extract_marginals(kf$F_params)
-  list(
-    label = kf$label,
-    multiplier = kf$multiplier,
-    sigma = kf$sigma,
-    E_params = kf$E_params,
-    F_params = kf$F_params,
-    n_relabel = kf$n_relabel,
-    ate_E = tryCatch(
-      ate_estim_fast(em$ctrl, em$treat, kf$pp_post_bg,
-                     sprintf("BW %s naive biv+KDE", kf$label),
-                     n_tiles_used = partition$n,
-                     treated_idx_used = treated_idx),
-      error = function(e) NULL
-    ),
-    ate_F = tryCatch(
-      ate_estim_fast(fm$ctrl, fm$treat, kf$pp_post_sem,
-                     sprintf("BW %s SEM biv+KDE", kf$label),
-                     n_tiles_used = partition$n,
-                     treated_idx_used = treated_idx),
-      error = function(e) NULL
-    )
-  )
-})
-
-# ATE for alternative partitions
-ate_partitions <- lapply(partition_results, function(pr) {
-  if (pr$label == "county") return(NULL)
-  em <- extract_marginals(pr$E_params)
-  fm <- extract_marginals(pr$F_params)
-  part_info <- all_partitions[[pr$label]]
-  pp_post_part <- assign_to_partition(pp_post[, c("x", "y", "t", "mag")], part_info)
-  pp_post_part_bg <- rbind(
-    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "control", ],
-                         part_info$state_spaces$control, lambda_im)$new_df,
-    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "treated", ],
-                         part_info$state_spaces$treated, lambda_im)$new_df
-  )
-  pp_post_part_bg <- pp_post_part_bg[order(pp_post_part_bg$t), ]
-  pp_post_sem_part <- if (!is.null(pr$pp_post_sem)) {
-    pr$pp_post_sem
-  } else if (!is.null(pr$semF) && !is.null(pr$semF$adaptive$adaptive_labelling)) {
-    pr$semF$adaptive$adaptive_labelling
-  } else {
-    pp_post_part_bg
-  }
-  pp_post_sem_part <- pp_post_sem_part[pp_post_sem_part$t >= 0, ]
-  list(
-    ate_E = tryCatch(
-      ate_estim_fast(em$ctrl, em$treat, pp_post_part_bg,
-                     sprintf("%s naive biv+KDE", pr$label),
-                     n_tiles_used = pr$n_tiles,
-                     treated_idx_used = part_info$treated_idx),
-      error = function(e) NULL),
-    ate_F = tryCatch(
-      ate_estim_fast(fm$ctrl, fm$treat, pp_post_sem_part,
-                     sprintf("%s SEM biv+KDE", pr$label),
-                     n_tiles_used = pr$n_tiles,
-                     treated_idx_used = part_info$treated_idx),
-      error = function(e) NULL)
-  )
-})
+# Sensitivity ATE payloads are already computed in Step 6a so they are
+# included in pre-bootstrap checkpoints and reused for final results.
 
 # ============================================================================
 # 7. Summary tables
