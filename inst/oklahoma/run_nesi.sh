@@ -100,7 +100,7 @@ if [ -n "$PP_MODE" ]; then
     very-quick|veryquick|smoke)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=16; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=1; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=20; fi
@@ -136,7 +136,7 @@ if [ -n "$PP_MODE" ]; then
     test|setup-test)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=1; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=2; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=100; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=40; fi
@@ -153,7 +153,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       # Full/default production profile: enable enough refits for stable ATE SD.
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=20; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
@@ -172,7 +172,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       # Full/default production profile: enable enough refits for stable ATE SD.
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=20; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
@@ -204,14 +204,6 @@ if [ -z "$PP_MEM" ]; then
   PP_MEM="${MEM_GB}G"
 fi
 
-if [ -z "$PP_BOOT_REPS" ]; then
-  # Bootstrap is the dominant memory consumer; default below total cores.
-  if [ "$PP_CORES" -gt 8 ]; then
-    PP_BOOT_REPS=8
-  else
-    PP_BOOT_REPS="$PP_CORES"
-  fi
-fi
 if [ -z "$PP_SENS_SEM_INNER" ]; then
   PP_SENS_SEM_INNER="$PP_SEM_INNER"
 fi
@@ -239,6 +231,10 @@ else
 fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
   PP_BOOT_OUTER_CORES="$PP_CORES"
+fi
+# Default policy: one bootstrap replicate per available outer bootstrap core.
+if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then
+  PP_BOOT_REPS="$PP_BOOT_OUTER_CORES"
 fi
 if [ -z "$PP_KDE_VARIANT_MODE" ]; then
   PP_KDE_VARIANT_MODE="triple"
@@ -588,7 +584,7 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   export OK_ATE_SIM_CORES=1
   export OK_BOOT_OUTER_CORES=1
   if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then
-    export OK_BOOT_N_REPS=2
+    export OK_BOOT_N_REPS="$OK_BOOT_OUTER_CORES"
   fi
   if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then
     export OK_RUN_SENSITIVITY=false

@@ -509,14 +509,16 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   dots <- list(...)
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
-  sem_prop_branching_max <- suppressWarnings(as.numeric(
+  sem_prop_branching_vals <- suppressWarnings(as.numeric(
     Sys.getenv("OK_SEM_PROPOSAL_BRANCHING_MAX", "0.98")
   ))
-  if (!is.finite(sem_prop_branching_max) || sem_prop_branching_max <= 0) {
+  sem_prop_branching_max <- sem_prop_branching_vals[[1]]
+  if (!is.finite(sem_prop_branching_max) || is.na(sem_prop_branching_max) || sem_prop_branching_max <= 0) {
     sem_prop_branching_max <- NA_real_
   }
-  beta_guard <- suppressWarnings(as.numeric(dots$beta_gr))
-  if (!is.finite(beta_guard) || beta_guard <= 0) beta_guard <- 1.0
+  beta_guard_vals <- suppressWarnings(as.numeric(dots$beta_gr))
+  beta_guard <- beta_guard_vals[which(is.finite(beta_guard_vals) & !is.na(beta_guard_vals) & beta_guard_vals > 0)][1]
+  if (!is.finite(beta_guard) || is.na(beta_guard) || beta_guard <= 0) beta_guard <- 1.0
   spectral_radius_proxy <- function(par_obj, beta_gr) {
     get_num <- function(nm, default = NA_real_) {
       v <- suppressWarnings(as.numeric(par_obj[[nm]]))
