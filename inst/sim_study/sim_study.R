@@ -279,6 +279,8 @@ ATE_MAXIT <- env_int("PP_ATE_MAXIT", ATE_MAXIT, 1L)
 SIM_FILTRATION_AWARE <- tolower(Sys.getenv("PP_SIM_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
 ATE_CONTROL_FILTRATION_AWARE <- SIM_FILTRATION_AWARE &&
   (tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y"))
+FILTER_HIGH_MU_FITS <- tolower(Sys.getenv("PP_FILTER_HIGH_MU_FITS", "true")) %in% c("1", "true", "yes", "y")
+MU_FAIL_MULTIPLIER <- env_num("PP_MU_FAIL_MULTIPLIER", 2, min_value = 1)
 RUN_SEM_PILOT <- tolower(Sys.getenv("PP_RUN_SEM_PILOT", "false")) %in% c("1", "true", "yes", "y")
 if (RUN_SEM_PILOT && ON_CLUSTER) {
   log_msg("[SEM PILOT] Disabled on cluster (local tuning only).")
@@ -313,6 +315,8 @@ log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | maxit=", ATE_MAXIT,
         " | sim_filtration_aware=", SIM_FILTRATION_AWARE,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
+log_msg("High-mu failure filter: enabled=", FILTER_HIGH_MU_FITS,
+        " | mu_fail_multiplier=", MU_FAIL_MULTIPLIER)
 if (RUN_SEM_PILOT) {
   log_msg("SEM pilot: iters=", SEM_PILOT_ITERS,
           " | sims=", SEM_PILOT_SIMS,
@@ -1132,7 +1136,55 @@ log_memory("post_ATE")
 # ------------------------------------------------------------------
 # 11. Collect and save results
 # ------------------------------------------------------------------
+# Screen fitted Hawkes mu values and mark failed fits when they exceed
+# a configurable multiple of the true generating mu values.
+is_failed_mu_fit <- function(r, mu_mult) {
+  if (is.null(r) || is.null(r$control_pp) || is.null(r$treated_pp)) return(FALSE)
+  ctrl_mu <- suppressWarnings(as.numeric(r$control_pp$mu))
+  treat_mu <- suppressWarnings(as.numeric(r$treated_pp$mu))
+  if (!is.finite(ctrl_mu) || !is.finite(treat_mu)) return(TRUE)
+  (ctrl_mu > (mu_mult * hawkes_par_1$mu)) || (treat_mu > (mu_mult * hawkes_par_2$mu))
+}
+
+high_mu_failed_idx <- integer(0)
+if (isTRUE(FILTER_HIGH_MU_FITS)) {
+  high_mu_failed_idx <- which(vapply(results_flat, is_failed_mu_fit, logical(1), mu_mult = MU_FAIL_MULTIPLIER))
+}
+high_mu_failed_tasks <- if (length(high_mu_failed_idx) > 0) {
+  do.call(rbind, lapply(high_mu_failed_idx, function(k) {
+    r <- results_flat[[k]]
+    data.frame(
+      task_idx = k,
+      sim_id = ((k - 1) %% SIM_SIZE) + 1,
+      labelling = tasks[[k]]$labelling_name,
+      control_mu = suppressWarnings(as.numeric(r$control_pp$mu)),
+      treated_mu = suppressWarnings(as.numeric(r$treated_pp$mu)),
+      control_mu_threshold = MU_FAIL_MULTIPLIER * hawkes_par_1$mu,
+      treated_mu_threshold = MU_FAIL_MULTIPLIER * hawkes_par_2$mu,
+      stringsAsFactors = FALSE
+    )
+  }))
+} else {
+  data.frame(
+    task_idx = integer(0), sim_id = integer(0), labelling = character(0),
+    control_mu = numeric(0), treated_mu = numeric(0),
+    control_mu_threshold = numeric(0), treated_mu_threshold = numeric(0),
+    stringsAsFactors = FALSE
+  )
+}
+include_results <- rep(TRUE, length(results_flat))
+if (length(high_mu_failed_idx) > 0L) include_results[high_mu_failed_idx] <- FALSE
+if (length(high_mu_failed_idx) > 0L) {
+  log_msg(sprintf(
+    "[HIGH MU FILTER] %d/%d fits flagged as failed (mu > %.2fx true); excluded from outputs/estimates but retained in saved raw results.",
+    length(high_mu_failed_idx), length(results_flat), MU_FAIL_MULTIPLIER
+  ))
+} else if (isTRUE(FILTER_HIGH_MU_FITS)) {
+  log_msg(sprintf("[HIGH MU FILTER] No fits exceeded %.2fx true mu.", MU_FAIL_MULTIPLIER))
+}
+
 results_df <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
+  if (!isTRUE(include_results[[k]])) return(NULL)
   r <- results_flat[[k]]
   if (is.null(r)) return(NULL)
   data.frame(
@@ -1170,6 +1222,7 @@ TRUE_CTRL_TAU_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_SI
 if (!is.finite(TRUE_CTRL_TAU_SIMS) || is.na(TRUE_CTRL_TAU_SIMS) || TRUE_CTRL_TAU_SIMS < 1L) TRUE_CTRL_TAU_SIMS <- 5L
 
 results_df_true_control <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
+  if (!isTRUE(include_results[[k]])) return(NULL)
   r <- results_flat[[k]]
   if (is.null(r) || is.null(r$treated_pp)) return(NULL)
   treated_pp <- r$treated_pp
@@ -1240,8 +1293,9 @@ if (length(obs_data) > 0) {
 }
 
 # Control and treated parameter estimates from results_flat
-extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
+extract_param_rows <- function(results_flat, tasks, sim_size, field_name, include_mask = NULL) {
   lapply(seq_along(results_flat), function(k) {
+    if (!is.null(include_mask) && !isTRUE(include_mask[[k]])) return(NULL)
     r <- results_flat[[k]]
     task_k <- tasks[[k]]
     par_obj <- if (!is.null(r)) r[[field_name]] else NULL
@@ -1313,8 +1367,8 @@ build_param_boxplots <- function(params_df, truth_params, oracle_param_means = N
   Filter(Negate(is.null), plots)
 }
 
-control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp")
-treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp")
+control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp", include_mask = include_results)
+treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp", include_mask = include_results)
 control_params_df <- do.call(rbind, control_param_rows)
 treated_params_df <- do.call(rbind, treated_param_rows)
 if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
@@ -1413,6 +1467,7 @@ if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
 
 # Points per tile (control vs treated theoretical means)
 ate_detail_rows <- lapply(seq_along(results_flat), function(k) {
+  if (!isTRUE(include_results[[k]])) return(NULL)
   r <- results_flat[[k]]
   if (is.null(r) || is.null(r$all_nothing_theory)) return(NULL)
   th <- r$all_nothing_theory
@@ -1604,6 +1659,9 @@ sim_study_results <- list(
   tasks = tasks,
   ate_run_idx = ate_run_idx,
   skipped_explosive_tasks = skipped_explosive_tasks,
+  high_mu_failed_idx = high_mu_failed_idx,
+  high_mu_failed_tasks = high_mu_failed_tasks,
+  kept_result_idx = which(include_results),
   class_metrics = class_metrics,
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
@@ -1621,6 +1679,8 @@ sim_study_results <- list(
     SEM_N_PROPS = SEM_N_PROPS,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SIM_FILTRATION_AWARE = SIM_FILTRATION_AWARE,
+    FILTER_HIGH_MU_FITS = FILTER_HIGH_MU_FITS,
+    MU_FAIL_MULTIPLIER = MU_FAIL_MULTIPLIER,
     RUN_SEM_PILOT = RUN_SEM_PILOT,
     PILOT_ONLY = PILOT_ONLY,
     SEM_PILOT_ITERS = SEM_PILOT_ITERS,
