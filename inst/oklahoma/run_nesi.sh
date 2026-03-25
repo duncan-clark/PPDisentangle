@@ -256,8 +256,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   git pull origin main 2>/dev/null || true
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   OUTPUT_DIR="$PKG_ROOT/output/oklahoma"
-  LEGACY_OUTPUT_DIR="$PKG_ROOT/inst/oklahoma/output"
-  mkdir -p "$OUTPUT_DIR" "$LEGACY_OUTPUT_DIR"
+  mkdir -p "$OUTPUT_DIR"
 
   EXTRA_SBATCH=""
   if [ "$PP_CORES" -gt 72 ]; then
@@ -295,7 +294,6 @@ fi
 # Job mode
 # ----------------------------
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/inst/oklahoma/output"
 mkdir -p "$PKG_ROOT/output/oklahoma"
 
 echo "=== PPDisentangle Oklahoma (NeSI) ==="

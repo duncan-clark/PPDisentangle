@@ -72,8 +72,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     git pull origin main 2>/dev/null || true
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     OUTPUT_DIR="$PKG_ROOT/output/sim_study"
-    LEGACY_OUTPUT_DIR="$PKG_ROOT/inst/sim_study/output"
-    mkdir -p "$OUTPUT_DIR" "$LEGACY_OUTPUT_DIR"
+    mkdir -p "$OUTPUT_DIR"
 
     CPUS="$PP_SIMS"
     if [ "$CPUS" -lt 1 ]; then
@@ -127,7 +126,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 fi
 
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/output/sim_study" "$PKG_ROOT/inst/sim_study/output"
+mkdir -p "$PKG_ROOT/output/sim_study"
 
 if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
     echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"

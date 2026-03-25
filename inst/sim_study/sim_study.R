@@ -79,10 +79,7 @@ resolve_save_dirs <- function() {
   } else {
     normalizePath(getwd(), winslash = "/", mustWork = FALSE)
   }
-  list(
-    canonical = file.path(repo_dir, "output", "sim_study"),
-    legacy = file.path(script_dir, "output")
-  )
+  list(canonical = file.path(repo_dir, "output", "sim_study"))
 }
 
 OMEGA <- c(0, 100, 0, 100)
@@ -148,7 +145,6 @@ if (TEST) {
 
 save_dirs <- resolve_save_dirs()
 SAVE_DIR <- save_dirs$canonical
-LEGACY_SAVE_DIR <- save_dirs$legacy
 
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
@@ -225,21 +221,8 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
 if (JOB_ID == "") JOB_ID <- paste0("local_", format(Sys.time(), "%Y%m%d_%H%M%S"))
 
-for (d in unique(c(SAVE_DIR, LEGACY_SAVE_DIR))) {
+for (d in unique(c(SAVE_DIR))) {
   dir.create(d, showWarnings = FALSE, recursive = TRUE)
-}
-save_dir_norm <- normalizePath(SAVE_DIR, winslash = "/", mustWork = FALSE)
-legacy_save_dir_norm <- normalizePath(LEGACY_SAVE_DIR, winslash = "/", mustWork = FALSE)
-mirror_to_legacy <- !identical(save_dir_norm, legacy_save_dir_norm)
-mirror_to_legacy_file <- function(src_path) {
-  if (!mirror_to_legacy) return(NA_character_)
-  dest <- file.path(LEGACY_SAVE_DIR, basename(src_path))
-  ok <- file.copy(src_path, dest, overwrite = TRUE)
-  if (!isTRUE(ok)) {
-    warning(sprintf("Failed to mirror %s to legacy path %s", basename(src_path), dest))
-    return(NA_character_)
-  }
-  dest
 }
 LOG_FILE <- file.path(SAVE_DIR, paste0(JOB_ID, ".log"))
 log_con <- file(LOG_FILE, open = "wt")
@@ -339,9 +322,6 @@ if (RUN_SEM_PILOT) {
 log_msg("Base seed=", BASE_SEED)
 log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=", END_TIME)
 log_msg("Output (canonical): ", SAVE_DIR)
-if (mirror_to_legacy) {
-  log_msg("Output (legacy mirror): ", LEGACY_SAVE_DIR)
-}
 
 # ------------------------------------------------------------------
 # Helper: create a parallel cluster with PPDisentangle loaded
@@ -1656,16 +1636,7 @@ sim_study_results <- list(
 
 outfile <- file.path(SAVE_DIR, paste0(JOB_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
-legacy_outfile <- mirror_to_legacy_file(outfile)
-if (isTRUE(mirror_to_legacy)) {
-  flush(log_con)
-  legacy_log_file <- mirror_to_legacy_file(LOG_FILE)
-}
 log_msg("Results: ", outfile)
 log_msg("Log:     ", LOG_FILE)
-if (isTRUE(mirror_to_legacy)) {
-  if (!is.na(legacy_outfile)) log_msg("Results (legacy mirror): ", legacy_outfile)
-  if (!is.na(legacy_log_file)) log_msg("Log (legacy mirror):     ", legacy_log_file)
-}
 log_msg("=== DONE ", JOB_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
 close(log_con)

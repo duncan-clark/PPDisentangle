@@ -122,9 +122,8 @@ quarto render oklahoma_report.qmd
 Running `oklahoma_analysis.R` now does the following automatically on success:
 
 1. Saves results and plots to `output/oklahoma/`
-2. Mirrors core artifacts to legacy paths (`output/` and `inst/oklahoma/output/`) for compatibility
-3. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
-4. Writes `last_run_sync_stamp.txt` to output folders to trigger cloud sync tools
+2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
+3. Writes `last_run_sync_stamp.txt` in canonical output to trigger cloud sync tools
 
 Primary artifacts:
 

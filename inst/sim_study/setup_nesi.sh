@@ -54,7 +54,7 @@ cat("PPDisentangle loaded successfully.\n")
 cat("Functions available:", length(ls("package:PPDisentangle")), "\n")
 '
 
-mkdir -p "$PKG_ROOT/output/sim_study" "$PKG_ROOT/inst/sim_study/output"
+mkdir -p "$PKG_ROOT/output/sim_study"
 
 echo ""
 echo "=== Setup complete ==="

@@ -56,9 +56,7 @@ SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
 candidate_out_dirs <- unique(c(
-  file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma"),
-  file.path(dirname(dirname(SCRIPT_DIR)), "output"),
-  file.path(SCRIPT_DIR, "output")
+  file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma")
 ))
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",
@@ -1308,31 +1306,36 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   base_row$`Bootstrap 95% CI` <- boot_ci
   base_row
 }))
-kable(ate_biv,
-      col.names = if (using_pre_bootstrap) {
-        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
-          paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-          "SD(saved)", paste0("Spillover / ", ate_days, "d"))
-      } else {
-        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
-          paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-          "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
-          paste0("Spillover / ", ate_days, "d"))
-      },
-      caption = if (using_pre_bootstrap) {
-        paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
-      } else {
-        paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
-      },
-      align = if (using_pre_bootstrap) "lcccccc" else "lcccccccc") |>
-  kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
-if (using_pre_bootstrap) {
-  cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
-} else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
-  labs <- c()
-  if (!is.null(boot_E_df)) labs <- c(labs, "C (Naive Biv+KDE ctrl-fixed)")
-  if (!is.null(boot_F_df)) labs <- c(labs, "D (SEM Biv+KDE ctrl-fixed)")
-  cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
+if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
+  kable(ate_biv,
+        col.names = if (using_pre_bootstrap) {
+          c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+            paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
+            "SD(saved)", paste0("Spillover / ", ate_days, "d"))
+        } else {
+          c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+            paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
+            "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
+            paste0("Spillover / ", ate_days, "d"))
+        },
+        caption = if (using_pre_bootstrap) {
+          paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
+        } else {
+          paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
+        },
+        align = if (using_pre_bootstrap) "lcccccc" else "lcccccccc") |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
+  if (using_pre_bootstrap) {
+    cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
+  } else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
+    labs <- c()
+    if (!is.null(boot_E_df)) labs <- c(labs, "C (Naive Biv+KDE ctrl-fixed)")
+    if (!is.null(boot_F_df)) labs <- c(labs, "D (SEM Biv+KDE ctrl-fixed)")
+    cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
+  }
+} else {
+  cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
+              if (!is.null(results$checkpoint) && !is.null(results$checkpoint$stage)) results$checkpoint$stage else "unknown"))
 }
 ```
 

@@ -25,8 +25,6 @@ output/sim_study/
   <JOB_ID>_slurm.err     # SLURM stderr
 ```
 
-Legacy mirror (kept for compatibility): `inst/sim_study/output/`
-
 ## OOM during ATE estimation
 
 1. **Sequential ATE** (lower memory, slower):
