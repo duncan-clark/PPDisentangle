@@ -154,7 +154,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
-      if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=40; fi
+      if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       ;;
     *)
