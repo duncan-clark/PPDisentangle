@@ -67,6 +67,12 @@ PLOT_DIR <- file.path(OUT_DIR, "plots")
 for (d in unique(c(OUT_DIR, PLOT_DIR))) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE)
 }
+analysis_plots <- list()
+store_analysis_plot <- function(name, plot_obj) {
+  if (is.null(plot_obj)) return(invisible(NULL))
+  analysis_plots[[name]] <<- plot_obj
+  invisible(NULL)
+}
 SLURM_JOB_ID_RAW <- trimws(Sys.getenv("SLURM_JOB_ID", ""))
 FILE_TAG <- if (nzchar(SLURM_JOB_ID_RAW)) paste0("_job", SLURM_JOB_ID_RAW) else ""
 add_file_tag <- function(filename) {
@@ -770,10 +776,8 @@ tryCatch({
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
           plot.subtitle = element_text(hjust = 0.5))
-  partition_map_file <- add_file_tag("partition_map.png")
-  ggsave(file.path(PLOT_DIR, partition_map_file), p_partition,
-         width = 12, height = 7, dpi = 150)
-  cat(sprintf("  Saved %s\n", partition_map_file))
+  store_analysis_plot("partition_map_county", p_partition)
+  cat("  Stored county partition plot in results$plots$partition_map_county\n")
 }, error = function(e) cat("  Partition plot error:", e$message, "\n"))
 
 tryCatch({
@@ -783,10 +787,8 @@ tryCatch({
     labs(title = "Pre-treatment Events", x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  pre_treatment_file <- add_file_tag("pp_pre_treatment.png")
-  ggsave(file.path(PLOT_DIR, pre_treatment_file), p_pre,
-         width = 12, height = 7, dpi = 150)
-  cat(sprintf("  Saved %s\n", pre_treatment_file))
+  store_analysis_plot("pp_pre_treatment", p_pre)
+  cat("  Stored pre-treatment point plot in results$plots$pp_pre_treatment\n")
 
   pp_post_plot <- pp_post
   pp_post_plot$Process <- factor(pp_post_plot$location_process,
@@ -799,10 +801,8 @@ tryCatch({
          x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  post_treatment_file <- add_file_tag("pp_post_treatment.png")
-  ggsave(file.path(PLOT_DIR, post_treatment_file), p_post,
-         width = 12, height = 7, dpi = 150)
-  cat(sprintf("  Saved %s\n", post_treatment_file))
+  store_analysis_plot("pp_post_treatment", p_post)
+  cat("  Stored post-treatment point plot in results$plots$pp_post_treatment\n")
 }, error = function(e) cat("  PP plot error:", e$message, "\n"))
 
 # ============================================================================
@@ -1132,10 +1132,8 @@ tryCatch({
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
           plot.subtitle = element_text(hjust = 0.5))
-  background_rate_file <- add_file_tag("background_rate_kde.png")
-  ggsave(file.path(PLOT_DIR, background_rate_file), p_bg,
-         width = 10, height = 6, dpi = 150)
-  cat(sprintf("  Saved %s\n", background_rate_file))
+  store_analysis_plot("background_rate_kde", p_bg)
+  cat("  Stored KDE background-rate plot in results$plots$background_rate_kde\n")
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
 # Parameter profiles for county KDE bivariate fits.
@@ -1951,22 +1949,8 @@ if (!RUN_SENSITIVITY) {
 }
 cat(sprintf("  Total partition schemes scheduled: %d\n", length(all_partitions)))
 
-# Save partition maps for all schemes.
-tryCatch({
-  for (part_nm in names(all_partitions)) {
-    part_info <- all_partitions[[part_nm]]
-    tile_cols <- ifelse(part_info$processes == "treated", "#fc9272", "#deebf7")
-    outfile_name <- add_file_tag(sprintf("partition_map_%s.png", part_info$label))
-    outfile <- file.path(PLOT_DIR, outfile_name)
-    png(outfile, width = 1400, height = 850, res = 150)
-    plot(part_info$partition, col = tile_cols, border = "grey45", main = paste("Partition:", part_info$label))
-    points(pp_post$x, pp_post$y, pch = 16, cex = 0.3, col = rgb(0, 0, 0, 0.35))
-    legend("bottomleft", legend = c("Control", "Treated"),
-           fill = c("#deebf7", "#fc9272"), bty = "n")
-    dev.off()
-    cat(sprintf("  Saved %s\n", outfile_name))
-  }
-}, error = function(e) cat("  Partition plotting error:", e$message, "\n"))
+analysis_plots$partition_map_ids <- vapply(all_partitions, `[[`, character(1), "label")
+cat("  Partition map files are disabled; render partition map panels from results payload.\n")
 
 # ============================================================================
 # 5b. Joint sensitivity dispatch: bandwidth + partition fits (single parallel layer)
@@ -2182,16 +2166,12 @@ for (nm in list(list(res = semD, label = "biv",   title = "SEM Bivariate"),
                x = "X (km)", y = "Y (km)") +
           theme_minimal() +
           theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-        sem_post_file <- add_file_tag(sprintf("pp_post_sem_%s.png", nm$label))
-        ggsave(file.path(PLOT_DIR, sem_post_file),
-               p_s, width = 12, height = 7, dpi = 150)
-        cat(sprintf("  Saved %s\n", sem_post_file))
+        store_analysis_plot(sprintf("pp_post_sem_%s", nm$label), p_s)
+        cat(sprintf("  Stored results$plots$pp_post_sem_%s\n", nm$label))
       }
       p_f <- plot_flips(nm$res)
-      sem_flips_file <- add_file_tag(sprintf("sem_flips_%s.png", nm$label))
-      ggsave(file.path(PLOT_DIR, sem_flips_file),
-             p_f, width = 8, height = 5, dpi = 150)
-      cat(sprintf("  Saved %s\n", sem_flips_file))
+      store_analysis_plot(sprintf("sem_flips_%s", nm$label), p_f)
+      cat(sprintf("  Stored results$plots$sem_flips_%s\n", nm$label))
     }
   }, error = function(e) cat(sprintf("  %s plot error: %s\n", nm$title, e$message)))
 }
@@ -2200,6 +2180,7 @@ for (nm in list(list(res = semD, label = "biv",   title = "SEM Bivariate"),
 # 6. ATE estimation (post-treatment horizon)
 # ============================================================================
 cat(sprintf("\n--- Step 6: ATE estimation (%d-day simulation horizon) ---\n", ATE_WINDOW_DAYS))
+cat("  Stage meaning: computing MAIN-FIT ATE payloads (A-H) now; sensitivity ATEs start at Step 7a.\n")
 
 pp_post_sem_D <- if (!is.null(semD)) semD$adaptive$adaptive_labelling else NULL
 pp_post_sem_D <- if (!is.null(pp_post_sem_D)) pp_post_sem_D[pp_post_sem_D$t >= 0, ] else pp_post
@@ -2241,9 +2222,51 @@ H_marginals <- extract_marginals(H_params)
 ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                            n_tiles_used = partition$n,
                            treated_idx_used = treated_idx,
+                           phase = "main_fit",
                            quiet = FALSE) {
-  if (!quiet) cat(sprintf("  [ATE] Computing ATE for %s...\n", label))
+  phase_tag <- tolower(gsub("[^A-Za-z0-9]+", "_", as.character(phase)))
+  if (!nzchar(phase_tag)) phase_tag <- "main_fit"
+  phase_label <- switch(
+    phase_tag,
+    main_fit = "main-fit",
+    sensitivity = "sensitivity",
+    bootstrap = "bootstrap",
+    phase_tag
+  )
+  ate_prefix <- sprintf("[ATE:%s]", phase_label)
+  if (!quiet) cat(sprintf("  %s Computing ATE for %s...\n", ate_prefix, label))
   tryCatch({
+    safe_q <- function(x, probs) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(rep(NA_real_, length(probs)))
+      as.numeric(stats::quantile(x, probs = probs, na.rm = TRUE, names = FALSE))
+    }
+    summarize_process_stability <- function(par_obj, beta_gr = BETA_GR) {
+      if (is.null(par_obj)) {
+        return(list(mu = NA_real_, A = NA_real_, alpha_m = NA_real_,
+                    beta_gr = beta_gr, beta_minus_alpha = NA_real_,
+                    eta_exact = NA_real_, eta_proxy = NA_real_))
+      }
+      A_val <- suppressWarnings(as.numeric(par_obj$A))
+      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
+      mu_val <- suppressWarnings(as.numeric(par_obj$mu))
+      beta_minus_alpha <- beta_gr - alpha_val
+      eta_exact <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_minus_alpha > 0) {
+        A_val * beta_gr / beta_minus_alpha
+      } else {
+        Inf
+      }
+      eta_proxy <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_gr > 0) {
+        A_val * exp(alpha_val / beta_gr)
+      } else {
+        NA_real_
+      }
+      list(
+        mu = mu_val, A = A_val, alpha_m = alpha_val,
+        beta_gr = beta_gr, beta_minus_alpha = beta_minus_alpha,
+        eta_exact = eta_exact, eta_proxy = eta_proxy
+      )
+    }
     ate_approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
       if (is.null(par_obj)) return(NA_real_)
       A_val <- suppressWarnings(as.numeric(par_obj$A))
@@ -2262,10 +2285,19 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
     }
     ctrl_br <- ate_approx_branching_ratio(ctrl_pp)
     treat_br <- ate_approx_branching_ratio(treat_pp)
+    ctrl_diag <- summarize_process_stability(ctrl_pp)
+    treat_diag <- summarize_process_stability(treat_pp)
     if (!quiet) {
-      cat(sprintf("    [ATE] sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
+      cat(sprintf("    %s sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
+                  ate_prefix,
                   ATE_N_SIMS, max(1L, min(ATE_SIM_CORES, ATE_N_SIMS)),
                   PARALLEL_BACKEND, ctrl_br, treat_br))
+      cat(sprintf("    %s fitted stability (ctrl): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
+                  ate_prefix, ctrl_diag$mu, ctrl_diag$A, ctrl_diag$alpha_m,
+                  ctrl_diag$beta_minus_alpha, ctrl_diag$eta_exact, ctrl_diag$eta_proxy))
+      cat(sprintf("    %s fitted stability (treat): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
+                  ate_prefix, treat_diag$mu, treat_diag$A, treat_diag$alpha_m,
+                  treat_diag$beta_minus_alpha, treat_diag$eta_exact, treat_diag$eta_proxy))
     }
     if ((is.finite(ctrl_br) && ctrl_br > BOOT_BRANCHING_MAX) ||
         (is.finite(treat_br) && treat_br > BOOT_BRANCHING_MAX)) {
@@ -2317,7 +2349,8 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
       max(x, na.rm = TRUE)
     }
     if (!quiet) {
-      cat(sprintf("    [ATE] sim summary (%s): ctrl mean=%.1f p95=%.1f max=%.0f | treat mean=%.1f p95=%.1f max=%.0f\n",
+      cat(sprintf("    %s sim summary (%s): ctrl mean=%.1f p95=%.1f max=%.0f | treat mean=%.1f p95=%.1f max=%.0f\n",
+                  ate_prefix,
                   label,
                   mean(c_counts, na.rm = TRUE),
                   safe_p95(c_counts),
@@ -2325,6 +2358,22 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                   mean(t_counts, na.rm = TRUE),
                   safe_p95(t_counts),
                   safe_max(t_counts)))
+      ctrl_q <- safe_q(c_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      treat_q <- safe_q(t_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      total_counts <- c_counts + t_counts
+      total_q <- safe_q(total_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      cat(sprintf(
+        "    %s sim counts ctrl[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, ctrl_q[1], ctrl_q[2], ctrl_q[3], ctrl_q[4], ctrl_q[5], ctrl_q[6]
+      ))
+      cat(sprintf(
+        "    %s sim counts treat[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, treat_q[1], treat_q[2], treat_q[3], treat_q[4], treat_q[5], treat_q[6]
+      ))
+      cat(sprintf(
+        "    %s sim counts total[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, total_q[1], total_q[2], total_q[3], total_q[4], total_q[5], total_q[6]
+      ))
     }
     flagged_mask <- (is.finite(c_counts) & c_counts > ate_event_warn_threshold) |
       (is.finite(t_counts) & t_counts > ate_event_warn_threshold)
@@ -2336,6 +2385,17 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
       if (flagged_frac >= ate_flagged_frac_warn) {
         cat(sprintf("    [warning:ate-explosive] %s: high fraction of extreme sims (>= %.3f); inspect params/branching.\n",
                     label, ate_flagged_frac_warn))
+      }
+    }
+    if (!quiet) {
+      top_n <- min(5L, length(c_counts))
+      if (top_n > 0L) {
+        ord <- order(c_counts + t_counts, decreasing = TRUE, na.last = TRUE)
+        top_idx <- ord[seq_len(top_n)]
+        top_desc <- paste(vapply(top_idx, function(ii) {
+          sprintf("#%d:c=%d,t=%d,total=%d", ii, as.integer(c_counts[ii]), as.integer(t_counts[ii]), as.integer(c_counts[ii] + t_counts[ii]))
+        }, character(1)), collapse = " | ")
+        cat(sprintf("    %s top total-count sims: %s\n", ate_prefix, top_desc))
       }
     }
     # Estimand of interest: earthquakes saved by treatment regime versus control-everywhere.
@@ -2563,6 +2623,7 @@ results_pre_sensitivity <- list(
     n_pre_used = nrow(pp_pre),
     trigger_range_km = trigger_range_km
   ),
+  plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
     treated_names = treated_names,
@@ -2650,6 +2711,7 @@ invisible(gc(verbose = FALSE))
 # Sensitivity ATE payloads are computed before pre-bootstrap checkpoint so
 # pre-bootstrap results can fully render partition/bandwidth sections.
 cat("\n--- Step 7a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
+cat("  Stage meaning: MAIN-FIT ATE stage is complete; now computing sensitivity ATEs only.\n")
 
 # ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
@@ -2666,6 +2728,7 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
     ate_E = tryCatch(
       ate_estim_fast(em$ctrl, em$treat, kf$pp_post_bg,
                      sprintf("BW %s naive biv+KDE", kf$label),
+                     phase = "sensitivity",
                      n_tiles_used = partition$n,
                      treated_idx_used = treated_idx),
       error = function(e) NULL
@@ -2673,6 +2736,7 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
     ate_F = tryCatch(
       ate_estim_fast(fm$ctrl, fm$treat, kf$pp_post_sem,
                      sprintf("BW %s SEM biv+KDE", kf$label),
+                     phase = "sensitivity",
                      n_tiles_used = partition$n,
                      treated_idx_used = treated_idx),
       error = function(e) NULL
@@ -2706,12 +2770,14 @@ ate_partitions <- lapply(partition_results, function(pr) {
     ate_E = tryCatch(
       ate_estim_fast(em$ctrl, em$treat, pp_post_part_bg,
                      sprintf("%s naive biv+KDE", pr$label),
+                     phase = "sensitivity",
                      n_tiles_used = pr$n_tiles,
                      treated_idx_used = part_info$treated_idx),
       error = function(e) NULL),
     ate_F = tryCatch(
       ate_estim_fast(fm$ctrl, fm$treat, pp_post_sem_part,
                      sprintf("%s SEM biv+KDE", pr$label),
+                     phase = "sensitivity",
                      n_tiles_used = pr$n_tiles,
                      treated_idx_used = part_info$treated_idx),
       error = function(e) NULL)
@@ -2787,6 +2853,7 @@ results_pre_bootstrap <- list(
     n_pre_used = nrow(pp_pre),
     trigger_range_km = trigger_range_km
   ),
+  plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
     treated_names = treated_names,
@@ -3043,6 +3110,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ate_e_boot <- ate_estim_fast(
           e_marg_boot$ctrl, e_marg_boot$treat, sim_E$pp_post_bg_sim,
           label = sprintf("Boot E #%d", rep_id),
+          phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
           quiet = TRUE
@@ -3083,6 +3151,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ate_f_boot <- ate_estim_fast(
           f_marg_boot$ctrl, f_marg_boot$treat, pp_post_f_boot,
           label = sprintf("Boot F #%d", rep_id),
+          phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
           quiet = TRUE
@@ -3370,6 +3439,7 @@ results <- list(
                   n_pre_holdout = nrow(pp_pre_holdout),
                   n_pre_used = nrow(pp_pre),
                   trigger_range_km = trigger_range_km),
+  plots = analysis_plots,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   timing_df = timing_df,
   timing_info = list(
@@ -3444,7 +3514,7 @@ results <- list(
 out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results.rds"))
 saveRDS(results, out_file)
 cat(sprintf("Results saved to: %s\n", out_file))
-cat(sprintf("Plots saved to:   %s\n", PLOT_DIR))
+cat("Plots stored in results payload under results$plots (PNG file output disabled).\n")
 
 # Keep report outputs synchronized with the newest results.
 report_file <- file.path(SCRIPT_DIR, "oklahoma_report.qmd")

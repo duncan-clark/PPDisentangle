@@ -47,6 +47,10 @@ loglik_etas_bivariate <- function(params,
                                   treated_state_space = NULL,
                                   background_rate_var = NULL,
                                   treated_background_zero_before = NULL,
+                                  beta_gr = NULL,
+                                  stability_barrier_start = 0.95,
+                                  stability_barrier_weight = 100,
+                                  stability_barrier_power = 2,
                                   t_trunc = NULL,
                                   ...) {
   if (is.list(params) && !is.null(names(params))) {
@@ -169,7 +173,7 @@ loglik_etas_bivariate <- function(params,
 
   tval <- windowT[2] - windowT[1]
 
-  etas_bivariate_loglik_cpp(
+  loglik <- etas_bivariate_loglik_cpp(
     t         = realiz$t - windowT[1],
     x         = realiz$x,
     y         = realiz$y,
@@ -188,6 +192,46 @@ loglik_etas_bivariate <- function(params,
     t_max = tval,
     t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
   )
+  # Smooth stability barrier on the bivariate ETAS offspring matrix spectral
+  # radius; activates only when rho exceeds `stability_barrier_start`.
+  if (is.finite(stability_barrier_weight) && stability_barrier_weight > 0) {
+    beta_eff <- suppressWarnings(as.numeric(beta_gr))
+    if (!is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
+      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
+      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
+      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else 1
+    }
+    eta_comp <- function(Ai, alphai) {
+      Ai <- suppressWarnings(as.numeric(Ai))
+      alphai <- suppressWarnings(as.numeric(alphai))
+      if (!is.finite(Ai) || !is.finite(alphai) || !is.finite(beta_eff) || beta_eff <= 0) return(Inf)
+      gap <- beta_eff - alphai
+      if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+      Ai * beta_eff / gap
+    }
+    M <- matrix(
+      c(
+        eta_comp(A_00, alpha_m_00), eta_comp(A_01, alpha_m_01),
+        eta_comp(A_10, alpha_m_10), eta_comp(A_11, alpha_m_11)
+      ),
+      nrow = 2, byrow = TRUE
+    )
+    rho <- if (all(is.finite(M))) {
+      max(Re(eigen(M, only.values = TRUE)$values))
+    } else {
+      Inf
+    }
+    if (!is.finite(rho)) return(-1e15)
+    barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
+    if (!is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
+    barrier_power <- suppressWarnings(as.numeric(stability_barrier_power))
+    if (!is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
+    excess <- max(0, rho - barrier_start)
+    if (excess > 0) {
+      loglik <- loglik - stability_barrier_weight * (excess ^ barrier_power)
+    }
+  }
+  loglik
 }
 
 
@@ -223,6 +267,7 @@ fit_etas_bivariate <- function(params_init,
                                trace = 0,
                                t_trunc = NULL,
                                ...) {
+  dots <- list(...)
   all_names <- .etas_bivariate_par_names
 
   if (inherits(params_init, "list")) params_init <- unlist(params_init)
@@ -303,7 +348,11 @@ fit_etas_bivariate <- function(params_init,
       treated_state_space = treated_state_space,
       background_rate_var = background_rate_var,
       treated_background_zero_before = treated_background_zero_before,
-      t_trunc = t_trunc, precomp = precomp
+      t_trunc = t_trunc, precomp = precomp,
+      beta_gr = dots$beta_gr,
+      stability_barrier_start = dots$stability_barrier_start,
+      stability_barrier_weight = dots$stability_barrier_weight,
+      stability_barrier_power = dots$stability_barrier_power
     )
   }
 
