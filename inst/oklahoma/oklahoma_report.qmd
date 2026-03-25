@@ -74,7 +74,9 @@ existing_result_files <- candidate_result_files[file.exists(candidate_result_fil
 if (length(existing_result_files) == 0) {
   stop("No Oklahoma results RDS file found in expected output directories.")
 }
-result_file <- existing_result_files[which.max(file.info(existing_result_files)$mtime)]
+non_checkpoint_files <- existing_result_files[!grepl("pre_bootstrap", basename(existing_result_files), fixed = TRUE)]
+result_pool <- if (length(non_checkpoint_files) > 0) non_checkpoint_files else existing_result_files
+result_file <- result_pool[which.max(file.info(result_pool)$mtime)]
 OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
@@ -132,8 +134,18 @@ using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")
 resolve_plot_file <- function(filename) {
   candidates <- file.path(candidate_plot_dirs, filename)
   existing <- candidates[file.exists(candidates)]
-  if (length(existing) == 0) return(NA_character_)
-  existing[which.max(file.info(existing)$mtime)]
+  if (length(existing) > 0) return(existing[which.max(file.info(existing)$mtime)])
+  stem <- sub("\\.[^.]+$", "", filename)
+  ext <- sub("^.*(\\.[^.]+)$", "\\1", filename)
+  ext <- if (identical(ext, filename)) "" else ext
+  tagged_pat <- paste0("^", gsub("([.|()\\^{}+$*?\\[\\]\\\\])", "\\\\\\1", stem), "_job[0-9]+", gsub("([.|()\\^{}+$*?\\[\\]\\\\])", "\\\\\\1", ext), "$")
+  tagged <- unlist(lapply(candidate_plot_dirs, function(d) {
+    if (!dir.exists(d)) return(character(0))
+    list.files(d, pattern = tagged_pat, full.names = TRUE)
+  }), use.names = FALSE)
+  tagged <- tagged[file.exists(tagged)]
+  if (length(tagged) == 0) return(NA_character_)
+  tagged[which.max(file.info(tagged)$mtime)]
 }
 
 render_timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
@@ -620,8 +632,16 @@ fit_line_colors <- c(
 )
 
 get_sem_metric_trace <- function(fit_obj) {
-  if (is.null(fit_obj) || is.null(fit_obj$sem) || is.null(fit_obj$sem$adaptive)) return(NULL)
-  ad <- fit_obj$sem$adaptive
+  if (is.null(fit_obj)) return(NULL)
+  sem_obj <- if (!is.null(fit_obj$fit) && !is.null(fit_obj$fit$adaptive)) {
+    fit_obj$fit
+  } else if (!is.null(fit_obj$sem) && !is.null(fit_obj$sem$adaptive)) {
+    fit_obj$sem
+  } else {
+    NULL
+  }
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive)) return(NULL)
+  ad <- sem_obj$adaptive
   if (!is.null(ad$metrics) && length(ad$metrics) > 0) {
     return(as.numeric(ad$metrics))
   }

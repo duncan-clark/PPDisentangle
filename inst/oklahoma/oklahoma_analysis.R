@@ -277,6 +277,22 @@ if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
   set.seed(OK_GLOBAL_SEED)
 }
 
+derive_run_seed <- function(base_seed, label = "", offset = 0L) {
+  seed_base <- suppressWarnings(as.integer(base_seed))
+  if (!is.finite(seed_base) || is.na(seed_base)) return(NA_integer_)
+  label_int <- utf8ToInt(as.character(label))
+  if (length(label_int) < 1L) label_int <- 0L
+  # Deterministic per-run seed with label + pid entropy to avoid repeated streams.
+  seed_val <- seed_base +
+    sum(label_int * seq_along(label_int)) +
+    as.integer(Sys.getpid()) +
+    as.integer(offset)
+  seed_val <- abs(as.integer(seed_val %% .Machine$integer.max))
+  if (!is.finite(seed_val) || is.na(seed_val) || seed_val < 1L) seed_val <- 1L
+  seed_val
+}
+RNG_STREAM_CALL_COUNTER <- 0L
+
 run_parallel <- function(X, FUN, cores, label = "job") {
   n <- length(X)
   cores_use <- max(1L, min(as.integer(cores), as.integer(n)))
@@ -298,6 +314,9 @@ run_parallel <- function(X, FUN, cores, label = "job") {
   # Stream worker stdout/stderr into the main job log for progress visibility.
   cl <- parallel::makePSOCKcluster(cores_use, outfile = "")
   on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+  if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+    parallel::clusterSetRNGStream(cl, iseed = derive_run_seed(OK_GLOBAL_SEED, label = label))
+  }
   if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
     parallel::clusterExport(cl, varlist = c("REPO_DIR"), envir = .GlobalEnv)
   }
@@ -393,6 +412,12 @@ run_parallel_on_cluster <- function(cl, X, FUN, label = "job") {
     cat(sprintf("  [parallel:%s] done in %.1fs (sequential)\n",
                 label, proc.time()[["elapsed"]] - t0))
     return(out)
+  }
+  if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+    # Advance reused-cluster RNG streams per call so repeated jobs do not replay.
+    RNG_STREAM_CALL_COUNTER <<- RNG_STREAM_CALL_COUNTER + 1L
+    seed_step <- derive_run_seed(OK_GLOBAL_SEED, label = label, offset = n + RNG_STREAM_CALL_COUNTER)
+    parallel::clusterSetRNGStream(cl, iseed = seed_step)
   }
   out <- tryCatch(
     parallel::parLapply(cl, X, FUN),
@@ -925,7 +950,15 @@ run_sem_fit <- function(pp_data_in,
   if (!is.null(sem_log_file)) {
     cat(sprintf("  [%s] worker sem log: %s\n", label, sem_log_file))
   }
+  sem_seed_base <- derive_run_seed(OK_GLOBAL_SEED, label = paste0("sem:", label))
+  sem_seed_step <- 0L
+  next_sem_seed <- function() {
+    if (!is.finite(sem_seed_base) || is.na(sem_seed_base)) return(invisible(NULL))
+    sem_seed_step <<- sem_seed_step + 1L
+    set.seed(derive_run_seed(sem_seed_base, label = label, offset = sem_seed_step))
+  }
   run_one_sem <- function(pp_data_sem, init_params_sem, fixed_params_sem, sem_label) {
+    next_sem_seed()
     adaptive_SEM(
       pp_data = pp_data_sem, partition = partition_in,
       partition_processes = partition_processes_in,
