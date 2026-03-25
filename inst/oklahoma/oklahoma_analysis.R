@@ -2242,9 +2242,41 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                            n_tiles_used = partition$n,
                            treated_idx_used = treated_idx,
                            quiet = FALSE) {
-  if (!quiet) cat(sprintf("  Computing ATE for %s...\n", label))
+  if (!quiet) cat(sprintf("  [ATE] Computing ATE for %s...\n", label))
   tryCatch({
+    ate_approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
+      if (is.null(par_obj)) return(NA_real_)
+      A_val <- suppressWarnings(as.numeric(par_obj$A))
+      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
+      if (!is.finite(A_val) || !is.finite(alpha_val)) return(NA_real_)
+      A_val * exp(alpha_val / beta_gr)
+    }
+    ate_event_warn_threshold <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_EVENT_THRESHOLD", "20000")))
+    if (!is.finite(ate_event_warn_threshold) || is.na(ate_event_warn_threshold) || ate_event_warn_threshold <= 0) {
+      ate_event_warn_threshold <- 20000
+    }
+    ate_flagged_frac_warn <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_FRACTION_WARN", "0.05")))
+    if (!is.finite(ate_flagged_frac_warn) || is.na(ate_flagged_frac_warn) ||
+        ate_flagged_frac_warn < 0 || ate_flagged_frac_warn > 1) {
+      ate_flagged_frac_warn <- 0.05
+    }
+    ctrl_br <- ate_approx_branching_ratio(ctrl_pp)
+    treat_br <- ate_approx_branching_ratio(treat_pp)
+    if (!quiet) {
+      cat(sprintf("    [ATE] sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
+                  ATE_N_SIMS, max(1L, min(ATE_SIM_CORES, ATE_N_SIMS)),
+                  PARALLEL_BACKEND, ctrl_br, treat_br))
+    }
+    if ((is.finite(ctrl_br) && ctrl_br > BOOT_BRANCHING_MAX) ||
+        (is.finite(treat_br) && treat_br > BOOT_BRANCHING_MAX)) {
+      cat(sprintf("    [warning:ate-explosive] %s: branching proxy exceeds %.3f (ctrl=%.3f, treat=%.3f)\n",
+                  label, BOOT_BRANCHING_MAX, ctrl_br, treat_br))
+    }
     pre_history <- pp_pre[, c("x", "y", "t", "mag"), drop = FALSE]
+    ate_label_slug <- gsub("[^A-Za-z0-9]+", "_", label)
+    ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
+    if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
+    ate_parallel_label <- sprintf("ate-sim-%s", tolower(substr(ate_label_slug, 1L, 40L)))
     run_one_sim <- function(s) {
       c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
                         m0 = ETAS_M0, beta_gr = BETA_GR,
@@ -2260,13 +2292,13 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
           ate_cl_reuse,
           as.list(seq_len(ATE_N_SIMS)),
           run_one_sim,
-          label = "ate-sim"
+          label = ate_parallel_label
         )
       } else {
         run_parallel(
           as.list(seq_len(ATE_N_SIMS)), run_one_sim,
           cores = min(ATE_SIM_CORES, ATE_N_SIMS),
-          label = "ate-sim"
+          label = ate_parallel_label
         )
       }
     } else {
@@ -2274,6 +2306,38 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
     }
     c_counts <- vapply(sim_results, function(z) as.numeric(z[["c_count"]]), numeric(1))
     t_counts <- vapply(sim_results, function(z) as.numeric(z[["t_count"]]), numeric(1))
+    safe_p95 <- function(x) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(NA_real_)
+      as.numeric(stats::quantile(x, 0.95, na.rm = TRUE, names = FALSE))
+    }
+    safe_max <- function(x) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(NA_real_)
+      max(x, na.rm = TRUE)
+    }
+    if (!quiet) {
+      cat(sprintf("    [ATE] sim summary (%s): ctrl mean=%.1f p95=%.1f max=%.0f | treat mean=%.1f p95=%.1f max=%.0f\n",
+                  label,
+                  mean(c_counts, na.rm = TRUE),
+                  safe_p95(c_counts),
+                  safe_max(c_counts),
+                  mean(t_counts, na.rm = TRUE),
+                  safe_p95(t_counts),
+                  safe_max(t_counts)))
+    }
+    flagged_mask <- (is.finite(c_counts) & c_counts > ate_event_warn_threshold) |
+      (is.finite(t_counts) & t_counts > ate_event_warn_threshold)
+    flagged_n <- sum(flagged_mask, na.rm = TRUE)
+    if (flagged_n > 0L) {
+      flagged_frac <- flagged_n / max(1L, length(c_counts))
+      cat(sprintf("    [warning:ate-explosive] %s: %d/%d sims exceed %.0f events (frac=%.3f)\n",
+                  label, flagged_n, length(c_counts), ate_event_warn_threshold, flagged_frac))
+      if (flagged_frac >= ate_flagged_frac_warn) {
+        cat(sprintf("    [warning:ate-explosive] %s: high fraction of extreme sims (>= %.3f); inspect params/branching.\n",
+                    label, ate_flagged_frac_warn))
+      }
+    }
     # Estimand of interest: earthquakes saved by treatment regime versus control-everywhere.
     total_saved <- c_counts - t_counts
     all_nothing_sim <- data.frame(
@@ -2390,7 +2454,7 @@ for (vid in names(kde_variant_specs)) {
     kde_variant_fits$E[[vid]]$ate <- ate_estim_fast(
       m_e$ctrl, m_e$treat, pp_post_bg,
       label = sprintf("Fit %s (naive biv+KDE, %s)", letter_e, vid),
-      quiet = TRUE
+      quiet = FALSE
     )
   }
   if (!is.null(kde_variant_fits$F[[vid]])) {
@@ -2408,7 +2472,7 @@ for (vid in names(kde_variant_specs)) {
     kde_variant_fits$F[[vid]]$ate <- ate_estim_fast(
       m_f$ctrl, m_f$treat, post_sem_local,
       label = sprintf("Fit %s (SEM biv+KDE, %s)", letter_f, vid),
-      quiet = TRUE
+      quiet = FALSE
     )
   }
 }
