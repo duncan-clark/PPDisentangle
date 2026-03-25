@@ -2110,44 +2110,55 @@ run_sensitivity_job <- function(job) {
   list(type = job$type, id = job$id, out = out)
 }
 
-if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(sensitivity_jobs) > 1) {
-  t_sensitivity_dispatch <- proc.time()[["elapsed"]]
-  sens_out <- run_parallel(
-    sensitivity_jobs, run_sensitivity_job,
-    cores = min(SENS_CORES, length(sensitivity_jobs)),
-    label = "sensitivity"
-  )
-  sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
-} else {
-  t_sensitivity_dispatch <- proc.time()[["elapsed"]]
-  if ((TEST_MODE || QUICK_CHECK) && length(sensitivity_jobs) > 1) {
-    cat("  TEST/QUICK mode: running sensitivity jobs sequentially for stability.\n")
+run_sensitivity_dispatch <- function() {
+  if (!TEST_MODE && !QUICK_CHECK && N_CORES > 1 && length(sensitivity_jobs) > 1) {
+    t_sensitivity_dispatch <- proc.time()[["elapsed"]]
+    sens_out <- run_parallel(
+      sensitivity_jobs, run_sensitivity_job,
+      cores = min(SENS_CORES, length(sensitivity_jobs)),
+      label = "sensitivity"
+    )
+    sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
+  } else {
+    t_sensitivity_dispatch <- proc.time()[["elapsed"]]
+    if ((TEST_MODE || QUICK_CHECK) && length(sensitivity_jobs) > 1) {
+      cat("  TEST/QUICK mode: running sensitivity jobs sequentially for stability.\n")
+    }
+    sens_out <- lapply(sensitivity_jobs, run_sensitivity_job)
+    sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
   }
-  sens_out <- lapply(sensitivity_jobs, run_sensitivity_job)
-  sensitivity_dispatch_elapsed <- proc.time()[["elapsed"]] - t_sensitivity_dispatch
+  add_timing_row(
+    stage = "sensitivity_dispatch_total",
+    elapsed_sec = sensitivity_dispatch_elapsed,
+    status = "ok",
+    detail = sprintf("jobs=%d", length(sensitivity_jobs))
+  )
+
+  kde_bandwidth_fits_local <- lapply(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), function(lbl) {
+    idx <- which(vapply(sens_out, function(z) identical(z$type, "bandwidth") && identical(z$id, lbl), logical(1)))
+    if (length(idx) == 0) return(NULL)
+    sens_out[[idx[1]]]$out
+  })
+  names(kde_bandwidth_fits_local) <- vapply(kde_bandwidth_specs, `[[`, character(1), "label")
+
+  partition_results_local <- lapply(sapply(all_partitions, `[[`, "label"), function(lbl) {
+    idx <- which(vapply(sens_out, function(z) identical(z$type, "partition") && identical(z$id, lbl), logical(1)))
+    if (length(idx) == 0) return(NULL)
+    sens_out[[idx[1]]]$out
+  })
+  names(partition_results_local) <- sapply(all_partitions, `[[`, "label")
+  rm(sens_out)
+  invisible(gc(verbose = FALSE))
+
+  list(
+    kde_bandwidth_fits = kde_bandwidth_fits_local,
+    partition_results = partition_results_local
+  )
 }
-add_timing_row(
-  stage = "sensitivity_dispatch_total",
-  elapsed_sec = sensitivity_dispatch_elapsed,
-  status = "ok",
-  detail = sprintf("jobs=%d", length(sensitivity_jobs))
-)
-
-kde_bandwidth_fits <- lapply(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), function(lbl) {
-  idx <- which(vapply(sens_out, function(z) identical(z$type, "bandwidth") && identical(z$id, lbl), logical(1)))
-  if (length(idx) == 0) return(NULL)
-  sens_out[[idx[1]]]$out
-})
-names(kde_bandwidth_fits) <- vapply(kde_bandwidth_specs, `[[`, character(1), "label")
-
-partition_results <- lapply(sapply(all_partitions, `[[`, "label"), function(lbl) {
-  idx <- which(vapply(sens_out, function(z) identical(z$type, "partition") && identical(z$id, lbl), logical(1)))
-  if (length(idx) == 0) return(NULL)
-  sens_out[[idx[1]]]$out
-})
-names(partition_results) <- sapply(all_partitions, `[[`, "label")
-rm(sens_out)
-invisible(gc(verbose = FALSE))
+# Sensitivity execution is intentionally deferred until after main-fit SEM plots
+# and ATE payloads are generated.
+kde_bandwidth_fits <- NULL
+partition_results <- NULL
 
 # ============================================================================
 # 5c. SEM diagnostic plots
@@ -2563,9 +2574,18 @@ cat(sprintf("Pre-sensitivity checkpoint saved to: %s\n", pre_sensitivity_out_fil
 rm(results_pre_sensitivity)
 invisible(gc(verbose = FALSE))
 
+# Execute sensitivity runs after main-fit SEM plots + ATE payloads so
+# the final two major stages are sensitivities, then bootstraps.
+cat("\n--- Step 7: Sensitivity dispatch (bandwidth + partition) ---\n")
+sens_dispatch <- run_sensitivity_dispatch()
+kde_bandwidth_fits <- sens_dispatch$kde_bandwidth_fits
+partition_results <- sens_dispatch$partition_results
+rm(sens_dispatch)
+invisible(gc(verbose = FALSE))
+
 # Sensitivity ATE payloads are computed before pre-bootstrap checkpoint so
 # pre-bootstrap results can fully render partition/bandwidth sections.
-cat("\n--- Step 6a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
+cat("\n--- Step 7a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
 
 # ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
@@ -2636,7 +2656,7 @@ ate_partitions <- lapply(partition_results, function(pr) {
 
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
 # even if bootstrap gets interrupted or OOM-killed.
-cat("\n--- Step 6a checkpoint: saving pre-bootstrap results ---\n")
+cat("\n--- Step 7b checkpoint: saving pre-bootstrap results ---\n")
 # Include report-facing fields (pp_data, counties, kde_info, full config) so Quarto can
 # render from this checkpoint alone — same keys as final oklahoma_results.rds.
 pre_boot_saved_at <- as.character(Sys.time())
@@ -2787,7 +2807,7 @@ boot_targets_run <- intersect(BOOT_TARGETS, c("E", "F"))
 bootstrap_elapsed <- NA_real_
 if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   t_bootstrap <- proc.time()[["elapsed"]]
-  cat(sprintf("\n--- Step 6b: Parametric bootstrap ATEs (targets=%s, reps=%d, scope=%s, outer cores=%d, boot SEM inner=%d) ---\n",
+  cat(sprintf("\n--- Step 8: Parametric bootstrap ATEs (targets=%s, reps=%d, scope=%s, outer cores=%d, boot SEM inner=%d) ---\n",
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
 
   if (BOOT_REFIT_SCOPE == "full") {
