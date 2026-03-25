@@ -62,6 +62,8 @@ candidate_out_dirs <- unique(c(
 ))
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",
+                     "^oklahoma_results_pre_sensitivity(_[0-9]+)?\\.rds$",
+                     "^oklahoma_results_pre_sensitivity_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap_job([0-9]+)?\\.rds$")
 candidate_result_files <- unlist(lapply(candidate_out_dirs, function(d) {
@@ -74,9 +76,43 @@ existing_result_files <- candidate_result_files[file.exists(candidate_result_fil
 if (length(existing_result_files) == 0) {
   stop("No Oklahoma results RDS file found in expected output directories.")
 }
-non_checkpoint_files <- existing_result_files[!grepl("pre_bootstrap", basename(existing_result_files), fixed = TRUE)]
-result_pool <- if (length(non_checkpoint_files) > 0) non_checkpoint_files else existing_result_files
-result_file <- result_pool[which.max(file.info(result_pool)$mtime)]
+result_meta <- data.frame(
+  file = existing_result_files,
+  base = basename(existing_result_files),
+  mtime = as.POSIXct(file.info(existing_result_files)$mtime, origin = "1970-01-01"),
+  stringsAsFactors = FALSE
+)
+result_meta$stage <- ifelse(
+  grepl("pre_sensitivity", result_meta$base, fixed = TRUE), "pre_sensitivity",
+  ifelse(grepl("pre_bootstrap", result_meta$base, fixed = TRUE), "pre_bootstrap", "full")
+)
+result_meta$stage_rank <- match(result_meta$stage, c("pre_sensitivity", "pre_bootstrap", "full"))
+
+# Infer run id from suffixes so we can stay within the newest run:
+# - preferred: _job<id>
+# - fallback: trailing _<digits> before .rds
+# - else: untagged
+job_id <- sub(".*_job([0-9]+).*", "\\1", result_meta$base)
+job_id[!grepl("_job[0-9]+", result_meta$base)] <- NA_character_
+num_id <- sub(".*_([0-9]+)\\.rds$", "\\1", result_meta$base)
+num_id[!grepl("_[0-9]+\\.rds$", result_meta$base)] <- NA_character_
+result_meta$run_key <- ifelse(
+  !is.na(job_id),
+  paste0("job:", job_id),
+  ifelse(!is.na(num_id), paste0("num:", num_id), "untagged")
+)
+
+run_latest_idx <- tapply(seq_len(nrow(result_meta)), result_meta$run_key, function(idx) {
+  idx[which.max(result_meta$mtime[idx])]
+})
+run_latest_rows <- result_meta[as.integer(run_latest_idx), , drop = FALSE]
+newest_run_key <- run_latest_rows$run_key[which.max(run_latest_rows$mtime)]
+
+# Select highest available stage from the newest run (full > pre_bootstrap > pre_sensitivity).
+run_pool <- result_meta[result_meta$run_key == newest_run_key, , drop = FALSE]
+best_stage <- max(run_pool$stage_rank, na.rm = TRUE)
+stage_pool <- run_pool[run_pool$stage_rank == best_stage, , drop = FALSE]
+result_file <- stage_pool$file[which.max(stage_pool$mtime)]
 OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
@@ -128,7 +164,10 @@ if (is.null(cfg$ATE_WINDOW_DAYS) || (length(cfg$ATE_WINDOW_DAYS) == 1L && is.na(
 }
 
 using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")) ||
+  isTRUE(identical(results$metadata$stage, "pre_sensitivity")) ||
   (!is.null(results$checkpoint) && isTRUE(identical(results$checkpoint$stage, "pre_bootstrap"))) ||
+  (!is.null(results$checkpoint) && isTRUE(identical(results$checkpoint$stage, "pre_sensitivity"))) ||
+  grepl("pre_sensitivity", basename(result_file), fixed = TRUE) ||
   grepl("pre_bootstrap", basename(result_file), fixed = TRUE)
 
 resolve_plot_file <- function(filename) {
@@ -895,10 +934,10 @@ if (length(sem_metric_rows) > 0) {
     geom_line(linewidth = 0.9) +
     geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
     scale_colour_manual(values = c(
-      "B: SEM Biv" = "#7570b3",
-      "D: SEM Biv+KDE (ctrl-fixed)" = "#4d9221",
-      "F: SEM Biv+KDE (all-free)" = "#3182bd",
-      "H: SEM Biv+KDE (struct-fixed)" = "#33a02c"
+      "B: SEM Biv" = "#6a3d9a",
+      "D: SEM Biv+KDE (ctrl-fixed)" = "#e31a1c",
+      "F: SEM Biv+KDE (all-free)" = "#1f78b4",
+      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     theme_minimal(base_size = 12) +
@@ -1249,6 +1288,9 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
     Model = r$lab,
     `E[N(control everywhere)]` = round(c_mean, 0),
     `E[N(actual treatment regime)]` = round(t_mean, 0),
+    `E[N(treated everywhere)]` = if (!is.null(r$ate$analytic) && !is.null(r$ate$analytic$eta_treat)) {
+      round(as.numeric(r$ate$analytic$eta_treat) * n_cty, 0)
+    } else { NA_real_ },
     `Saved = control - actual` = round(saved_diff_mean, 0),
     `SD(saved)` = round(sim_sd_total, 0),
     `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
@@ -1268,11 +1310,11 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
 }))
 kable(ate_biv,
       col.names = if (using_pre_bootstrap) {
-        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
           paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
           "SD(saved)", paste0("Spillover / ", ate_days, "d"))
       } else {
-        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+        c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
           paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
           "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
           paste0("Spillover / ", ate_days, "d"))
@@ -1282,7 +1324,7 @@ kable(ate_biv,
       } else {
         paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
       },
-      align = if (using_pre_bootstrap) "lccccc" else "lccccccc") |>
+      align = if (using_pre_bootstrap) "lcccccc" else "lcccccccc") |>
   kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 if (using_pre_bootstrap) {
   cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")

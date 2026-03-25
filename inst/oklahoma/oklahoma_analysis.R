@@ -194,6 +194,10 @@ STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
 FIXED_STRUCTURAL <- NULL
 
 ATE_N_SIMS    <- if (QUICK_CHECK) 5 else if (TEST_MODE) 20 else 40
+env_ate_n_sims <- suppressWarnings(as.integer(Sys.getenv("OK_ATE_N_SIMS", "")))
+if (!is.na(env_ate_n_sims) && env_ate_n_sims > 0L) {
+  ATE_N_SIMS <- env_ate_n_sims
+}
 ATE_WINDOW_DAYS <- 100
 
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
@@ -1764,6 +1768,146 @@ if (RUN_DECODE) {
   )
 }
 
+# Save a checkpoint after core fits/decode and before sensitivity dispatch.
+cat("\n--- Step 4K checkpoint: saving pre-sensitivity results ---\n")
+pre_sens_saved_at <- as.character(Sys.time())
+fits_named_pre_sensitivity <- list(
+  A = list(
+    letter = "A", label = "Naive bivariate (county)",
+    method = "county_bivariate", algorithm = "naive",
+    params = B_params, fit = fitB, ate = NULL
+  ),
+  B = list(
+    letter = "B", label = "SEM bivariate (county)",
+    method = "county_bivariate", algorithm = "sem",
+    params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = NULL
+  ),
+  C = c(list(letter = "C", label = "Naive biv+KDE (control_only_fixed)",
+             method = "kde_control_only_fixed", algorithm = "naive"),
+        kde_variant_fits$E$control_only_fixed),
+  D = c(list(letter = "D", label = "SEM biv+KDE (control_only_fixed)",
+             method = "kde_control_only_fixed", algorithm = "sem"),
+        kde_variant_fits$F$control_only_fixed),
+  E = c(list(letter = "E", label = "Naive biv+KDE (all_free)",
+             method = "kde_all_free", algorithm = "naive"),
+        kde_variant_fits$E$all_free),
+  F = c(list(letter = "F", label = "SEM biv+KDE (all_free)",
+             method = "kde_all_free", algorithm = "sem"),
+        kde_variant_fits$F$all_free),
+  G = c(list(letter = "G", label = "Naive biv+KDE (productivity_free)",
+             method = "kde_productivity_free", algorithm = "naive"),
+        kde_variant_fits$E$productivity_free),
+  H = c(list(letter = "H", label = "SEM biv+KDE (productivity_free)",
+             method = "kde_productivity_free", algorithm = "sem"),
+        kde_variant_fits$F$productivity_free),
+  I = if (RUN_DECODE) list(
+    letter = "I", label = "Decode bivariate (county)",
+    method = "decode_county", algorithm = "decode",
+    params = G_params, decode = decode_D, ate = NULL
+  ) else NULL,
+  J = if (RUN_DECODE) list(
+    letter = "J", label = "Decode bivariate + KDE (county)",
+    method = "decode_county_kde", algorithm = "decode",
+    params = H_params, decode = decode_F, ate = NULL
+  ) else NULL
+)
+results_pre_sensitivity <- list(
+  fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = NULL),
+  fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = NULL),
+  fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = NULL),
+  fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = NULL),
+  fits_named = fits_named_pre_sensitivity,
+  kde_variants = kde_variant_fits,
+  fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = NULL) else NULL,
+  fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = NULL) else NULL,
+  bootstrap_ate = NULL,
+  partition_results = NULL,
+  ate_partitions = NULL,
+  kde_bandwidth_sensitivity = NULL,
+  pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
+  kde_info = list(
+    bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
+    n_pre_ctrl_holdout = n_pre_holdout_ctrl,
+    n_pre_holdout = nrow(pp_pre_holdout),
+    n_pre_used = nrow(pp_pre),
+    trigger_range_km = trigger_range_km
+  ),
+  counties = list(
+    names = counties_sf_valid$NAME,
+    treated_names = treated_names,
+    n_counties = partition$n,
+    n_treated = sum(treated_idx)
+  ),
+  metadata = list(stage = "pre_sensitivity", saved_at = pre_sens_saved_at),
+  checkpoint = list(
+    stage = "pre_sensitivity",
+    saved_at = pre_sens_saved_at
+  ),
+  fit_name_map = list(
+    A = "fits_named$A",
+    B = "fits_named$B",
+    C = "fits_named$C",
+    D = "fits_named$D",
+    E = "fits_named$E",
+    F = "fits_named$F",
+    G = "fits_named$G",
+    H = "fits_named$H",
+    I = "fits_named$I",
+    J = "fits_named$J"
+  ),
+  config = list(
+    ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    FIXED_STRUCTURAL = FIXED_STRUCTURAL,
+    SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
+    SEM_INNER_PROPS = SEM_INNER_PROPS,
+    SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
+    SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
+    SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
+    SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
+    SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
+    RUN_DECODE = RUN_DECODE,
+    RUN_SENSITIVITY = RUN_SENSITIVITY,
+    KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
+    MEMORY_SAFE = MEMORY_SAFE,
+    TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
+    SENS_CORES = SENS_CORES,
+    ATE_SIM_CORES = ATE_SIM_CORES,
+    DECODE_ITER = DECODE_ITER,
+    ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
+    RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
+    BOOT_N_REPS = BOOT_N_REPS,
+    BOOT_TARGETS = BOOT_TARGETS,
+    BOOT_REFIT_SCOPE = BOOT_REFIT_SCOPE,
+    BOOT_SEM_INNER_ITER = BOOT_SEM_INNER_ITER,
+    BOOT_OUTER_CORES = BOOT_OUTER_CORES,
+    BOOT_SEED = BOOT_SEED,
+    BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
+    BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
+    BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
+    BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
+    BOOT_MAX_TOTAL_EVENTS = BOOT_MAX_TOTAL_EVENTS,
+    TEST_MODE = TEST_MODE,
+    windowT_post = windowT_post,
+    n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
+    n_post = nrow(pp_post),
+    n_counties = partition$n, n_treated = sum(treated_idx),
+    grid_diameters = NULL,
+    grid_multipliers = NULL,
+    kde_bandwidth_multipliers = NULL,
+    spatial_scale_D = trigger_range_km
+  )
+)
+pre_sensitivity_out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results_pre_sensitivity.rds"))
+saveRDS(results_pre_sensitivity, pre_sensitivity_out_file)
+cat(sprintf("Pre-sensitivity checkpoint saved to: %s\n", pre_sensitivity_out_file))
+legacy_pre_sensitivity_out_files <- copy_to_legacy_out_dirs(pre_sensitivity_out_file)
+rm(results_pre_sensitivity)
+invisible(gc(verbose = FALSE))
+
 # ============================================================================
 # 4I. KDE bandwidth sensitivity (county partition, inhomogeneous E/F)
 # ============================================================================
@@ -2996,20 +3140,7 @@ invisible(gc(verbose = FALSE))
     }
   }
 
-  # Bootstrap reached completion, so drop pre-bootstrap checkpoint.
-  if (file.exists(pre_bootstrap_out_file)) {
-    unlink(pre_bootstrap_out_file, force = TRUE)
-    cat(sprintf("Deleted pre-bootstrap checkpoint: %s\n", pre_bootstrap_out_file))
-  }
-  if (exists("legacy_pre_bootstrap_out_files", inherits = FALSE) &&
-      length(legacy_pre_bootstrap_out_files) > 0L) {
-    for (legacy_path in legacy_pre_bootstrap_out_files) {
-      if (file.exists(legacy_path)) {
-        unlink(legacy_path, force = TRUE)
-        cat(sprintf("Deleted legacy pre-bootstrap checkpoint: %s\n", legacy_path))
-      }
-    }
-  }
+  cat("Retaining pre-bootstrap checkpoints as requested.\n")
   bootstrap_elapsed <- proc.time()[["elapsed"]] - t_bootstrap
 }
 if (is.finite(bootstrap_elapsed)) {
