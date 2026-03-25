@@ -340,7 +340,7 @@ fit_etas_bivariate <- function(params_init,
       par15["alpha_m_10"] <- par15["alpha_m_01"]
     }
 
-    loglik_etas_bivariate(
+    ll_args <- list(
       params = par15, realiz = realiz,
       windowT = windowT, windowS = windowS,
       m0 = m0,
@@ -348,12 +348,16 @@ fit_etas_bivariate <- function(params_init,
       treated_state_space = treated_state_space,
       background_rate_var = background_rate_var,
       treated_background_zero_before = treated_background_zero_before,
-      t_trunc = t_trunc, precomp = precomp,
-      beta_gr = dots$beta_gr,
-      stability_barrier_start = dots$stability_barrier_start,
-      stability_barrier_weight = dots$stability_barrier_weight,
-      stability_barrier_power = dots$stability_barrier_power
+      t_trunc = t_trunc,
+      precomp = precomp
     )
+    # Only forward optional barrier controls when explicitly set so
+    # defaults in loglik_etas_bivariate remain intact.
+    if (!is.null(dots$beta_gr)) ll_args$beta_gr <- dots$beta_gr
+    if (!is.null(dots$stability_barrier_start)) ll_args$stability_barrier_start <- dots$stability_barrier_start
+    if (!is.null(dots$stability_barrier_weight)) ll_args$stability_barrier_weight <- dots$stability_barrier_weight
+    if (!is.null(dots$stability_barrier_power)) ll_args$stability_barrier_power <- dots$stability_barrier_power
+    do.call(loglik_etas_bivariate, ll_args)
   }
 
   fit <- stats::optim(
