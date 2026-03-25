@@ -104,7 +104,7 @@ if [ -n "$PP_MODE" ]; then
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=200; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=120; fi
@@ -115,7 +115,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
-      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
       if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=100; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
