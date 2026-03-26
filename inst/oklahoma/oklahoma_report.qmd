@@ -582,6 +582,59 @@ kable(fixed_df, align = "lcl", caption = cap) |>
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
+```{r tbl-fixed-control-snapshots}
+#| label: tbl-fixed-control-snapshots
+cs <- results$control_snapshot_fits
+if (is.null(cs) || length(cs) == 0) {
+  kable(
+    data.frame(
+      Snapshot = "Control-only breakpoint fits",
+      Status = "Not available in this RDS; rerun analysis with updated script.",
+      stringsAsFactors = FALSE
+    ),
+    align = "ll",
+    caption = "Control-only ETAS snapshots at three breakpoints (diagnostic only)."
+  ) |>
+    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+} else {
+  ord <- c("pre50", "tstar", "end")
+  keep <- ord[ord %in% names(cs)]
+  if (length(keep) < 1L) keep <- names(cs)
+  rows <- lapply(keep, function(k) {
+    z <- cs[[k]]
+    p <- z$params
+    data.frame(
+      Snapshot = z$label %||% k,
+      `Window end (days)` = if (is.null(z$window_end)) NA_real_ else as.numeric(z$window_end),
+      `Events used` = if (is.null(z$n_events)) NA_integer_ else as.integer(z$n_events),
+      Status = z$status %||% NA_character_,
+      mu = if (is.null(p$mu)) NA_real_ else as.numeric(p$mu),
+      A = if (is.null(p$A)) NA_real_ else as.numeric(p$A),
+      alpha_m = if (is.null(p$alpha_m)) NA_real_ else as.numeric(p$alpha_m),
+      c = if (is.null(p$c)) NA_real_ else as.numeric(p$c),
+      p = if (is.null(p$p)) NA_real_ else as.numeric(p$p),
+      D = if (is.null(p$D)) NA_real_ else as.numeric(p$D),
+      gamma = if (is.null(p$gamma)) NA_real_ else as.numeric(p$gamma),
+      q = if (is.null(p$q)) NA_real_ else as.numeric(p$q),
+      loglik = if (is.null(z$loglik)) NA_real_ else as.numeric(z$loglik),
+      check.names = FALSE
+    )
+  })
+  snap_df <- do.call(rbind, rows)
+  kable(
+    snap_df,
+    digits = 4,
+    align = "lcccrrrrrrrrr",
+    caption = paste0(
+      "Control-only ETAS fits at three breakpoints (all points/regions treated as control). ",
+      "Diagnostic for parameter drift over time; SEM initialization machinery remains unchanged."
+    )
+  ) |>
+    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
+                  font_size = 9, latex_options = c("scale_down", "hold_position"))
+}
+```
+
 ## SEM Configuration
 
 - **Outer iterations:** `r cfg$SEM_N_ITER`
@@ -1350,27 +1403,49 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
 
 ```{r fig-ate-biv}
 #| label: fig-ate-biv
-#| fig-cap: "Simulation distribution of the all-or-nothing total saved over the post-treatment horizon."
+#| fig-cap: "Simulation distribution of the all-or-nothing total saved over the post-treatment horizon, facetted by model family with Naive vs SEM overlays."
 #| fig-height: 4
 biv_sim <- do.call(rbind, lapply(biv_rows, function(r) {
   if (is.null(r$ate)) return(NULL)
   data.frame(Model = r$lab, TotalATE = get_total_effect_sim(r$ate, n_tiles = n_cty))
 }))
 if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
-  biv_means <- aggregate(TotalATE ~ Model, biv_sim, mean)
-  model_levels <- unique(as.character(biv_sim$Model))
-  fill_vals <- fit_fill_colors[names(fit_fill_colors) %in% model_levels]
-  line_vals <- fit_line_colors[names(fit_line_colors) %in% model_levels]
-  ggplot(biv_sim, aes(x = TotalATE, fill = Model)) +
+  assign_role <- function(model_label) {
+    if (grepl("^A:|^C:|^E:|^G:", model_label)) return("Naive")
+    if (grepl("^B:|^D:|^F:|^H:", model_label)) return("SEM")
+    NA_character_
+  }
+  assign_pair <- function(model_label) {
+    if (grepl("^A:|^B:", model_label)) return("Homogeneous (A/B)")
+    if (grepl("^C:|^D:", model_label)) return("KDE control-fixed (C/D)")
+    if (grepl("^E:|^F:", model_label)) return("KDE all-free (E/F)")
+    if (grepl("^G:|^H:", model_label)) return("KDE struct-fixed (G/H)")
+    NA_character_
+  }
+  biv_sim$Role <- vapply(as.character(biv_sim$Model), assign_role, character(1))
+  biv_sim$Pair <- vapply(as.character(biv_sim$Model), assign_pair, character(1))
+  biv_sim <- biv_sim[!is.na(biv_sim$Role) & !is.na(biv_sim$Pair), , drop = FALSE]
+  pair_ok <- vapply(split(biv_sim$Role, biv_sim$Pair), function(x) {
+    all(c("Naive", "SEM") %in% unique(x))
+  }, logical(1))
+  biv_sim <- biv_sim[biv_sim$Pair %in% names(pair_ok)[pair_ok], , drop = FALSE]
+  biv_sim$Role <- factor(biv_sim$Role, levels = c("Naive", "SEM"))
+  biv_sim$Pair <- factor(
+    biv_sim$Pair,
+    levels = c("Homogeneous (A/B)", "KDE control-fixed (C/D)", "KDE all-free (E/F)", "KDE struct-fixed (G/H)")
+  )
+  biv_means <- aggregate(TotalATE ~ Pair + Role, biv_sim, mean)
+  ggplot(biv_sim, aes(x = TotalATE, fill = Role)) +
     geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
-    geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Model),
+    geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Role),
                linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-    scale_fill_manual(values = fill_vals) +
-    scale_colour_manual(values = line_vals) +
+    facet_wrap(~Pair, scales = "free_y") +
+    scale_fill_manual(values = c(Naive = "#fdb462", SEM = "#80b1d3")) +
+    scale_colour_manual(values = c(Naive = "#e6550d", SEM = "#3182bd")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
          y = "Simulation count",
-         title = "All-or-Nothing Total Saved: Bivariate Models") +
+         title = "All-or-Nothing Total Saved: Naive vs SEM by Model Family") +
     theme_minimal(base_size = 13) +
     theme(legend.position = "top",
           plot.title = element_text(hjust = 0.5, face = "bold"))

@@ -753,6 +753,107 @@ cat(sprintf("  Post-treatment: %d control, %d treated\n",
             sum(pp_post$location_process == "control"),
             sum(pp_post$location_process == "treated")))
 
+# ----------------------------------------------------------------------------
+# Control-parameter diagnostics over expanding horizons (report table only)
+# ----------------------------------------------------------------------------
+# These fits are diagnostic snapshots for understanding control dynamics.
+# They do NOT alter SEM initialization or any downstream fitting machinery.
+as_snapshot_df <- function(df) {
+  out <- df[, c("x", "y", "t", "mag"), drop = FALSE]
+  finite_rows <- is.finite(out$x) & is.finite(out$y) & is.finite(out$t) & is.finite(out$mag)
+  out <- out[finite_rows, , drop = FALSE]
+  out[order(out$t), , drop = FALSE]
+}
+fit_control_snapshot <- function(df, label, window_end) {
+  if (is.null(df) || nrow(df) < 10L) {
+    return(list(
+      label = label,
+      n_events = if (is.null(df)) 0L else nrow(df),
+      window_start = NA_real_,
+      window_end = as.numeric(window_end),
+      status = "insufficient_data",
+      loglik = NA_real_,
+      params = NULL
+    ))
+  }
+  starts <- c(list(PRE_CTRL_BOOT_PARAMS), VANILLA_STARTS)
+  w_start <- suppressWarnings(min(df$t, na.rm = TRUE))
+  w_end <- suppressWarnings(as.numeric(window_end))
+  wT <- c(w_start, w_end)
+  if (!all(is.finite(wT)) || diff(wT) <= 0) {
+    return(list(
+      label = label,
+      n_events = nrow(df),
+      window_start = w_start,
+      window_end = w_end,
+      status = "invalid_window",
+      loglik = NA_real_,
+      params = NULL
+    ))
+  }
+  best <- NULL
+  best_val <- -Inf
+  for (s in starts) {
+    fit_try <- tryCatch(
+      fit_etas(
+        params_init = s,
+        realiz = df,
+        windowT = wT,
+        windowS = win_km,
+        m0 = ETAS_M0,
+        maxit = VANILLA_MAXIT,
+        fixed_params = NULL
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(fit_try) && is.finite(fit_try$value) && fit_try$value > best_val) {
+      best <- fit_try
+      best_val <- fit_try$value
+    }
+  }
+  list(
+    label = label,
+    n_events = nrow(df),
+    window_start = w_start,
+    window_end = w_end,
+    status = if (is.null(best) || is.null(best$par)) "failed" else "ok",
+    loglik = if (is.null(best)) NA_real_ else best$value,
+    params = if (is.null(best)) NULL else as.list(best$par)
+  )
+}
+pp_all_control_full <- rbind(
+  pp_pre_all[, c("x", "y", "t", "mag"), drop = FALSE],
+  pp_post[, c("x", "y", "t", "mag"), drop = FALSE]
+)
+pp_all_control_full <- pp_all_control_full[order(pp_all_control_full$t), , drop = FALSE]
+control_snapshot_fits <- list(
+  pre50 = fit_control_snapshot(
+    as_snapshot_df(pp_pre_holdout),
+    "50% pretreatment (all control, all regions control)",
+    if (nrow(pp_pre_holdout) > 0) max(pp_pre_holdout$t, na.rm = TRUE) else NA_real_
+  ),
+  tstar = fit_control_snapshot(
+    as_snapshot_df(pp_pre_all),
+    "Treatment time (all control, all regions control)",
+    0
+  ),
+  end = fit_control_snapshot(
+    as_snapshot_df(pp_all_control_full),
+    "End time (all points treated as control, all regions control)",
+    post_end_days
+  )
+)
+for (nm in names(control_snapshot_fits)) {
+  cs <- control_snapshot_fits[[nm]]
+  csp <- cs$params
+  cat(sprintf("  [control-snapshot:%s] status=%s n=%d window=[%.2f, %.2f] mu=%s A=%s alpha_m=%s\n",
+              nm, cs$status, as.integer(cs$n_events),
+              as.numeric(cs$window_start), as.numeric(cs$window_end),
+              if (!is.null(csp$mu)) as.character(signif(csp$mu, 4)) else "NA",
+              if (!is.null(csp$A)) as.character(signif(csp$A, 4)) else "NA",
+              if (!is.null(csp$alpha_m)) as.character(signif(csp$alpha_m, 4)) else "NA"))
+}
+
 # ============================================================================
 # 3. Partition and point pattern plots
 # ============================================================================
@@ -2625,6 +2726,7 @@ results_pre_sensitivity <- list(
     n_pre_used = nrow(pp_pre),
     trigger_range_km = trigger_range_km
   ),
+  control_snapshot_fits = control_snapshot_fits,
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
@@ -2855,6 +2957,7 @@ results_pre_bootstrap <- list(
     n_pre_used = nrow(pp_pre),
     trigger_range_km = trigger_range_km
   ),
+  control_snapshot_fits = control_snapshot_fits,
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
@@ -3441,6 +3544,7 @@ results <- list(
                   n_pre_holdout = nrow(pp_pre_holdout),
                   n_pre_used = nrow(pp_pre),
                   trigger_range_km = trigger_range_km),
+  control_snapshot_fits = control_snapshot_fits,
   plots = analysis_plots,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   timing_df = timing_df,
