@@ -116,6 +116,36 @@ if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_IN
 }
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_CHANGE_FACTOR <- 0.01
+SEM_CHANGE_FACTOR_MIN_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MIN_MULT", "0.2")))
+if (!is.finite(SEM_CHANGE_FACTOR_MIN_MULT) || is.na(SEM_CHANGE_FACTOR_MIN_MULT) || SEM_CHANGE_FACTOR_MIN_MULT <= 0) {
+  SEM_CHANGE_FACTOR_MIN_MULT <- 0.2
+}
+SEM_CHANGE_FACTOR_MAX_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MAX_MULT", "2.0")))
+if (!is.finite(SEM_CHANGE_FACTOR_MAX_MULT) || is.na(SEM_CHANGE_FACTOR_MAX_MULT) || SEM_CHANGE_FACTOR_MAX_MULT < SEM_CHANGE_FACTOR_MIN_MULT) {
+  SEM_CHANGE_FACTOR_MAX_MULT <- max(2.0, SEM_CHANGE_FACTOR_MIN_MULT)
+}
+SEM_OPTIM_METHOD <- tolower(trimws(Sys.getenv("OK_SEM_OPTIM_METHOD", "sample_weighted")))
+if (!SEM_OPTIM_METHOD %in% c("max", "sample_weighted")) SEM_OPTIM_METHOD <- "sample_weighted"
+SEM_SELECTION_TEMPERATURE <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_SELECTION_TEMPERATURE", "0.08")))
+if (!is.finite(SEM_SELECTION_TEMPERATURE) || is.na(SEM_SELECTION_TEMPERATURE) || SEM_SELECTION_TEMPERATURE <= 0) {
+  SEM_SELECTION_TEMPERATURE <- 0.08
+}
+RUN_SEM_PILOT <- tolower(trimws(Sys.getenv("OK_RUN_SEM_PILOT", "false"))) %in% c("1", "true", "yes", "y")
+SEM_PILOT_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_INNER_ITER", "100")))
+if (!is.finite(SEM_PILOT_INNER_ITER) || is.na(SEM_PILOT_INNER_ITER) || SEM_PILOT_INNER_ITER < 1L) {
+  SEM_PILOT_INNER_ITER <- 100L
+}
+SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv(
+  "OK_SEM_PILOT_CORES",
+  as.character(max(1L, min(parallel::detectCores(), 8L)))
+)))
+if (!is.finite(SEM_PILOT_CORES) || is.na(SEM_PILOT_CORES) || SEM_PILOT_CORES < 1L) {
+  SEM_PILOT_CORES <- max(1L, min(parallel::detectCores(), 8L))
+}
+SEM_PILOT_MAX_COMBOS <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_MAX_COMBOS", "24")))
+if (!is.finite(SEM_PILOT_MAX_COMBOS) || is.na(SEM_PILOT_MAX_COMBOS) || SEM_PILOT_MAX_COMBOS < 1L) {
+  SEM_PILOT_MAX_COMBOS <- 24L
+}
 SEM_STAGNATION_TRIGGER_EVERY <- 50
 SEM_TEMPORAL_WEIGHT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_TEMPORAL_WEIGHT", "0")))
 if (!is.finite(SEM_TEMPORAL_WEIGHT) || is.na(SEM_TEMPORAL_WEIGHT)) SEM_TEMPORAL_WEIGHT <- 0
@@ -228,6 +258,7 @@ N_CORES <- max(1L, min(N_CORES, parallel::detectCores()))
 if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
   N_CORES <- min(N_CORES, 8L)
 }
+SEM_PILOT_CORES <- max(1L, min(SEM_PILOT_CORES, N_CORES))
 BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) max(2L, min(8L, as.integer(floor(N_CORES / 4L)))) else N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
@@ -273,6 +304,15 @@ derive_run_seed <- function(base_seed, label = "", offset = 0L) {
   seed_val
 }
 RNG_STREAM_CALL_COUNTER <- 0L
+
+parse_numeric_vector_env <- function(env_name, default_vals, lower = -Inf) {
+  raw <- trimws(Sys.getenv(env_name, ""))
+  if (!nzchar(raw)) return(as.numeric(default_vals))
+  vals <- suppressWarnings(as.numeric(trimws(unlist(strsplit(raw, ",")))))
+  vals <- vals[is.finite(vals) & !is.na(vals) & vals >= lower]
+  if (length(vals) < 1L) return(as.numeric(default_vals))
+  unique(as.numeric(vals))
+}
 
 run_parallel <- function(X, FUN, cores, label = "job") {
   n <- length(X)
@@ -426,6 +466,16 @@ cat("=== Oklahoma County-Based ETAS Analysis ===\n")
 cat(sprintf("Mode: %s | SEM iters: %d | Change factor: %.3f | Cores: %d\n",
             mode_label, SEM_N_ITER, SEM_CHANGE_FACTOR,
             N_CORES))
+cat(sprintf("SEM selection: method=%s | temperature=%.3f\n",
+            SEM_OPTIM_METHOD, SEM_SELECTION_TEMPERATURE))
+cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
+            SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
+if (RUN_SEM_PILOT) {
+  cat(sprintf("SEM pilot: enabled | inner_iter=%d | cores=%d | max_combos=%d\n",
+              SEM_PILOT_INNER_ITER, SEM_PILOT_CORES, SEM_PILOT_MAX_COMBOS))
+} else {
+  cat("SEM pilot: disabled\n")
+}
 cat(sprintf("Memory safe: %s | Sens cores: %d | ATE sim cores: %d | Boot outer cores: %d | Trim sensitivity objects: %s\n",
             MEMORY_SAFE, SENS_CORES, ATE_SIM_CORES, BOOT_OUTER_CORES, TRIM_SENS_OBJECTS))
 cat(sprintf("ATE CRN: use=%s pair=%s conditional_on_pre=%s base=%s\n",
@@ -1030,6 +1080,11 @@ run_sem_fit <- function(pp_data_in,
                         treated_background_zero_before_in = 0,
                         sem_t_trunc_in = SEM_T_TRUNC_DAYS,
                         sem_inner_iter_in = SEM_INNER_ITER,
+                        sem_change_factor_in = SEM_CHANGE_FACTOR,
+                        sem_change_factor_min_mult_in = SEM_CHANGE_FACTOR_MIN_MULT,
+                        sem_change_factor_max_mult_in = SEM_CHANGE_FACTOR_MAX_MULT,
+                        sem_optim_method_in = SEM_OPTIM_METHOD,
+                        sem_selection_temperature_in = SEM_SELECTION_TEMPERATURE,
                         verbose_in = DF_VERBOSE,
                         label = "SEM") {
   t0 <- proc.time()[["elapsed"]]
@@ -1068,12 +1123,17 @@ run_sem_fit <- function(pp_data_in,
         proposal_update_cadence = 1,
         state_spaces = state_spaces_in,
         iter = sem_inner_iter_in, n_props = SEM_INNER_PROPS,
-        change_factor = SEM_CHANGE_FACTOR, verbose = sem_verbose_effective,
+        change_factor = sem_change_factor_in,
+        change_factor_min_mult = sem_change_factor_min_mult_in,
+        change_factor_max_mult = sem_change_factor_max_mult_in,
+        optim_method = sem_optim_method_in,
+        selection_temperature = sem_selection_temperature_in,
+        verbose = sem_verbose_effective,
         stagnation_trigger_every = SEM_STAGNATION_TRIGGER_EVERY,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
-        include_starting_first_n = 50,
+        include_starting_first_n = sem_inner_iter_in,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
         proposal_method = "simulation",
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
@@ -1368,6 +1428,130 @@ fit_f <- function(init_params = biv_init_F,
 }
 
 primary_kde_spec <- kde_variant_specs[[kde_primary_variant_id]]
+
+sem_pilot_tuning <- NULL
+if (RUN_SEM_PILOT) {
+  cat("\n--- SEM pilot tuning (Model D only) ---\n")
+  pilot_cf <- parse_numeric_vector_env("OK_SEM_PILOT_CHANGE_FACTORS", c(0.005, 0.01, 0.02), lower = 1e-10)
+  pilot_min <- parse_numeric_vector_env("OK_SEM_PILOT_MIN_MULTS", c(0.1, 0.2, 0.4), lower = 1e-10)
+  pilot_max <- parse_numeric_vector_env("OK_SEM_PILOT_MAX_MULTS", c(1.5, 2.0, 3.0), lower = 1e-10)
+  pilot_temp <- parse_numeric_vector_env("OK_SEM_PILOT_TEMPS", c(0.04, 0.08, 0.12), lower = 1e-10)
+
+  pilot_grid <- expand.grid(
+    change_factor = pilot_cf,
+    min_mult = pilot_min,
+    max_mult = pilot_max,
+    temperature = pilot_temp,
+    stringsAsFactors = FALSE
+  )
+  pilot_grid <- pilot_grid[pilot_grid$max_mult >= pilot_grid$min_mult, , drop = FALSE]
+
+  if (nrow(pilot_grid) > SEM_PILOT_MAX_COMBOS) {
+    set.seed(derive_run_seed(OK_GLOBAL_SEED, label = "ok_sem_pilot_grid"))
+    keep_idx <- sort(sample(seq_len(nrow(pilot_grid)), SEM_PILOT_MAX_COMBOS))
+    pilot_grid <- pilot_grid[keep_idx, , drop = FALSE]
+  }
+  pilot_jobs <- split(pilot_grid, seq_len(nrow(pilot_grid)))
+  cat(sprintf("  pilot combos: %d (cores=%d, inner_iter=%d)\n",
+              length(pilot_jobs), SEM_PILOT_CORES, SEM_PILOT_INNER_ITER))
+
+  run_one_pilot <- function(job_df) {
+    cf <- as.numeric(job_df$change_factor[[1]])
+    mn <- as.numeric(job_df$min_mult[[1]])
+    mx <- as.numeric(job_df$max_mult[[1]])
+    tt <- as.numeric(job_df$temperature[[1]])
+    label <- sprintf("pilot_D_cf%.4f_min%.3f_max%.3f_T%.3f", cf, mn, mx, tt)
+    fit <- tryCatch(
+      run_sem_fit(
+        pp_data_in = pp_all_bg,
+        partition_in = partition,
+        partition_processes_in = partition_processes,
+        state_spaces_in = state_spaces,
+        init_params_in = biv_init_F,
+        fixed_params_in = primary_kde_spec$fixed_params,
+        background_rate_var_in = "W",
+        sem_inner_iter_in = SEM_PILOT_INNER_ITER,
+        sem_change_factor_in = cf,
+        sem_change_factor_min_mult_in = mn,
+        sem_change_factor_max_mult_in = mx,
+        sem_optim_method_in = "sample_weighted",
+        sem_selection_temperature_in = tt,
+        verbose_in = FALSE,
+        label = label
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(fit) || is.null(fit$adaptive)) {
+      return(data.frame(
+        change_factor = cf, min_mult = mn, max_mult = mx, temperature = tt,
+        ok = FALSE, final_metric = NA_real_,
+        mean_avg_flips_tail = NA_real_, mean_acc_flips_tail = NA_real_,
+        stringsAsFactors = FALSE
+      ))
+    }
+    ad <- fit$adaptive
+    metric_vec <- as.numeric(ad$metrics)
+    metric_vec <- metric_vec[is.finite(metric_vec)]
+    tail_n <- min(20L, length(ad$average_flips), length(ad$max_metric_flips))
+    mean_avg_tail <- if (tail_n > 0L) mean(tail(as.numeric(ad$average_flips), tail_n), na.rm = TRUE) else NA_real_
+    mean_acc_tail <- if (tail_n > 0L) mean(tail(as.numeric(ad$max_metric_flips), tail_n), na.rm = TRUE) else NA_real_
+    data.frame(
+      change_factor = cf, min_mult = mn, max_mult = mx, temperature = tt,
+      ok = TRUE,
+      final_metric = if (length(metric_vec) > 0L) tail(metric_vec, 1L) else NA_real_,
+      mean_avg_flips_tail = mean_avg_tail,
+      mean_acc_flips_tail = mean_acc_tail,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  pilot_out <- if (length(pilot_jobs) > 0L) {
+    run_parallel(
+      pilot_jobs, run_one_pilot,
+      cores = min(SEM_PILOT_CORES, length(pilot_jobs)),
+      label = "sem-pilot-fitD"
+    )
+  } else {
+    list()
+  }
+  pilot_df <- if (length(pilot_out) > 0L) do.call(rbind, pilot_out) else NULL
+  if (!is.null(pilot_df) && nrow(pilot_df) > 0) {
+    ok_df <- pilot_df[pilot_df$ok & is.finite(pilot_df$final_metric), , drop = FALSE]
+    if (nrow(ok_df) > 0) {
+      ok_df <- ok_df %>%
+        mutate(
+          rank_metric = rank(-.data$final_metric, ties.method = "min"),
+          rank_acc = rank(.data$mean_acc_flips_tail, ties.method = "min"),
+          rank_avg = rank(.data$mean_avg_flips_tail, ties.method = "min"),
+          pilot_score = .data$rank_metric + .data$rank_acc + .data$rank_avg
+        ) %>%
+        arrange(.data$pilot_score, desc(.data$final_metric), .data$mean_acc_flips_tail)
+      best <- ok_df[1, , drop = FALSE]
+      SEM_CHANGE_FACTOR <- as.numeric(best$change_factor[[1]])
+      SEM_CHANGE_FACTOR_MIN_MULT <- as.numeric(best$min_mult[[1]])
+      SEM_CHANGE_FACTOR_MAX_MULT <- as.numeric(best$max_mult[[1]])
+      SEM_OPTIM_METHOD <- "sample_weighted"
+      SEM_SELECTION_TEMPERATURE <- as.numeric(best$temperature[[1]])
+      cat(sprintf(
+        "  pilot best: change_factor=%.4f min_mult=%.3f max_mult=%.3f temp=%.3f final_metric=%.3f avg_tail=%.2f acc_tail=%.2f\n",
+        SEM_CHANGE_FACTOR, SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT, SEM_SELECTION_TEMPERATURE,
+        as.numeric(best$final_metric[[1]]), as.numeric(best$mean_avg_flips_tail[[1]]), as.numeric(best$mean_acc_flips_tail[[1]])
+      ))
+      sem_pilot_tuning <- list(
+        enabled = TRUE,
+        inner_iter = SEM_PILOT_INNER_ITER,
+        cores = SEM_PILOT_CORES,
+        grid_size = nrow(pilot_grid),
+        results = ok_df,
+        best = best
+      )
+    } else {
+      cat("  pilot warning: no successful pilot fits; using existing SEM defaults.\n")
+      sem_pilot_tuning <- list(enabled = TRUE, inner_iter = SEM_PILOT_INNER_ITER, cores = SEM_PILOT_CORES, grid_size = nrow(pilot_grid), results = pilot_df, best = NULL)
+    }
+  }
+}
+
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
 fit_jobs_all <- list(
   list(kind = "A_hom_naive", variant_id = NA_character_),
@@ -2797,6 +2981,7 @@ results_pre_sensitivity <- list(
     trigger_range_km = trigger_range_km
   ),
   control_snapshot_fits = control_snapshot_fits,
+  sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
@@ -2828,6 +3013,14 @@ results_pre_sensitivity <- list(
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
+    SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
+    SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
+    SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
+    RUN_SEM_PILOT = RUN_SEM_PILOT,
+    SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
+    SEM_PILOT_CORES = SEM_PILOT_CORES,
+    SEM_PILOT_MAX_COMBOS = SEM_PILOT_MAX_COMBOS,
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
@@ -3032,6 +3225,7 @@ results_pre_bootstrap <- list(
     trigger_range_km = trigger_range_km
   ),
   control_snapshot_fits = control_snapshot_fits,
+  sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
@@ -3066,6 +3260,14 @@ results_pre_bootstrap <- list(
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
+    SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
+    SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
+    SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
+    RUN_SEM_PILOT = RUN_SEM_PILOT,
+    SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
+    SEM_PILOT_CORES = SEM_PILOT_CORES,
+    SEM_PILOT_MAX_COMBOS = SEM_PILOT_MAX_COMBOS,
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
@@ -3625,6 +3827,7 @@ results <- list(
                   n_pre_used = nrow(pp_pre),
                   trigger_range_km = trigger_range_km),
   control_snapshot_fits = control_snapshot_fits,
+  sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   timing_df = timing_df,
@@ -3657,6 +3860,14 @@ results <- list(
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
+    SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
+    SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
+    SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
+    RUN_SEM_PILOT = RUN_SEM_PILOT,
+    SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
+    SEM_PILOT_CORES = SEM_PILOT_CORES,
+    SEM_PILOT_MAX_COMBOS = SEM_PILOT_MAX_COMBOS,
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,

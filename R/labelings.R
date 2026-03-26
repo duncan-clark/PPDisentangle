@@ -898,7 +898,14 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param include_starting_data Logical; include current data in proposals
 #' @param include_starting_first_n Integer; force-include starting data as a
 #'   candidate proposal for the first N inner iterations.
-#' @param optim_method One of "max", "mean", "truncated_mean"
+#' @param optim_method One of "max", "sample_weighted", "mean", "truncated_mean"
+#' @param selection_temperature Positive temperature for likelihood-weighted
+#'   sampling when \code{optim_method = "sample_weighted"}. Lower values are
+#'   more concentrated near the maximum-likelihood proposal.
+#' @param change_factor_min_mult Lower bound multiplier for adaptive
+#'   \code{change_factor} relative to the initial value.
+#' @param change_factor_max_mult Upper bound multiplier for adaptive
+#'   \code{change_factor} relative to the initial value.
 #' @param state_spaces Optional precomputed state spaces
 #' @param metric_name Metric for selecting best labeling
 #' @param iter Number of iterations
@@ -926,6 +933,9 @@ em_style_labelling <- function(pp_data,
                                include_starting_data = TRUE,
                                include_starting_first_n = 50,
                                optim_method = "max",
+                               selection_temperature = 0.15,
+                               change_factor_min_mult = 0.2,
+                               change_factor_max_mult = 2.0,
                                state_spaces = NULL,
                                metric_name = "post_likelihood",
                                iter = 100,
@@ -955,9 +965,21 @@ em_style_labelling <- function(pp_data,
   if (!is.finite(include_starting_first_n) || is.na(include_starting_first_n) || include_starting_first_n < 0L) {
     include_starting_first_n <- 0L
   }
+  selection_temperature <- suppressWarnings(as.numeric(selection_temperature))
+  if (!is.finite(selection_temperature) || is.na(selection_temperature) || selection_temperature <= 0) {
+    selection_temperature <- 0.15
+  }
+  change_factor_min_mult <- suppressWarnings(as.numeric(change_factor_min_mult))
+  change_factor_max_mult <- suppressWarnings(as.numeric(change_factor_max_mult))
+  if (!is.finite(change_factor_min_mult) || is.na(change_factor_min_mult) || change_factor_min_mult <= 0) {
+    change_factor_min_mult <- 0.2
+  }
+  if (!is.finite(change_factor_max_mult) || is.na(change_factor_max_mult) || change_factor_max_mult < change_factor_min_mult) {
+    change_factor_max_mult <- max(2.0, change_factor_min_mult)
+  }
   # Keep adaptive proposal size changes moderate around the initial setting.
-  change_factor_min <- 0.2 * base_change_factor
-  change_factor_max <- 2.0 * base_change_factor
+  change_factor_min <- change_factor_min_mult * base_change_factor
+  change_factor_max <- change_factor_max_mult * base_change_factor
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   hawkes_use_filtration_history <- if ("hawkes_use_filtration_history" %in% names(dots)) {
     isTRUE(dots$hawkes_use_filtration_history)
@@ -1268,18 +1290,33 @@ em_style_labelling <- function(pp_data,
       }, numeric(1))
     }
 
-    if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
+    sample_metric_idx <- function(metric_values, temp) {
+      vals <- as.numeric(metric_values)
+      finite_idx <- which(is.finite(vals))
+      if (length(finite_idx) < 1L) return(which.max(vals))
+      shifted <- (vals[finite_idx] - max(vals[finite_idx])) / temp
+      shifted <- pmax(shifted, -700) # avoid underflow warnings in exp()
+      w <- exp(shifted)
+      if (!all(is.finite(w)) || sum(w) <= 0) return(finite_idx[[which.max(vals[finite_idx])]])
+      finite_idx[[sample.int(length(finite_idx), size = 1L, prob = w)]]
+    }
+    if (identical(optim_method, "sample_weighted") && metric_name == "post_likelihood") {
+      best_metric_idx <- sample_metric_idx(metric, selection_temperature)
+      max_metric_labelling <- labelling_proposals[[best_metric_idx]]
+    } else if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
       tmp <- exp(metric[1] - metric[2])
       tmp <- runif(1) < min(tmp, 1)
       if (tmp) {
-        max_metric_labelling <- labelling_proposals[[which.max(metric)]]
+        best_metric_idx <- which.max(metric)
+        max_metric_labelling <- labelling_proposals[[best_metric_idx]]
       } else {
-        max_metric_labelling <- labelling_proposals[[length(labelling_proposals)]]
+        best_metric_idx <- length(labelling_proposals)
+        max_metric_labelling <- labelling_proposals[[best_metric_idx]]
       }
     } else {
-      max_metric_labelling <- labelling_proposals[[which.max(metric)]]
+      best_metric_idx <- which.max(metric)
+      max_metric_labelling <- labelling_proposals[[best_metric_idx]]
     }
-    best_metric_idx <- which.max(metric)
     t_lik <- proc.time()[3] - t_lik
     total_likelihood <- total_likelihood + t_lik
     if (verbose && sem_timing_verbose) {

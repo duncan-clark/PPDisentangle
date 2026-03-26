@@ -1067,9 +1067,9 @@ if (length(sem_metric_rows) > 0) {
 
 ```{r fig-sem-cumulative-flips}
 #| label: fig-sem-cumulative-flips
-#| fig-cap: "Cumulative SEM label flips by relabelling iteration for county SEM fits (faceted by model)."
+#| fig-cap: "Per-iteration SEM label flips by relabelling iteration for county SEM fits (faceted by model)."
 #| fig-height: 5
-cumulative_flip_rows <- list()
+flip_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
@@ -1083,37 +1083,37 @@ for (info in list(
   tmp <- data.frame(
     Iteration = seq_len(n),
     Model = info$lab,
-    CumulativeAverageFlips = cumsum(as.numeric(ad$average_flips[seq_len(n)])),
-    CumulativeAcceptedFlips = cumsum(as.numeric(ad$max_metric_flips[seq_len(n)]))
+    AverageFlips = as.numeric(ad$average_flips[seq_len(n)]),
+    AcceptedFlips = as.numeric(ad$max_metric_flips[seq_len(n)])
   )
-  cumulative_flip_rows[[length(cumulative_flip_rows) + 1]] <- tmp
+  flip_rows[[length(flip_rows) + 1]] <- tmp
 }
-if (length(cumulative_flip_rows) > 0) {
-  cumulative_flip_df <- do.call(rbind, cumulative_flip_rows)
-  cumulative_flip_df <- cumulative_flip_df |>
+if (length(flip_rows) > 0) {
+  flip_df <- do.call(rbind, flip_rows)
+  flip_df <- flip_df |>
     tidyr::pivot_longer(
-      cols = c(CumulativeAverageFlips, CumulativeAcceptedFlips),
+      cols = c(AverageFlips, AcceptedFlips),
       names_to = "Metric",
       values_to = "Flips"
     )
-  cumulative_flip_df$Metric <- factor(
-    cumulative_flip_df$Metric,
-    levels = c("CumulativeAverageFlips", "CumulativeAcceptedFlips"),
-    labels = c("Cumulative average flips", "Cumulative accepted flips")
+  flip_df$Metric <- factor(
+    flip_df$Metric,
+    levels = c("AverageFlips", "AcceptedFlips"),
+    labels = c("Average flips", "Accepted flips")
   )
-  ggplot(cumulative_flip_df, aes(x = Iteration, y = Flips, colour = Metric)) +
+  ggplot(flip_df, aes(x = Iteration, y = Flips, colour = Metric)) +
     geom_line(linewidth = 0.9) +
     facet_wrap(~ Model, scales = "free_y") +
     scale_colour_manual(values = c(
-      "Cumulative average flips" = "#08519c",
-      "Cumulative accepted flips" = "#a50f15"
+      "Average flips" = "#08519c",
+      "Accepted flips" = "#a50f15"
     )) +
-    labs(x = "Adaptive SEM iteration", y = "Cumulative flips") +
+    labs(x = "Adaptive SEM iteration", y = "Flips per iteration") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "top")
 } else {
   plot.new()
-  text(0.5, 0.5, "No SEM cumulative flip traces found in this results file.")
+  text(0.5, 0.5, "No SEM flip traces found in this results file.")
 }
 ```
 
