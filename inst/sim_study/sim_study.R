@@ -838,7 +838,7 @@ labellings <- list(
 # 9. Classification accuracy summary
 # ------------------------------------------------------------------
 log_msg("")
-log_msg("=== Classification Accuracy ===")
+log_msg("=== Classification Accuracy (pre-fit filter; final reported after high-mu filter) ===")
 class_metrics <- lapply(names(labellings), function(nm) {
   accs <- sapply(labellings[[nm]], function(y) {
     keep <- which(y$t > TREATMENT_TIME)
@@ -1182,6 +1182,46 @@ if (length(high_mu_failed_idx) > 0L) {
 } else if (isTRUE(FILTER_HIGH_MU_FITS)) {
   log_msg(sprintf("[HIGH MU FILTER] No fits exceeded %.2fx true mu.", MU_FAIL_MULTIPLIER))
 }
+
+# Build a reusable inclusion lookup so every downstream average/plot can
+# consistently exclude failed high-mu fits by (sim_id, labelling).
+task_sim_ids <- ((seq_along(tasks) - 1L) %% SIM_SIZE) + 1L
+task_labellings <- vapply(tasks, function(tk) tk$labelling_name, character(1))
+task_keys <- paste(task_sim_ids, task_labellings, sep = "::")
+include_lookup <- include_results
+names(include_lookup) <- task_keys
+is_kept_fit <- function(sim_id, labelling_name) {
+  key <- paste(as.integer(sim_id), as.character(labelling_name), sep = "::")
+  val <- include_lookup[[key]]
+  if (is.null(val) || is.na(val)) return(FALSE)
+  isTRUE(val)
+}
+method_keep_mask <- function(n_sim, labelling_name) {
+  if (n_sim < 1L) return(logical(0))
+  vapply(seq_len(n_sim), function(i) is_kept_fit(i, labelling_name), logical(1))
+}
+
+# Recompute classification metrics using only kept fits so paper summaries
+# match the high-mu filtering used for ATE and parameter outputs.
+class_metrics <- lapply(names(labellings), function(nm) {
+  keep_mask <- method_keep_mask(length(labellings[[nm]]), nm)
+  kept_idx <- which(keep_mask)
+  accs <- sapply(kept_idx, function(i) {
+    y <- labellings[[nm]][[i]]
+    keep <- which(y$t > TREATMENT_TIME)
+    if (length(keep) < 2) return(NA_real_)
+    mean(y$inferred_process[keep] == y$process[keep])
+  })
+  data.frame(
+    method = nm,
+    n_kept = length(kept_idx),
+    mean_accuracy = if (length(accs) > 0) mean(accs, na.rm = TRUE) else NA_real_
+  )
+})
+class_metrics <- do.call(rbind, class_metrics)
+log_msg("")
+log_msg("=== Classification Accuracy (after high-mu filter) ===")
+print(class_metrics)
 
 results_df <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
   if (!isTRUE(include_results[[k]])) return(NULL)
@@ -1535,7 +1575,9 @@ sim_study_plots$draw_treated_params_combined <- function() {
 }
 
 if (exists("EM_results") && length(EM_results) > 0) {
-  acc_list <- lapply(seq_along(EM_results), function(i) {
+  sem_keep_mask <- method_keep_mask(length(EM_results), "SEM_adaptive")
+  sem_keep_idx <- which(sem_keep_mask)
+  acc_list <- lapply(sem_keep_idx, function(i) {
     acc <- EM_results[[i]]$adaptive$accuracies
     if (is.null(acc) || length(acc) == 0) return(NULL)
     data.frame(
@@ -1552,12 +1594,12 @@ if (exists("EM_results") && length(EM_results) > 0) {
       group_by(iteration) %>%
       summarize(mean_accuracy = mean(accuracy, na.rm = TRUE), .groups = "drop")
 
-    oracle_acc <- mean(sapply(pp_labeled_oracle, function(y) {
+    oracle_acc <- mean(sapply(pp_labeled_oracle[sem_keep_idx], function(y) {
       keep <- which(y$t > TREATMENT_TIME)
       if (length(keep) < 2) return(NA_real_)
       mean(y$inferred_process[keep] == y$process[keep])
     }), na.rm = TRUE)
-    naive_acc <- mean(sapply(pp_labeled_naive, function(y) {
+    naive_acc <- mean(sapply(pp_labeled_naive[sem_keep_idx], function(y) {
       keep <- which(y$t > TREATMENT_TIME)
       if (length(keep) < 2) return(NA_real_)
       mean(y$inferred_process[keep] == y$process[keep])
@@ -1579,10 +1621,17 @@ if (exists("EM_results") && length(EM_results) > 0) {
   }
 }
 
+sem_diagnostics_df_filtered <- sem_diagnostics_df
+if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
+  sem_keep_idx <- which(method_keep_mask(length(EM_results), "SEM_adaptive"))
+  sem_diagnostics_df_filtered <- sem_diagnostics_df %>%
+    filter(.data$sim_id %in% sem_keep_idx)
+}
+
 # Adaptive SEM objective/likelihood tracking over iterations
-if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0 &&
-    "metric" %in% names(sem_diagnostics_df)) {
-  metric_df <- sem_diagnostics_df %>% filter(is.finite(.data$metric))
+if (!is.null(sem_diagnostics_df_filtered) && nrow(sem_diagnostics_df_filtered) > 0 &&
+    "metric" %in% names(sem_diagnostics_df_filtered)) {
+  metric_df <- sem_diagnostics_df_filtered %>% filter(is.finite(.data$metric))
   if (!is.null(metric_df) && nrow(metric_df) > 0) {
     mean_metric_df <- metric_df %>%
       group_by(iteration) %>%
@@ -1598,15 +1647,15 @@ if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0 &&
 }
 
 # Flips over iterations plot
-if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
-  mean_flips_df <- sem_diagnostics_df %>%
+if (!is.null(sem_diagnostics_df_filtered) && nrow(sem_diagnostics_df_filtered) > 0) {
+  mean_flips_df <- sem_diagnostics_df_filtered %>%
     group_by(iteration) %>%
     summarize(
       mean_avg_flips = mean(average_flips, na.rm = TRUE),
       mean_max_flips = mean(max_metric_flips, na.rm = TRUE),
       .groups = "drop"
     )
-  flips_long <- sem_diagnostics_df %>%
+  flips_long <- sem_diagnostics_df_filtered %>%
     reshape2::melt(id.vars = c("sim_id", "iteration"),
                    measure.vars = c("average_flips", "max_metric_flips"),
                    variable.name = "flip_type", value.name = "flips")
@@ -1667,7 +1716,8 @@ sim_study_results <- list(
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
   EM_results = EM_results,
-  sem_diagnostics = sem_diagnostics_df,
+  sem_diagnostics = sem_diagnostics_df_filtered,
+  sem_diagnostics_all = sem_diagnostics_df,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
