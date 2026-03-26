@@ -91,6 +91,11 @@ loglik_etas <- function(params,
     p  <- params[5]; D <- params[6]; gamma_p <- params[7]; q  <- params[8]
   }
 
+  if (!all(is.finite(c(mu, A, alpha_m, cc, p, D, gamma_p, q)))) return(-1e15)
+  if (!all(is.finite(realiz$t)) || !all(is.finite(realiz$x)) || !all(is.finite(realiz$y)) || !all(is.finite(realiz$mag))) {
+    return(-1e15)
+  }
+
   # --- Sorting ---
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
 
@@ -159,14 +164,15 @@ loglik_etas <- function(params,
     t_max     = tval,
     t_trunc   = if (!is.null(t_trunc)) t_trunc else -1.0
   )
+  if (!is.finite(loglik)) return(-1e15)
 
   # Smooth stability barrier on the univariate ETAS branching ratio eta; the
   # penalty activates only when eta exceeds `stability_barrier_start`.
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
-  if (!is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
+  if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
   if (barrier_weight > 0) {
     beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (!is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
+    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
       mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
       mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
       beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else 1
@@ -179,9 +185,9 @@ loglik_etas <- function(params,
     }
     if (!is.finite(eta)) return(-1e15)
     barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
-    if (!is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
+    if (length(barrier_start) != 1L || !is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
     barrier_power <- suppressWarnings(as.numeric(stability_barrier_power))
-    if (!is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
+    if (length(barrier_power) != 1L || !is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
     excess <- max(0, eta - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
@@ -285,7 +291,9 @@ fit_etas <- function(params_init,
   # Indices (within the free vector) of params that must be positive
   log_idx <- if (log_transform) which(free_names %in% c("mu", "A", "c", "D")) else integer(0)
 
-  realiz <- realiz[order(realiz$t), ]
+  finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
+  if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
+  realiz <- realiz[order(realiz$t), , drop = FALSE]
 
   # Transform initial values to optimisation scale
   opt_init <- free_init
@@ -296,7 +304,12 @@ fit_etas <- function(params_init,
     if (length(log_idx) > 0) free_par[log_idx] <- exp(opt_par[log_idx])
     par8 <- full_init
     par8[free_idx] <- free_par
-    loglik_etas(par8, ...)
+    ll_val <- tryCatch(
+      loglik_etas(par8, ...),
+      error = function(e) -1e15
+    )
+    if (!is.finite(ll_val) || is.na(ll_val)) return(-1e15)
+    as.numeric(ll_val)
   }
 
   opt_args <- c(

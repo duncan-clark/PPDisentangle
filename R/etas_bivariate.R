@@ -76,11 +76,16 @@ loglik_etas_bivariate <- function(params,
   gamma_p    <- pv[["gamma"]]
   q          <- pv[["q"]]
 
+  core_par <- c(mu_0, mu_1, A_00, A_11, A_01, A_10, cc, p, D, gamma_p, q)
+  if (any(!is.finite(core_par))) return(-1e15)
   if (min(mu_0, mu_1, A_00, A_11, cc, D) < 0 ||
       A_01 < 0 || A_10 < 0 || p <= 1 || q <= 1 || gamma_p < 0) {
     return(-1e15)
   }
 
+  if (!all(is.finite(realiz$t)) || !all(is.finite(realiz$x)) || !all(is.finite(realiz$y)) || !all(is.finite(realiz$mag))) {
+    return(-1e15)
+  }
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
@@ -147,9 +152,11 @@ loglik_etas_bivariate <- function(params,
       areaS_0 <- total_area - areaS_1
     }
 
-    if (areaS_0 <= 0) areaS_0 <- 1
-    if (areaS_1 <= 0) areaS_1 <- 1
+    if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- 1
+    if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
   }
+  if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- 1
+  if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
 
   # Optional inhomogeneous background covariate:
   # W scales the baseline intensity for both processes after region masking.
@@ -192,13 +199,14 @@ loglik_etas_bivariate <- function(params,
     t_max = tval,
     t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
   )
+  if (!is.finite(loglik)) return(-1e15)
   # Smooth stability barrier on the bivariate ETAS offspring matrix spectral
   # radius; activates only when rho exceeds `stability_barrier_start`.
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
-  if (!is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
+  if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
   if (barrier_weight > 0) {
     beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (!is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
+    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
       mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
       mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
       beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else 1
@@ -225,9 +233,9 @@ loglik_etas_bivariate <- function(params,
     }
     if (!is.finite(rho)) return(-1e15)
     barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
-    if (!is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
+    if (length(barrier_start) != 1L || !is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
     barrier_power <- suppressWarnings(as.numeric(stability_barrier_power))
-    if (!is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
+    if (length(barrier_power) != 1L || !is.finite(barrier_power) || is.na(barrier_power) || barrier_power <= 0) barrier_power <- 2
     excess <- max(0, rho - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
@@ -302,9 +310,11 @@ fit_etas_bivariate <- function(params_init,
   free_idx <- setdiff(seq_along(all_names), fixed_idx)
   free_init <- full_init[free_idx]
 
-  realiz <- realiz[order(realiz$t), ]
-  t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
-  if (!all(t_idx)) realiz <- realiz[t_idx, ]
+  finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
+  if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
+  realiz <- realiz[order(realiz$t), , drop = FALSE]
+  t_idx <- is.finite(realiz$t) & realiz$t >= windowT[1] & realiz$t <= windowT[2]
+  if (!all(t_idx)) realiz <- realiz[t_idx, , drop = FALSE]
   n <- nrow(realiz)
 
   W_0 <- rep(1.0, n); W_1 <- rep(1.0, n)
@@ -317,8 +327,8 @@ fit_etas_bivariate <- function(params_init,
     areaS_0 <- spatstat.geom::area(as.owin(control_state_space))
     W_1[inside.owin(realiz$x, realiz$y, control_state_space)] <- 0
   } else { areaS_0 <- total_area - areaS_1 }
-  if (areaS_0 <= 0) areaS_0 <- 1
-  if (areaS_1 <= 0) areaS_1 <- 1
+  if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- max(1, total_area / 2)
+  if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- max(1, total_area / 2)
 
   if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
     W_cov <- realiz[[background_rate_var]]
@@ -359,7 +369,12 @@ fit_etas_bivariate <- function(params_init,
     if (!is.null(dots$stability_barrier_start)) ll_args$stability_barrier_start <- dots$stability_barrier_start
     if (!is.null(dots$stability_barrier_weight)) ll_args$stability_barrier_weight <- dots$stability_barrier_weight
     if (!is.null(dots$stability_barrier_power)) ll_args$stability_barrier_power <- dots$stability_barrier_power
-    do.call(loglik_etas_bivariate, ll_args)
+    ll_val <- tryCatch(
+      do.call(loglik_etas_bivariate, ll_args),
+      error = function(e) -1e15
+    )
+    if (!is.finite(ll_val) || is.na(ll_val)) return(-1e15)
+    as.numeric(ll_val)
   }
 
   fit <- stats::optim(
