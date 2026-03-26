@@ -194,6 +194,10 @@ OK_GLOBAL_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_GLOBAL_SEED", "1"))
 OK_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_BOOT_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_GUARD_DEGENERATE <- tolower(Sys.getenv("OK_BOOT_GUARD_DEGENERATE", "true")) %in% c("1", "true", "yes", "y")
+OK_ATE_USE_CRN <- tolower(Sys.getenv("OK_ATE_USE_CRN", "true")) %in% c("1", "true", "yes", "y")
+OK_ATE_CRN_PAIR <- tolower(Sys.getenv("OK_ATE_CRN_PAIR", "true")) %in% c("1", "true", "yes", "y")
+OK_ATE_CONDITIONAL_ON_PRE <- tolower(Sys.getenv("OK_ATE_CONDITIONAL_ON_PRE", "true")) %in% c("1", "true", "yes", "y")
+OK_ATE_CRN_BASE <- suppressWarnings(as.integer(Sys.getenv("OK_ATE_CRN_BASE", "")))
 BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_BOOT_BRANCHING_MAX", "0.98")))
 if (!is.finite(BOOT_BRANCHING_MAX) || is.na(BOOT_BRANCHING_MAX) || BOOT_BRANCHING_MAX <= 0) {
   BOOT_BRANCHING_MAX <- 0.98
@@ -424,6 +428,9 @@ cat(sprintf("Mode: %s | SEM iters: %d | Change factor: %.3f | Cores: %d\n",
             N_CORES))
 cat(sprintf("Memory safe: %s | Sens cores: %d | ATE sim cores: %d | Boot outer cores: %d | Trim sensitivity objects: %s\n",
             MEMORY_SAFE, SENS_CORES, ATE_SIM_CORES, BOOT_OUTER_CORES, TRIM_SENS_OBJECTS))
+cat(sprintf("ATE CRN: use=%s pair=%s conditional_on_pre=%s base=%s\n",
+            OK_ATE_USE_CRN, OK_ATE_CRN_PAIR, OK_ATE_CONDITIONAL_ON_PRE,
+            ifelse(is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE), as.character(OK_ATE_CRN_BASE), "auto")))
 cat(sprintf("Parallel backend: %s\n", PARALLEL_BACKEND))
 cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
             SEM_INNER_ITER, SENS_SEM_INNER_ITER, BOOT_SEM_INNER_ITER))
@@ -2325,6 +2332,8 @@ H_marginals <- extract_marginals(H_params)
 ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                            n_tiles_used = partition$n,
                            treated_idx_used = treated_idx,
+                           filtration_history = NULL,
+                           crn_base_seed = NA_integer_,
                            phase = "main_fit",
                            quiet = FALSE) {
   phase_tag <- tolower(gsub("[^A-Za-z0-9]+", "_", as.character(phase)))
@@ -2407,18 +2416,60 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
       cat(sprintf("    [warning:ate-explosive] %s: branching proxy exceeds %.3f (ctrl=%.3f, treat=%.3f)\n",
                   label, BOOT_BRANCHING_MAX, ctrl_br, treat_br))
     }
-    pre_history <- pp_pre[, c("x", "y", "t", "mag"), drop = FALSE]
+    if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) {
+      if (is.null(filtration_history)) {
+        pre_history <- pp_pre[, c("x", "y", "t", "mag"), drop = FALSE]
+      } else {
+        pre_history <- as.data.frame(filtration_history)[, c("x", "y", "t", "mag"), drop = FALSE]
+      }
+    } else {
+      pre_history <- pp_pre[0, c("x", "y", "t", "mag"), drop = FALSE]
+    }
+    if (!is.finite(crn_base_seed) || is.na(crn_base_seed)) {
+      if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
+        crn_base_seed <- as.integer(OK_ATE_CRN_BASE)
+      } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+        crn_base_seed <- as.integer(100000L + 1000L * OK_GLOBAL_SEED)
+      } else {
+        crn_base_seed <- as.integer(100000L)
+      }
+    }
     ate_label_slug <- gsub("[^A-Za-z0-9]+", "_", label)
     ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
     if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
     ate_parallel_label <- sprintf("ate-sim-%s", tolower(substr(ate_label_slug, 1L, 40L)))
     run_one_sim <- function(s) {
-      c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
-                        m0 = ETAS_M0, beta_gr = BETA_GR,
-                        filtration = pre_history)
-      t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                        m0 = ETAS_M0, beta_gr = BETA_GR,
-                        filtration = pre_history)
+      s_int <- suppressWarnings(as.integer(s))
+      if (!is.finite(s_int) || is.na(s_int)) s_int <- 1L
+      if (isTRUE(OK_ATE_USE_CRN)) {
+        seed_s <- as.integer(crn_base_seed + s_int)
+        if (isTRUE(OK_ATE_CRN_PAIR)) {
+          set.seed(seed_s)
+          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+          set.seed(seed_s)
+          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+        } else {
+          set.seed(seed_s)
+          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+          set.seed(as.integer(seed_s + 1000000L))
+          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+        }
+      } else {
+        c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+        t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+      }
       c(c_count = length(c_sim$t), t_count = length(t_sim$t))
     }
     sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
@@ -2771,6 +2822,10 @@ results_pre_sensitivity <- list(
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
     ATE_SIM_CORES = ATE_SIM_CORES,
+    ATE_USE_CRN = OK_ATE_USE_CRN,
+    ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
+    ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
+    ATE_CRN_BASE = OK_ATE_CRN_BASE,
     DECODE_ITER = DECODE_ITER,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
@@ -3005,6 +3060,10 @@ results_pre_bootstrap <- list(
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
     ATE_SIM_CORES = ATE_SIM_CORES,
+    ATE_USE_CRN = OK_ATE_USE_CRN,
+    ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
+    ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
+    ATE_CRN_BASE = OK_ATE_CRN_BASE,
     DECODE_ITER = DECODE_ITER,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
@@ -3181,16 +3240,14 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     t0_rep <- proc.time()[["elapsed"]]
     cat(sprintf("    [bootstrap:rep-%d] start pid=%d mem=%s\n",
                 as.integer(rep_id), Sys.getpid(), mem_snapshot()))
+    seed_base <- if (!is.na(BOOT_SEED)) BOOT_SEED else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) OK_GLOBAL_SEED else NA_integer_
     if (isTRUE(OK_BOOT_IDENTICAL_RANDOMNESS)) {
-      if (!is.na(BOOT_SEED)) {
-        set.seed(BOOT_SEED)
-      } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
-        set.seed(OK_GLOBAL_SEED)
-      }
+      boot_rep_seed <- if (!is.na(seed_base)) as.integer(seed_base) else 1L
     } else {
-      seed_base <- if (!is.na(BOOT_SEED)) BOOT_SEED else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) OK_GLOBAL_SEED else NA_integer_
-      if (!is.na(seed_base)) set.seed(as.integer(seed_base + rep_id))
+      boot_rep_seed <- if (!is.na(seed_base)) as.integer(seed_base + rep_id) else as.integer(10000L + rep_id)
     }
+    set.seed(boot_rep_seed)
+    boot_ate_crn_seed <- as.integer(100000L + 1000L * boot_rep_seed)
     out <- list(rep = rep_id)
 
     if ("E" %in% boot_targets_run) {
@@ -3215,6 +3272,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ate_e_boot <- ate_estim_fast(
           e_marg_boot$ctrl, e_marg_boot$treat, sim_E$pp_post_bg_sim,
           label = sprintf("Boot E #%d", rep_id),
+          filtration_history = sim_E$pre_df,
+          crn_base_seed = boot_ate_crn_seed,
           phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
@@ -3256,6 +3315,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ate_f_boot <- ate_estim_fast(
           f_marg_boot$ctrl, f_marg_boot$treat, pp_post_f_boot,
           label = sprintf("Boot F #%d", rep_id),
+          filtration_history = sim_F$pre_df,
+          crn_base_seed = boot_ate_crn_seed,
           phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
@@ -3590,6 +3651,10 @@ results <- list(
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
     ATE_SIM_CORES = ATE_SIM_CORES,
+    ATE_USE_CRN = OK_ATE_USE_CRN,
+    ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
+    ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
+    ATE_CRN_BASE = OK_ATE_CRN_BASE,
     DECODE_ITER = DECODE_ITER,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
