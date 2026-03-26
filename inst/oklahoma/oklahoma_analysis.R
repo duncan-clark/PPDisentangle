@@ -105,7 +105,7 @@ env_sem_n_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_ITER", "")))
 if (!is.na(env_sem_n_iter) && env_sem_n_iter > 0L) {
   SEM_N_ITER <- env_sem_n_iter
 }
-SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 300
+SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 1000
 env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER", "")))
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
   SEM_INNER_ITER <- env_sem_inner_iter

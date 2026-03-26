@@ -143,7 +143,7 @@ if [ -n "$PP_MODE" ]; then
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
       # Full/default production profile: enable enough refits for stable ATE SD.
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=300; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=1000; fi

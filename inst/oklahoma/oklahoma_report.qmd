@@ -1118,6 +1118,61 @@ if (nrow(decode_counts) > 0) {
 }
 ```
 
+```{r tbl-final-loglik-compare}
+#| label: tbl-final-loglik-compare
+#| tbl-cap: "Final selected objective values from adaptive relabelling traces (higher is better)."
+final_ll_rows <- list()
+
+for (info in list(
+  list(obj = fit_B_obj, lab = "B: SEM Biv", method = "SEM"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)", method = "SEM"),
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)", method = "SEM"),
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM")
+)) {
+  tr <- get_sem_metric_trace(info$obj)
+  tr <- as.numeric(tr)
+  tr <- tr[is.finite(tr)]
+  if (length(tr) > 0) {
+    final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
+      Model = info$lab,
+      Method = info$method,
+      Iterations = length(tr),
+      Final_Objective = tail(tr, 1),
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+for (info in list(
+  list(obj = fit_I_obj, lab = "I: Decode Biv", method = "Decode"),
+  list(obj = fit_J_obj, lab = "J: Decode Biv+KDE", method = "Decode")
+)) {
+  tr <- NULL
+  if (!is.null(info$obj) && !is.null(info$obj$decode) && !is.null(info$obj$decode$trace$objective)) {
+    tr <- as.numeric(info$obj$decode$trace$objective)
+  }
+  tr <- tr[is.finite(tr)]
+  if (length(tr) > 0) {
+    final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
+      Model = info$lab,
+      Method = info$method,
+      Iterations = length(tr),
+      Final_Objective = tail(tr, 1),
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+if (length(final_ll_rows) > 0) {
+  final_ll_tbl <- do.call(rbind, final_ll_rows)
+  final_ll_tbl <- final_ll_tbl |>
+    dplyr::arrange(.data$Method, .data$Model)
+  final_ll_tbl$Final_Objective <- round(final_ll_tbl$Final_Objective, 2)
+  kable(final_ll_tbl, align = "llrc") |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
+}
+```
+
 ## SEM Relabelling: Confusion Matrices
 
 ```{r tbl-confusion}
