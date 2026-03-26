@@ -896,6 +896,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param proposal_update_cadence How often to regenerate proposals
 #' @param update_starting_data Logical; update starting data each iteration
 #' @param include_starting_data Logical; include current data in proposals
+#' @param include_starting_first_n Integer; force-include starting data as a
+#'   candidate proposal for the first N inner iterations.
 #' @param optim_method One of "max", "mean", "truncated_mean"
 #' @param state_spaces Optional precomputed state spaces
 #' @param metric_name Metric for selecting best labeling
@@ -922,6 +924,7 @@ em_style_labelling <- function(pp_data,
                                proposal_update_cadence = 1,
                                update_starting_data = TRUE,
                                include_starting_data = TRUE,
+                               include_starting_first_n = 50,
                                optim_method = "max",
                                state_spaces = NULL,
                                metric_name = "post_likelihood",
@@ -947,6 +950,10 @@ em_style_labelling <- function(pp_data,
   stagnation_trigger_every <- as.integer(stagnation_trigger_every)
   if (is.na(stagnation_trigger_every) || stagnation_trigger_every < 1L) {
     stop("stagnation_trigger_every must be an integer >= 1.")
+  }
+  include_starting_first_n <- suppressWarnings(as.integer(include_starting_first_n))
+  if (!is.finite(include_starting_first_n) || is.na(include_starting_first_n) || include_starting_first_n < 0L) {
+    include_starting_first_n <- 0L
   }
   # Keep adaptive proposal size changes moderate around the initial setting.
   change_factor_min <- 0.2 * base_change_factor
@@ -1118,8 +1125,9 @@ em_style_labelling <- function(pp_data,
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
     }
-    include_starting_this_iter <- isTRUE(include_starting_data) && !isTRUE(trigger_explore)
-    if (i != 1 && include_starting_this_iter) {
+    force_include_starting <- isTRUE(include_starting_data) && (i <= include_starting_first_n)
+    include_starting_this_iter <- (isTRUE(include_starting_data) && !isTRUE(trigger_explore)) || force_include_starting
+    if (include_starting_this_iter) {
       if (length(labelling_proposals) == 0) {
         labelling_proposals <- list()
       }

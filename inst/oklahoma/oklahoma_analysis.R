@@ -1073,6 +1073,7 @@ run_sem_fit <- function(pp_data_in,
         temporal_weight = SEM_TEMPORAL_WEIGHT,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
+        include_starting_first_n = 50,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
         proposal_method = "simulation",
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
