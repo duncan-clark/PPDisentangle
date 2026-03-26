@@ -70,6 +70,17 @@ loglik_etas <- function(params,
                         zero_background_region = NULL,
                         background_rate_var = "W",
                         beta_gr = NULL,
+                        enforce_finite_trigger_moments = TRUE,
+                        p_lower_bound = 2.001,
+                        q_lower_bound = 1.501,
+                        finite_moment_soft_width = 0.05,
+                        finite_moment_soft_weight = 2000,
+                        finite_moment_soft_power = 2,
+                        enforce_alpha_subcritical = TRUE,
+                        alpha_beta_gap_min = 1e-4,
+                        alpha_beta_soft_gap = 0.05,
+                        alpha_beta_soft_weight = 2000,
+                        alpha_beta_soft_power = 2,
                         stability_barrier_start = 0.95,
                         stability_barrier_weight = 50000,
                         stability_barrier_power = 4,
@@ -107,9 +118,25 @@ loglik_etas <- function(params,
 
   # --- Parameter bounds ---
   if (min(mu, A, cc, D) < 0 || p <= 1 || q <= 1 || gamma_p < 0) return(-1e15)
+  p_min <- suppressWarnings(as.numeric(p_lower_bound))
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
+  q_min <- suppressWarnings(as.numeric(q_lower_bound))
+  if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
+  if (isTRUE(enforce_finite_trigger_moments) && (p <= p_min || q <= q_min)) return(-1e15)
 
   # --- Reference magnitude ---
   if (is.null(m0)) m0 <- min(realiz$mag)
+  if (isTRUE(enforce_alpha_subcritical)) {
+    beta_eff <- suppressWarnings(as.numeric(beta_gr))
+    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
+      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
+      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
+      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
+    }
+    gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
+    if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+    if (!is.finite(beta_eff) || is.na(beta_eff) || alpha_m >= (beta_eff - gap_min)) return(-1e15)
+  }
 
   # --- Background weights ---
   W_vec <- if (!is.null(background_rate_var) &&
@@ -165,6 +192,44 @@ loglik_etas <- function(params,
     t_trunc   = if (!is.null(t_trunc)) t_trunc else -1.0
   )
   if (!is.finite(loglik)) return(-1e15)
+
+  # Hybrid boundary handling: keep hard admissibility, plus a smooth interior
+  # penalty in a narrow band above p_min/q_min and alpha-beta gap_min.
+  if (isTRUE(enforce_finite_trigger_moments)) {
+    soft_width <- suppressWarnings(as.numeric(finite_moment_soft_width))
+    soft_weight <- suppressWarnings(as.numeric(finite_moment_soft_weight))
+    soft_power <- suppressWarnings(as.numeric(finite_moment_soft_power))
+    if (length(soft_width) != 1L || !is.finite(soft_width) || is.na(soft_width) || soft_width <= 0) soft_width <- 0
+    if (length(soft_weight) != 1L || !is.finite(soft_weight) || is.na(soft_weight) || soft_weight <= 0) soft_weight <- 0
+    if (length(soft_power) != 1L || !is.finite(soft_power) || is.na(soft_power) || soft_power <= 0) soft_power <- 2
+    if (soft_width > 0 && soft_weight > 0) {
+      p_excess <- max(0, (p_min + soft_width) - p)
+      q_excess <- max(0, (q_min + soft_width) - q)
+      if (p_excess > 0) loglik <- loglik - soft_weight * (p_excess ^ soft_power)
+      if (q_excess > 0) loglik <- loglik - soft_weight * (q_excess ^ soft_power)
+    }
+  }
+  if (isTRUE(enforce_alpha_subcritical)) {
+    beta_soft <- suppressWarnings(as.numeric(beta_gr))
+    if (length(beta_soft) != 1L || !is.finite(beta_soft) || is.na(beta_soft) || beta_soft <= 0) {
+      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
+      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
+      beta_soft <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
+    }
+    gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
+    if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+    soft_gap <- suppressWarnings(as.numeric(alpha_beta_soft_gap))
+    if (length(soft_gap) != 1L || !is.finite(soft_gap) || is.na(soft_gap) || soft_gap <= 0) soft_gap <- 0
+    soft_weight <- suppressWarnings(as.numeric(alpha_beta_soft_weight))
+    if (length(soft_weight) != 1L || !is.finite(soft_weight) || is.na(soft_weight) || soft_weight <= 0) soft_weight <- 0
+    soft_power <- suppressWarnings(as.numeric(alpha_beta_soft_power))
+    if (length(soft_power) != 1L || !is.finite(soft_power) || is.na(soft_power) || soft_power <= 0) soft_power <- 2
+    if (is.finite(beta_soft) && soft_gap > 0 && soft_weight > 0) {
+      alpha_gap <- beta_soft - as.numeric(alpha_m)
+      gap_excess <- max(0, (gap_min + soft_gap) - alpha_gap)
+      if (gap_excess > 0) loglik <- loglik - soft_weight * (gap_excess ^ soft_power)
+    }
+  }
 
   # Smooth stability barrier on the univariate ETAS branching ratio eta; the
   # penalty activates before criticality and ramps very sharply beyond 1.
@@ -253,6 +318,7 @@ fit_etas <- function(params_init,
                      log_transform = FALSE,
                      init_decluster = FALSE,
                      ...) {
+  dots <- list(...)
   if (inherits(params_init, "list")) params_init <- unlist(params_init)
 
   all_names <- .etas_par_names  # mu, A, alpha_m, c, p, D, gamma, q
@@ -287,6 +353,27 @@ fit_etas <- function(params_init,
       full_init["mu"] <- mu_init
     if (is.finite(A_init) && A_init > 0 && !"A" %in% names(fixed_params))
       full_init["A"] <- A_init
+  }
+
+  # Keep optimiser starts inside constrained region when constraints are active.
+  p_min <- suppressWarnings(as.numeric(dots$p_lower_bound))
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
+  q_min <- suppressWarnings(as.numeric(dots$q_lower_bound))
+  if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
+  if (!isFALSE(dots$enforce_finite_trigger_moments)) {
+    if (is.finite(full_init["p"])) full_init["p"] <- max(full_init["p"], p_min + 1e-3)
+    if (is.finite(full_init["q"])) full_init["q"] <- max(full_init["q"], q_min + 1e-3)
+  }
+  if (!isFALSE(dots$enforce_alpha_subcritical)) {
+    beta_eff <- suppressWarnings(as.numeric(dots$beta_gr))
+    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
+      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
+      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
+      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
+    }
+    gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+    if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+    if (is.finite(beta_eff)) full_init["alpha_m"] <- min(full_init["alpha_m"], beta_eff - gap_min - 1e-4)
   }
 
   fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
@@ -330,7 +417,7 @@ fit_etas <- function(params_init,
       m0      = m0,
       t_trunc = t_trunc
     ),
-    list(...)
+    dots
   )
   if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
     opt_args$lower <- lower[free_idx]

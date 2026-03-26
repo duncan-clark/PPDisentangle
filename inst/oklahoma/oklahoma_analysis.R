@@ -3047,7 +3047,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
 
   if (BOOT_REFIT_SCOPE == "full") {
-    cat("  Note: full scope currently falls back to partial refit for E/F.\n")
+    cat("  Full scope selected: for current targets (E/F), this runs per-replicate refits before ATE estimation.\n")
   }
 
   as_pp_df <- function(sim_obj, location_process_value, inferred_process_value = NULL) {

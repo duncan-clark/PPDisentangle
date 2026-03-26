@@ -104,7 +104,8 @@ if [ -n "$PP_MODE" ]; then
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS="$PP_CORES"; fi
+      # Quick profile default: disable bootstrap to minimize turnaround.
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=200; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=120; fi
@@ -148,7 +149,8 @@ if [ -n "$PP_MODE" ]; then
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=1000; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
-      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="partial"; fi
+      # Full profile default: full parametric bootstrap (simulate + refit + ATE).
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
@@ -202,8 +204,9 @@ fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
   PP_BOOT_OUTER_CORES="$PP_CORES"
 fi
-# Default policy: one bootstrap replicate per available outer bootstrap core.
-if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then
+# Default policy (manual mode): one bootstrap replicate per available outer bootstrap core.
+# Do not override mode-specific defaults already assigned above.
+if [ "$BOOT_REPS_EXPLICIT" -ne 1 ] && [ -z "${PP_BOOT_REPS:-}" ]; then
   PP_BOOT_REPS="$PP_BOOT_OUTER_CORES"
 fi
 if [ -z "$PP_KDE_VARIANT_MODE" ]; then
