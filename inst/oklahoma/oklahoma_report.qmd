@@ -922,7 +922,7 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "Selected-proposal confusion-matrix counts per SEM relabelling iteration for county SEM fits."
+#| fig-cap: "Accepted SEM relabelling trajectory from iteration 0, shown as net confusion-entry changes by iteration (county SEM fits)."
 #| fig-height: 4
 extract_selected_confusion_trace <- function(sem_obj, model_label) {
   ad <- sem_obj$fit$adaptive
@@ -977,6 +977,23 @@ for (nm in sem_fit_convergence) {
 
 if (length(trace_rows) > 0) {
   trace_df <- do.call(rbind, trace_rows)
+  # Convert absolute confusion entries to net accepted changes from iter 0.
+  # At iter 0 (before adaptive relabelling), off-diagonal entries are 0 and
+  # diagonal entries equal group totals.
+  trace_df <- trace_df |>
+    dplyr::group_by(.data$Model) |>
+    dplyr::arrange(.data$iteration, .by_group = TRUE) |>
+    dplyr::mutate(
+      n_control = .data$control_as_control + .data$control_as_treated,
+      n_treated = .data$treated_as_control + .data$treated_as_treated,
+      control_as_control = .data$control_as_control - .data$n_control,
+      control_as_treated = .data$control_as_treated,
+      treated_as_control = .data$treated_as_control,
+      treated_as_treated = .data$treated_as_treated - .data$n_treated
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::select(-.data$n_control, -.data$n_treated)
+
   trace_long <- tidyr::pivot_longer(
     trace_df,
     cols = c(control_as_control, control_as_treated, treated_as_control, treated_as_treated),
@@ -991,13 +1008,14 @@ if (length(trace_rows) > 0) {
   ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
     geom_line(linewidth = 0.9) +
     facet_wrap(~ Model, scales = "free_y") +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
     scale_color_manual(name = "Confusion entry", values = c(
       "Control -> Control" = "#1f78b4",
       "Control -> Treated" = "#e31a1c",
       "Treated -> Control" = "#ff7f00",
       "Treated -> Treated" = "#33a02c"
     )) +
-    labs(x = "Iteration", y = "Count") +
+    labs(x = "Iteration", y = "Net count change from iteration 0") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "top")
 } else {
