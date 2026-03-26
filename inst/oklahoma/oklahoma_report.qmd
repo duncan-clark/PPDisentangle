@@ -1017,9 +1017,21 @@ if (length(sem_metric_rows) > 0) {
     dplyr::arrange(.data$Iteration, .by_group = TRUE) |>
     dplyr::mutate(RunningBest = cummax(.data$LogLik)) |>
     dplyr::ungroup()
+  sem_metric_last <- sem_metric_df |>
+    dplyr::group_by(.data$Model) |>
+    dplyr::filter(.data$Iteration == max(.data$Iteration, na.rm = TRUE)) |>
+    dplyr::slice_tail(n = 1) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(lbl = sprintf("final = %.2f", .data$LogLik))
   ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
     geom_line(linewidth = 0.9) +
     geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
+    geom_text(
+      data = sem_metric_last,
+      aes(x = Inf, y = -Inf, label = lbl),
+      inherit.aes = FALSE,
+      hjust = 1.05, vjust = -0.4, size = 3.2, colour = "black"
+    ) +
     scale_colour_manual(values = c(
       "B: SEM Biv" = "#6a3d9a",
       "D: SEM Biv+KDE (ctrl-fixed)" = "#e31a1c",
@@ -1027,8 +1039,9 @@ if (length(sem_metric_rows) > 0) {
       "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
+    facet_wrap(~Model, scales = "free_y") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none")
 } else {
   plot.new()
   text(0.5, 0.5, "No adaptive SEM log-likelihood trace found in this results file.")
@@ -1057,15 +1070,28 @@ if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode) && !is.null(fit_J_obj$deco
 if (length(metric_rows) > 0) {
   metric_df <- do.call(rbind, metric_rows)
   metric_df <- metric_df[is.finite(metric_df$Objective), , drop = FALSE]
+  metric_last <- metric_df |>
+    dplyr::group_by(.data$Model) |>
+    dplyr::filter(.data$Iteration == max(.data$Iteration, na.rm = TRUE)) |>
+    dplyr::slice_tail(n = 1) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(lbl = sprintf("final = %.2f", .data$Objective))
   ggplot(metric_df, aes(x = Iteration, y = Objective, colour = Model)) +
     geom_line(linewidth = 0.8, alpha = 0.9) +
+    geom_text(
+      data = metric_last,
+      aes(x = Inf, y = -Inf, label = lbl),
+      inherit.aes = FALSE,
+      hjust = 1.05, vjust = -0.4, size = 3.2, colour = "black"
+    ) +
     scale_colour_manual(values = c(
       "I: Decode Biv" = "#1b9e77",
       "J: Decode Biv+KDE" = "#b8860b"
     )) +
     labs(x = "Iteration", y = "Selected objective (log-likelihood scale)") +
+    facet_wrap(~Model, scales = "free_y") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none")
 }
 ```
 
@@ -1275,20 +1301,17 @@ if (length(sum_rows) > 0) {
 }
 ```
 
-### Triggering Distance Diagnostics (E/F)
+### Triggering Distance Diagnostics (All Fits)
 
-```{r tbl-trigger-distance-ef}
-#| label: tbl-trigger-distance-ef
+```{r tbl-trigger-distance-all}
+#| label: tbl-trigger-distance-all
 diag_rows <- list()
-for (fit_info in list(
-  list(label = "E: Naive+KDE (all-free)", par = E_par),
-  list(label = "F: SEM+KDE (all-free)",   par = F_par)
-)) {
+for (fit_info in model_defs) {
   if (is.null(fit_info$par)) next
   m <- etas_trigger_means(fit_info$par, cfg$BETA_GR)
   for (proc in c("Control", "Treated")) {
     diag_rows[[length(diag_rows) + 1]] <- data.frame(
-      Model = fit_info$label,
+      Model = fit_info$long,
       Process = proc,
       `Mean trigger time (days)` = if (is.finite(m$mean_time)) round(m$mean_time, 3) else Inf,
       `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
@@ -1300,7 +1323,7 @@ if (length(diag_rows) > 0) {
   diag_df <- do.call(rbind, diag_rows)
   kable(diag_df, align = "llcc",
         caption = paste0(
-          "Model-implied ETAS triggering means for E/F. ",
+          "Model-implied ETAS triggering means across all available fits. ",
           "Infinite values indicate heavy-tail regimes where the corresponding mean does not exist ",
           "(time: p <= 2, space: q <= 1.5)."
         )) |>

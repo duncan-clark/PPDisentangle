@@ -105,7 +105,7 @@ env_sem_n_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_ITER", "")))
 if (!is.na(env_sem_n_iter) && env_sem_n_iter > 0L) {
   SEM_N_ITER <- env_sem_n_iter
 }
-SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 1000
+SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 300
 env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER", "")))
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
   SEM_INNER_ITER <- env_sem_inner_iter
@@ -744,10 +744,28 @@ apply_pre_init_etas <- function(start_par) {
 apply_pre_init_biv <- function(par_vec) {
   out <- par_vec
   out[c("mu_0", "mu_1")] <- PRE_CTRL_BOOT_PARAMS$mu
-  # Keep cross-excitation starts weak (from init_bivariate_from_independent)
-  # to avoid supercritical proposal simulations at SEM initialization.
+  # Keep cross-excitation starts weak but strictly positive to avoid
+  # control-fixed variants getting stuck at zero interaction.
   out[c("A_00", "A_11")] <- PRE_CTRL_BOOT_PARAMS$A
   out[c("alpha_m_00", "alpha_m_11")] <- PRE_CTRL_BOOT_PARAMS$alpha_m
+  diag_A <- suppressWarnings(as.numeric(out[c("A_00", "A_11")]))
+  diag_alpha <- suppressWarnings(as.numeric(out[c("alpha_m_00", "alpha_m_11")]))
+  if (!all(is.finite(diag_A)) || length(diag_A) < 2L) {
+    diag_A <- rep(0.1, 2L)
+  }
+  if (!all(is.finite(diag_alpha)) || length(diag_alpha) < 2L) {
+    diag_alpha <- rep(0.5, 2L)
+  }
+  cross_A_floor <- max(1e-3, 0.05 * mean(diag_A))
+  cross_alpha_floor <- max(1e-3, 0.25 * mean(diag_alpha))
+  for (nm in c("A_01", "A_10")) {
+    v <- suppressWarnings(as.numeric(out[[nm]]))
+    if (!is.finite(v) || is.na(v) || v <= 0) out[[nm]] <- cross_A_floor
+  }
+  for (nm in c("alpha_m_01", "alpha_m_10")) {
+    v <- suppressWarnings(as.numeric(out[[nm]]))
+    if (!is.finite(v) || is.na(v) || v <= 0) out[[nm]] <- cross_alpha_floor
+  }
   out[c("c", "p", "D", "gamma", "q")] <- unlist(PRE_CTRL_BOOT_PARAMS[c("c", "p", "D", "gamma", "q")])
   out
 }
