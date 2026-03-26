@@ -1342,14 +1342,6 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
         },
         align = if (using_pre_bootstrap) "lcccccc" else "lcccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
-  if (using_pre_bootstrap) {
-    cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
-  } else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
-    labs <- c()
-    if (!is.null(boot_E_df)) labs <- c(labs, "E (Naive Biv+KDE all-free)")
-    if (!is.null(boot_F_df)) labs <- c(labs, "F (SEM Biv+KDE all-free)")
-    cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
-  }
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
               if (!is.null(results$checkpoint) && !is.null(results$checkpoint$stage)) results$checkpoint$stage else "unknown"))
