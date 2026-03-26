@@ -922,49 +922,42 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "SEM label flips per relabelling iteration for all county SEM fits (raw and smoothed traces)."
+#| fig-cap: "Selected-proposal confusion-matrix counts per SEM relabelling iteration for county SEM fits."
 #| fig-height: 4
-build_flip_df <- function(avg_flips, max_flips) {
-  if (is.null(avg_flips) || is.null(max_flips)) return(NULL)
-  n <- min(length(avg_flips), length(max_flips))
-  if (n == 0) return(NULL)
-  df <- data.frame(
-    iteration = seq_len(n),
-    average_flips = as.numeric(avg_flips[seq_len(n)]),
-    max_metric_flips = as.numeric(max_flips[seq_len(n)])
-  )
-  # Add smooth trend overlays so directional convergence is easier to inspect.
-  if (n >= 5) {
-    avg_low <- stats::lowess(df$iteration, df$average_flips, f = 0.15, iter = 1)
-    max_low <- stats::lowess(df$iteration, df$max_metric_flips, f = 0.15, iter = 1)
-    df$average_flips_smooth <- stats::approx(avg_low$x, avg_low$y, xout = df$iteration, rule = 2)$y
-    df$max_metric_flips_smooth <- stats::approx(max_low$x, max_low$y, xout = df$iteration, rule = 2)$y
-  } else {
-    df$average_flips_smooth <- df$average_flips
-    df$max_metric_flips_smooth <- df$max_metric_flips
+extract_selected_confusion_trace <- function(sem_obj, model_label) {
+  ad <- sem_obj$fit$adaptive
+  if (is.null(ad) || is.null(ad$class_results) || is.null(ad$all_metrics)) return(NULL)
+  if (length(ad$class_results) < 1 || length(ad$all_metrics) < 1) return(NULL)
+
+  offset <- 0L
+  rows <- list()
+  for (i in seq_along(ad$all_metrics)) {
+    metric_i <- ad$all_metrics[[i]]
+    n_i <- length(metric_i)
+    if (n_i < 1L) next
+    best_j <- which.max(as.numeric(metric_i))
+    class_idx <- offset + best_j
+    if (class_idx > length(ad$class_results)) break
+    cm <- ad$class_results[[class_idx]]
+    if (is.null(cm)) {
+      offset <- offset + n_i
+      next
+    }
+    rows[[length(rows) + 1L]] <- data.frame(
+      iteration = i,
+      Model = model_label,
+      control_as_control = as.numeric(if (!is.null(cm$control_as_control)) cm$control_as_control else 0),
+      control_as_treated = as.numeric(if (!is.null(cm$control_as_treated)) cm$control_as_treated else 0),
+      treated_as_control = as.numeric(if (!is.null(cm$treated_as_control)) cm$treated_as_control else 0),
+      treated_as_treated = as.numeric(if (!is.null(cm$treated_as_treated)) cm$treated_as_treated else 0)
+    )
+    offset <- offset + n_i
   }
-  df
+  if (length(rows) < 1L) return(NULL)
+  do.call(rbind, rows)
 }
 
-plot_flip_df <- function(df, ttl) {
-  if (is.null(df) || nrow(df) == 0) return(NULL)
-  ggplot(df, aes(x = iteration)) +
-    geom_line(aes(y = average_flips, color = "Average flips"), alpha = 0.45) +
-    geom_line(aes(y = max_metric_flips, color = "Max metric flips"), alpha = 0.45) +
-    geom_line(aes(y = average_flips_smooth, color = "Average flips (smoothed)"), linewidth = 1.05) +
-    geom_line(aes(y = max_metric_flips_smooth, color = "Max metric flips (smoothed)"), linewidth = 1.05) +
-    geom_hline(yintercept = 1, linetype = "dashed") +
-    labs(title = ttl, x = "Iteration", y = "Number of flips") +
-    theme_minimal() +
-    scale_color_manual(name = "Metric", values = c(
-      "Average flips" = "#6baed6",
-      "Max metric flips" = "#fb6a4a",
-      "Average flips (smoothed)" = "#08519c",
-      "Max metric flips (smoothed)" = "#a50f15"
-    ))
-}
-
-plots <- list()
+trace_rows <- list()
 sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
   list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
@@ -972,20 +965,44 @@ sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)")
 )
 for (nm in sem_fit_convergence) {
-  if (!is.null(nm$obj) && !is.null(nm$obj$adaptive)) {
-    df <- build_flip_df(nm$obj$adaptive$average_flips, nm$obj$adaptive$max_metric_flips)
-    p <- plot_flip_df(df, nm$lab)
-    if (!is.null(p)) plots[[length(plots)+1]] <- p
-  }
+  if (is.null(nm$obj) || is.null(nm$obj$adaptive)) next
+  trace_df <- extract_selected_confusion_trace(
+    list(fit = nm$obj),
+    nm$lab
+  )
+  if (!is.null(trace_df) && nrow(trace_df) > 0) {
+    trace_rows[[length(trace_rows) + 1L]] <- trace_df
+  } 
 }
-if (length(plots) >= 2) {
-  ncol_use <- if (length(plots) >= 4) 2 else length(plots)
-  do.call(gridExtra::grid.arrange, c(plots, ncol = ncol_use))
-} else if (length(plots) == 1) {
-  print(plots[[1]])
+
+if (length(trace_rows) > 0) {
+  trace_df <- do.call(rbind, trace_rows)
+  trace_long <- tidyr::pivot_longer(
+    trace_df,
+    cols = c(control_as_control, control_as_treated, treated_as_control, treated_as_treated),
+    names_to = "entry",
+    values_to = "count"
+  )
+  trace_long$entry <- factor(
+    trace_long$entry,
+    levels = c("control_as_control", "control_as_treated", "treated_as_control", "treated_as_treated"),
+    labels = c("Control -> Control", "Control -> Treated", "Treated -> Control", "Treated -> Treated")
+  )
+  ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
+    scale_color_manual(name = "Confusion entry", values = c(
+      "Control -> Control" = "#1f78b4",
+      "Control -> Treated" = "#e31a1c",
+      "Treated -> Control" = "#ff7f00",
+      "Treated -> Treated" = "#33a02c"
+    )) +
+    labs(x = "Iteration", y = "Count") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
 } else {
   plot.new()
-  text(0.5, 0.5, "No SEM flip traces found for county SEM fits (B/D/F/H).")
+  text(0.5, 0.5, "No SEM confusion-matrix trace found for county SEM fits (B/D/F/H).")
 }
 ```
 
@@ -1045,6 +1062,58 @@ if (length(sem_metric_rows) > 0) {
 } else {
   plot.new()
   text(0.5, 0.5, "No adaptive SEM log-likelihood trace found in this results file.")
+}
+```
+
+```{r fig-sem-cumulative-flips}
+#| label: fig-sem-cumulative-flips
+#| fig-cap: "Cumulative SEM label flips by relabelling iteration for county SEM fits (faceted by model)."
+#| fig-height: 5
+cumulative_flip_rows <- list()
+for (info in list(
+  list(obj = fit_B_obj, lab = "B: SEM Biv"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)")
+)) {
+  ad <- if (!is.null(info$obj)) info$obj$fit$adaptive else NULL
+  if (is.null(ad) || is.null(ad$average_flips) || is.null(ad$max_metric_flips)) next
+  n <- min(length(ad$average_flips), length(ad$max_metric_flips))
+  if (n < 1) next
+  tmp <- data.frame(
+    Iteration = seq_len(n),
+    Model = info$lab,
+    CumulativeAverageFlips = cumsum(as.numeric(ad$average_flips[seq_len(n)])),
+    CumulativeAcceptedFlips = cumsum(as.numeric(ad$max_metric_flips[seq_len(n)]))
+  )
+  cumulative_flip_rows[[length(cumulative_flip_rows) + 1]] <- tmp
+}
+if (length(cumulative_flip_rows) > 0) {
+  cumulative_flip_df <- do.call(rbind, cumulative_flip_rows)
+  cumulative_flip_df <- cumulative_flip_df |>
+    tidyr::pivot_longer(
+      cols = c(CumulativeAverageFlips, CumulativeAcceptedFlips),
+      names_to = "Metric",
+      values_to = "Flips"
+    )
+  cumulative_flip_df$Metric <- factor(
+    cumulative_flip_df$Metric,
+    levels = c("CumulativeAverageFlips", "CumulativeAcceptedFlips"),
+    labels = c("Cumulative average flips", "Cumulative accepted flips")
+  )
+  ggplot(cumulative_flip_df, aes(x = Iteration, y = Flips, colour = Metric)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
+    scale_colour_manual(values = c(
+      "Cumulative average flips" = "#08519c",
+      "Cumulative accepted flips" = "#a50f15"
+    )) +
+    labs(x = "Adaptive SEM iteration", y = "Cumulative flips") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No SEM cumulative flip traces found in this results file.")
 }
 ```
 
