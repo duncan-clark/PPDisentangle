@@ -71,8 +71,8 @@ loglik_etas <- function(params,
                         background_rate_var = "W",
                         beta_gr = NULL,
                         stability_barrier_start = 0.95,
-                        stability_barrier_weight = 100,
-                        stability_barrier_power = 2,
+                        stability_barrier_weight = 50000,
+                        stability_barrier_power = 4,
                         precomp = NULL,
                         t_trunc = NULL,
                         ...) {
@@ -167,7 +167,7 @@ loglik_etas <- function(params,
   if (!is.finite(loglik)) return(-1e15)
 
   # Smooth stability barrier on the univariate ETAS branching ratio eta; the
-  # penalty activates only when eta exceeds `stability_barrier_start`.
+  # penalty activates before criticality and ramps very sharply beyond 1.
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
   if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
   if (barrier_weight > 0) {
@@ -191,6 +191,12 @@ loglik_etas <- function(params,
     excess <- max(0, eta - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
+    }
+    # Keep this soft/continuous while making supercritical fits effectively
+    # unattainable at optimisation convergence.
+    supercritical_excess <- max(0, eta - 0.999)
+    if (supercritical_excess > 0) {
+      loglik <- loglik - barrier_weight * 1e6 * (supercritical_excess ^ 2)
     }
   }
   return(loglik)

@@ -1192,7 +1192,14 @@ if (length(sum_rows) > 0) {
 
 ```{r tbl-ate-biv}
 #| label: tbl-ate-biv
-n_cty <- cfg$n_counties
+n_cty <- suppressWarnings(as.integer(unlist(cfg$n_counties, use.names = FALSE)))
+if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[1]] < 1L) {
+  n_cty <- suppressWarnings(as.integer(unlist(results$counties$n_counties, use.names = FALSE)))
+}
+if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[1]] < 1L) {
+  n_cty <- 1L
+}
+n_cty <- as.integer(n_cty[[1]])
 ate_days <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 365
 
 biv_rows <- list(
@@ -1229,8 +1236,11 @@ if (!is.null(boot_obj) &&
 
 get_boot_summary <- function(model_label) {
   vals <- NULL
-  if (model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (model_label == "E: Naive Biv+KDE (all-free)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
+  if (model_label == "F: SEM Biv+KDE (all-free)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  # Backward compatibility with older report labeling.
+  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
+  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- vals[is.finite(vals)]
   if (length(vals) < 2) return(NULL)
@@ -1244,6 +1254,7 @@ get_boot_summary <- function(model_label) {
 
 get_total_effect_sim <- function(ate_obj, n_tiles = n_cty) {
   if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
+  if (!is.finite(n_tiles) || is.na(n_tiles) || n_tiles < 1) n_tiles <- 1
   sim_df <- ate_obj$all_nothing_sim
   if ("total_saved" %in% names(sim_df)) return(sim_df$total_saved)
   if ("total_effect" %in% names(sim_df)) return(sim_df$total_effect)
@@ -1274,14 +1285,18 @@ format_partition_label <- function(part_id) {
   part_id
 }
 
-ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
+ate_rows <- lapply(biv_rows, function(r) {
   if (is.null(r$ate)) return(NULL)
-  expected <- get_expected_totals(r$ate, n_tiles = n_cty)
-  sim_totals <- get_total_effect_sim(r$ate, n_tiles = n_cty)
-  c_mean <- mean(expected$c_total, na.rm = TRUE)
-  t_mean <- mean(expected$t_total, na.rm = TRUE)
-  saved_diff_mean <- c_mean - t_mean
-  sim_sd_total  <- sd(sim_totals, na.rm = TRUE)
+  expected <- tryCatch(get_expected_totals(r$ate, n_tiles = n_cty), error = function(e) NULL)
+  sim_totals <- tryCatch(get_total_effect_sim(r$ate, n_tiles = n_cty), error = function(e) NULL)
+  c_mean <- if (!is.null(expected) && !is.null(expected$c_total) && length(expected$c_total) > 0) {
+    mean(expected$c_total, na.rm = TRUE)
+  } else { NA_real_ }
+  t_mean <- if (!is.null(expected) && !is.null(expected$t_total) && length(expected$t_total) > 0) {
+    mean(expected$t_total, na.rm = TRUE)
+  } else { NA_real_ }
+  saved_diff_mean <- if (is.finite(c_mean) && is.finite(t_mean)) c_mean - t_mean else NA_real_
+  sim_sd_total  <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
   base_row <- data.frame(
     Model = r$lab,
     `E[N(control everywhere)]` = round(c_mean, 0),
@@ -1305,7 +1320,9 @@ ate_biv <- do.call(rbind, lapply(biv_rows, function(r) {
   base_row$`Bootstrap SD` <- boot_sd
   base_row$`Bootstrap 95% CI` <- boot_ci
   base_row
-}))
+})
+ate_rows <- Filter(Negate(is.null), ate_rows)
+ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
@@ -1329,8 +1346,8 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
     cat("\nBootstrap results are not shown because the newest available source is a pre-bootstrap checkpoint.\n")
   } else if (!is.null(boot_E_df) || !is.null(boot_F_df)) {
     labs <- c()
-    if (!is.null(boot_E_df)) labs <- c(labs, "C (Naive Biv+KDE ctrl-fixed)")
-    if (!is.null(boot_F_df)) labs <- c(labs, "D (SEM Biv+KDE ctrl-fixed)")
+    if (!is.null(boot_E_df)) labs <- c(labs, "E (Naive Biv+KDE all-free)")
+    if (!is.null(boot_F_df)) labs <- c(labs, "F (SEM Biv+KDE all-free)")
     cat(sprintf("\nBootstrap uncertainty is available for: %s.\n", paste(labs, collapse = ", ")))
   }
 } else {
@@ -1379,8 +1396,8 @@ sensitivity to spatial resolution:
 - **AOI region** partition: the AOI polygon defines one treated region,
   everything else is control (2 tiles total).
 
-For each partition, both the naive bivariate + KDE (C-type) and
-SEM bivariate + KDE (D-type) models are fitted.
+For each partition, both the naive bivariate + KDE (E-type, all-free)
+and SEM bivariate + KDE (F-type, all-free) models are fitted.
 
 ```{r fig-partition-all}
 #| label: fig-partition-all
@@ -1413,30 +1430,49 @@ part_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
-         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
+         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
 
   for (fit_type in list(
-    list(lab = "Naive Biv+KDE", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
-    list(lab = "SEM Biv+KDE",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
+    list(lab = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
+    list(lab = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
   )) {
     expected <- if (!is.null(fit_type$ate)) {
       get_expected_totals(fit_type$ate, n_tiles = info$n_tiles)
     } else { NULL }
-    sim_total <- if (!is.null(fit_type$ate)) {
-      round(mean(get_total_effect_sim(fit_type$ate, n_tiles = info$n_tiles), na.rm = TRUE), 0)
-    } else { NA }
+    sim_totals <- if (!is.null(fit_type$ate)) {
+      get_total_effect_sim(fit_type$ate, n_tiles = info$n_tiles)
+    } else { NULL }
+    c_mean <- if (!is.null(expected) && !is.null(expected$c_total)) {
+      mean(expected$c_total, na.rm = TRUE)
+    } else { NA_real_ }
+    t_mean <- if (!is.null(expected) && !is.null(expected$t_total)) {
+      mean(expected$t_total, na.rm = TRUE)
+    } else { NA_real_ }
+    t_all_mean <- if (!is.null(fit_type$ate$analytic) && !is.null(fit_type$ate$analytic$eta_treat)) {
+      as.numeric(fit_type$ate$analytic$eta_treat) * info$n_tiles
+    } else { NA_real_ }
+    saved_diff_mean <- if (is.finite(c_mean) && is.finite(t_mean)) c_mean - t_mean else NA_real_
+    sim_sd_total <- if (!is.null(sim_totals) && length(sim_totals) > 1L) {
+      sd(sim_totals, na.rm = TRUE)
+    } else { NA_real_ }
+    spill_total <- if (!is.null(fit_type$ate$total_spillover)) {
+      fit_type$ate$total_spillover
+    } else if (!is.null(fit_type$ate$ATE_spillover)) {
+      fit_type$ate$ATE_spillover * info$n_tiles
+    } else { NA_real_ }
     n_relabel <- if (!is.null(fit_type$sem_obj) &&
                      !is.null(fit_type$sem_obj$adaptive$adaptive_labelling)) {
       lp <- fit_type$sem_obj$adaptive$adaptive_labelling
       lp <- lp[lp$t >= 0, , drop = FALSE]
       sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+    } else if (identical(fit_type$lab, "F: SEM Biv+KDE (all-free)") &&
+               !is.null(info$n_relabel) && is.finite(info$n_relabel)) {
+      as.integer(info$n_relabel)
     } else { 0 }
-    c_mean <- if (!is.null(expected)) round(mean(expected$c_total, na.rm = TRUE), 0) else NA
-    t_mean <- if (!is.null(expected)) round(mean(expected$t_total, na.rm = TRUE), 0) else NA
 
     part_rows[[length(part_rows) + 1]] <- data.frame(
       PartitionID = info$label,
@@ -1445,15 +1481,18 @@ for (pname in names(pr)) {
       Tiles = info$n_tiles,
       Treated = info$n_treated,
       `Relabelled points` = n_relabel,
-      `E[N(0)]` = c_mean,
-      `E[N(1)]` = t_mean,
+      `E[N(control everywhere)]` = round(c_mean, 0),
+      `E[N(actual treatment regime)]` = round(t_mean, 0),
+      `E[N(treated everywhere)]` = round(t_all_mean, 0),
+      `Saved = control - actual` = round(saved_diff_mean, 0),
+      `SD(saved)` = round(sim_sd_total, 0),
+      `Spillover` = round(spill_total, 0),
       mu_0 = round(fit_type$par[["mu_0"]], 4),
       mu_1 = round(fit_type$par[["mu_1"]], 4),
       A_0 = round(fit_type$par[["A_00"]], 4),
       A_1 = round(fit_type$par[["A_11"]], 4),
       alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
       alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
-      `Total Saved` = sim_total,
       check.names = FALSE)
   }
 }
@@ -1469,8 +1508,8 @@ if (length(part_rows) > 0) {
   part_df$Partition <- factor(as.character(part_df$Partition),
                               levels = unique(as.character(part_df$Partition)))
   part_df_print <- subset(part_df, select = -PartitionID)
-  kable(part_df_print, align = "llccccccccccccc",
-        caption = paste0("Partition comparison over ", ate_days, " days: E[N(0)], E[N(1)], marginal ETAS parameters, and total saved.")) |>
+  kable(part_df_print, align = "llcccccccccccccccc",
+        caption = paste0("Partition comparison over ", ate_days, " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters).")) |>
     kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
                   font_size = 9, latex_options = c("scale_down", "hold_position"))
 }
@@ -1504,7 +1543,7 @@ if (exists("part_df") && nrow(part_df) > 0) {
     geom_line(alpha = 0.45) +
     geom_point(aes(size = is_county), alpha = 0.9) +
     scale_size_manual(values = c(`FALSE` = 2.1, `TRUE` = 3.6), guide = "none") +
-    scale_colour_manual(values = c("Naive Biv+KDE" = "#e78ac3", "SEM Biv+KDE" = "#a6d854")) +
+    scale_colour_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     facet_grid(Parameter ~ Process, scales = "free_y", labeller = label_parsed) +
     labs(x = "Partition scheme", y = "Estimate", colour = "Model") +
     theme_minimal(base_size = 12) +
@@ -1529,13 +1568,13 @@ part_sim_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
-         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
+         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
-  for (fit_type in list(list(lab = "Naive Biv+KDE", ate = ate_info$ate_E),
-                        list(lab = "SEM Biv+KDE",   ate = ate_info$ate_F))) {
+  for (fit_type in list(list(lab = "E: Naive Biv+KDE (all-free)", ate = ate_info$ate_E),
+                        list(lab = "F: SEM Biv+KDE (all-free)",   ate = ate_info$ate_F))) {
     if (!is.null(fit_type$ate) && !is.null(fit_type$ate$all_nothing_sim)) {
       part_sim_rows[[length(part_sim_rows) + 1]] <- data.frame(
         Partition = info$label,
@@ -1560,7 +1599,7 @@ if (length(part_sim_rows) > 0) {
     geom_histogram(bins = 25, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
     facet_wrap(~Partition, scales = "fixed") +
-    scale_fill_manual(values = c("Naive Biv+KDE" = "#e78ac3", "SEM Biv+KDE" = "#a6d854")) +
+    scale_fill_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
          y = "Simulation count") +
     theme_minimal(base_size = 12) +
@@ -1596,17 +1635,25 @@ if (!is.null(bws) && length(bws) > 0) {
     info <- bws[[nm]]
     if (is.null(info)) next
     for (fit_type in list(
-      list(model = "Naive Biv+KDE", par = info$E_params, ate = info$ate_E, relab = 0),
-      list(model = "SEM Biv+KDE",   par = info$F_params, ate = info$ate_F,
+      list(model = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = info$ate_E, relab = 0),
+      list(model = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = info$ate_F,
            relab = if (!is.null(info$n_relabel)) info$n_relabel else NA)
     )) {
       if (is.null(fit_type$par)) next
       expected <- if (!is.null(fit_type$ate)) get_expected_totals(fit_type$ate, n_tiles = n_cty) else NULL
-      sim_total <- if (!is.null(fit_type$ate)) {
-        round(mean(get_total_effect_sim(fit_type$ate, n_tiles = n_cty), na.rm = TRUE), 0)
-      } else { NA }
-      c_mean <- if (!is.null(expected)) round(mean(expected$c_total, na.rm = TRUE), 0) else NA
-      t_mean <- if (!is.null(expected)) round(mean(expected$t_total, na.rm = TRUE), 0) else NA
+      sim_totals <- if (!is.null(fit_type$ate)) get_total_effect_sim(fit_type$ate, n_tiles = n_cty) else NULL
+      c_mean <- if (!is.null(expected) && !is.null(expected$c_total)) mean(expected$c_total, na.rm = TRUE) else NA_real_
+      t_mean <- if (!is.null(expected) && !is.null(expected$t_total)) mean(expected$t_total, na.rm = TRUE) else NA_real_
+      t_all_mean <- if (!is.null(fit_type$ate$analytic) && !is.null(fit_type$ate$analytic$eta_treat)) {
+        as.numeric(fit_type$ate$analytic$eta_treat) * n_cty
+      } else { NA_real_ }
+      saved_diff_mean <- if (is.finite(c_mean) && is.finite(t_mean)) c_mean - t_mean else NA_real_
+      sim_sd_total <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
+      spill_total <- if (!is.null(fit_type$ate$total_spillover)) {
+        fit_type$ate$total_spillover
+      } else if (!is.null(fit_type$ate$ATE_spillover)) {
+        fit_type$ate$ATE_spillover * n_cty
+      } else { NA_real_ }
       bw_rows[[length(bw_rows) + 1]] <- data.frame(
         BandwidthID = nm,
         Bandwidth = bw_label(nm),
@@ -1614,15 +1661,18 @@ if (!is.null(bws) && length(bws) > 0) {
         Tiles = n_cty,
         Treated = cfg$n_treated,
         `Relabelled points` = fit_type$relab,
-        `E[N(0)]` = c_mean,
-        `E[N(1)]` = t_mean,
+        `E[N(control everywhere)]` = round(c_mean, 0),
+        `E[N(actual treatment regime)]` = round(t_mean, 0),
+        `E[N(treated everywhere)]` = round(t_all_mean, 0),
+        `Saved = control - actual` = round(saved_diff_mean, 0),
+        `SD(saved)` = round(sim_sd_total, 0),
+        `Spillover` = round(spill_total, 0),
         mu_0 = round(fit_type$par[["mu_0"]], 4),
         mu_1 = round(fit_type$par[["mu_1"]], 4),
         A_0 = round(fit_type$par[["A_00"]], 4),
         A_1 = round(fit_type$par[["A_11"]], 4),
         alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
         alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
-        `Total Saved` = sim_total,
         check.names = FALSE
       )
     }
@@ -1634,9 +1684,9 @@ if (!is.null(bws) && length(bws) > 0) {
     bw_df$Bandwidth <- factor(as.character(bw_df$Bandwidth),
                               levels = unique(as.character(bw_df$Bandwidth)))
     bw_print <- subset(bw_df, select = -BandwidthID)
-    kable(bw_print, align = "llccccccccccccc",
+    kable(bw_print, align = "llcccccccccccccccc",
           caption = paste0("County inhomogeneous KDE bandwidth sensitivity over ", ate_days,
-                           " days: E[N(0)], E[N(1)], marginal ETAS parameters, and total saved.")) |>
+                           " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters).")) |>
       kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
                     font_size = 9, latex_options = c("scale_down", "hold_position"))
   }

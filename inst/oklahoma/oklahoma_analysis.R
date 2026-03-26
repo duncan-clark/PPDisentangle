@@ -176,11 +176,11 @@ ATE_WINDOW_DAYS <- 100
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
 BOOT_N_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_N_REPS", "0")))
 if (!is.finite(BOOT_N_REPS) || is.na(BOOT_N_REPS) || BOOT_N_REPS < 0L) BOOT_N_REPS <- 0L
-# Keep defaults memory-safe: E-only bootstrap unless user explicitly requests F.
-BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E"))
+# Default to bootstrapping both all-free KDE models (E and F); user can override.
+BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E,F"))
 BOOT_TARGETS <- unique(trimws(unlist(strsplit(BOOT_TARGETS_RAW, ","))))
 BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("E", "F")]
-if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E")
+if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E", "F")
 # Safer default is no per-replicate refit (still allows explicit partial/full override).
 BOOT_REFIT_SCOPE <- tolower(trimws(Sys.getenv("OK_BOOT_REFIT_SCOPE", "none")))
 if (!BOOT_REFIT_SCOPE %in% c("none", "partial", "full")) BOOT_REFIT_SCOPE <- "none"
@@ -1164,7 +1164,9 @@ kde_variant_specs <- list(
 kde_primary_variant_id <- "control_only_fixed"
 kde_variant_ids <- if (RUN_KDE_PROFILE_SWEEP) names(kde_variant_specs) else kde_primary_variant_id
 kde_variant_fits <- list(E = list(), F = list())
-SENSITIVITY_FIXED_PARAMS <- kde_variant_specs$control_only_fixed$fixed_params
+# Sensitivity and bootstrap refits should align with Section 6.1 all-free
+# KDE models (E/F), not the control-only-fixed profile.
+SENSITIVITY_FIXED_PARAMS <- kde_variant_specs$all_free$fixed_params
 KDE_FIT_LETTERS <- list(
   control_only_fixed = list(E = "C", F = "D"),
   all_free = list(E = "E", F = "F"),

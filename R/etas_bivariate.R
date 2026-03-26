@@ -49,8 +49,8 @@ loglik_etas_bivariate <- function(params,
                                   treated_background_zero_before = NULL,
                                   beta_gr = NULL,
                                   stability_barrier_start = 0.95,
-                                  stability_barrier_weight = 100,
-                                  stability_barrier_power = 2,
+                                  stability_barrier_weight = 50000,
+                                  stability_barrier_power = 4,
                                   t_trunc = NULL,
                                   ...) {
   if (is.list(params) && !is.null(names(params))) {
@@ -201,7 +201,7 @@ loglik_etas_bivariate <- function(params,
   )
   if (!is.finite(loglik)) return(-1e15)
   # Smooth stability barrier on the bivariate ETAS offspring matrix spectral
-  # radius; activates only when rho exceeds `stability_barrier_start`.
+  # radius; activates before criticality and ramps very sharply beyond 1.
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
   if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
   if (barrier_weight > 0) {
@@ -239,6 +239,12 @@ loglik_etas_bivariate <- function(params,
     excess <- max(0, rho - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
+    }
+    # Keep a soft (continuous) barrier while making supercritical solutions
+    # effectively impossible to select in practice.
+    supercritical_excess <- max(0, rho - 0.999)
+    if (supercritical_excess > 0) {
+      loglik <- loglik - barrier_weight * 1e6 * (supercritical_excess ^ 2)
     }
   }
   loglik
