@@ -682,6 +682,42 @@ bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
 safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
 safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
 
+etas_trigger_means <- function(par, beta_gr = NULL) {
+  if (is.null(par)) {
+    return(list(mean_time = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
+  }
+  c0 <- suppressWarnings(as.numeric(par[["c"]]))
+  p0 <- suppressWarnings(as.numeric(par[["p"]]))
+  D0 <- suppressWarnings(as.numeric(par[["D"]]))
+  g0 <- suppressWarnings(as.numeric(par[["gamma"]]))
+  q0 <- suppressWarnings(as.numeric(par[["q"]]))
+  b0 <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
+  if (length(b0) < 1L || !is.finite(b0[[1]]) || is.na(b0[[1]]) || b0[[1]] <= 0) b0 <- 2.3 else b0 <- b0[[1]]
+
+  mean_time <- if (is.finite(c0) && is.finite(p0) && !is.na(c0) && !is.na(p0) && p0 > 2) {
+    c0 / (p0 - 2)
+  } else {
+    Inf
+  }
+
+  mean_scale <- if (is.finite(D0) && is.finite(g0) && !is.na(D0) && !is.na(g0)) {
+    D0 * exp(g0 / b0)
+  } else {
+    NA_real_
+  }
+
+  mean_distance <- if (is.finite(mean_scale) && !is.na(mean_scale) &&
+                       is.finite(q0) && !is.na(q0) && q0 > 1.5) {
+    sqrt(mean_scale) * (q0 - 1) * sqrt(pi) * gamma(q0 - 1.5) / gamma(q0)
+  } else if (is.finite(q0) && !is.na(q0) && q0 <= 1.5) {
+    Inf
+  } else {
+    NA_real_
+  }
+
+  list(mean_time = mean_time, mean_distance = mean_distance, mean_scale = mean_scale)
+}
+
 model_defs <- list(
   list(id = "A", fit = "fits_named$A", label = "A: Naive", long = "A: Naive Biv", par = A_par),
   list(id = "B", fit = "fits_named$B", label = "B: SEM", long = "B: SEM Biv", par = B_par),
@@ -1239,6 +1275,39 @@ if (length(sum_rows) > 0) {
 }
 ```
 
+### Triggering Distance Diagnostics (E/F)
+
+```{r tbl-trigger-distance-ef}
+#| label: tbl-trigger-distance-ef
+diag_rows <- list()
+for (fit_info in list(
+  list(label = "E: Naive+KDE (all-free)", par = E_par),
+  list(label = "F: SEM+KDE (all-free)",   par = F_par)
+)) {
+  if (is.null(fit_info$par)) next
+  m <- etas_trigger_means(fit_info$par, cfg$BETA_GR)
+  for (proc in c("Control", "Treated")) {
+    diag_rows[[length(diag_rows) + 1]] <- data.frame(
+      Model = fit_info$label,
+      Process = proc,
+      `Mean trigger time (days)` = if (is.finite(m$mean_time)) round(m$mean_time, 3) else Inf,
+      `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
+      check.names = FALSE
+    )
+  }
+}
+if (length(diag_rows) > 0) {
+  diag_df <- do.call(rbind, diag_rows)
+  kable(diag_df, align = "llcc",
+        caption = paste0(
+          "Model-implied ETAS triggering means for E/F. ",
+          "Infinite values indicate heavy-tail regimes where the corresponding mean does not exist ",
+          "(time: p <= 2, space: q <= 1.5)."
+        )) |>
+    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+}
+```
+
 # All-or-Nothing Treatment Effect
 
 ## County Partition
@@ -1254,6 +1323,20 @@ if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[
 }
 n_cty <- as.integer(n_cty[[1]])
 ate_days <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 365
+obs_post_n <- NA_integer_
+if (!is.null(results$pp_data) && !is.null(results$pp_data$pp_post)) {
+  pp_post_df <- coerce_pp_df(results$pp_data$pp_post)
+  if (nrow(pp_post_df) > 0 && "t" %in% names(pp_post_df)) {
+    t_num <- suppressWarnings(as.numeric(pp_post_df$t))
+    if (all(!is.na(t_num))) {
+      obs_post_n <- as.integer(sum(t_num >= 0 & t_num <= ate_days))
+    } else {
+      obs_post_n <- as.integer(nrow(pp_post_df))
+    }
+  } else {
+    obs_post_n <- as.integer(nrow(pp_post_df))
+  }
+}
 
 biv_rows <- list(
   list(lab = "A: Naive Bivariate", ate = if (!is.null(fit_A_obj)) fit_A_obj$ate else NULL, louis = NULL),
@@ -1352,6 +1435,7 @@ ate_rows <- lapply(biv_rows, function(r) {
   sim_sd_total  <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
   base_row <- data.frame(
     Model = r$lab,
+    `Observed N(actual regime)` = obs_post_n,
     `E[N(control everywhere)]` = round(c_mean, 0),
     `E[N(actual treatment regime)]` = round(t_mean, 0),
     `E[N(treated everywhere)]` = if (!is.null(r$ate$analytic) && !is.null(r$ate$analytic$eta_treat)) {
@@ -1379,11 +1463,11 @@ ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
-          c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
             "SD(saved)", paste0("Spillover / ", ate_days, "d"))
         } else {
-          c("Model", "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
             "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
             paste0("Spillover / ", ate_days, "d"))
@@ -1393,7 +1477,7 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
         } else {
           paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
         },
-        align = if (using_pre_bootstrap) "lcccccc" else "lcccccccc") |>
+        align = if (using_pre_bootstrap) "lccccccc" else "lccccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
