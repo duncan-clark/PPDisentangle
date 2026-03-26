@@ -1509,6 +1509,12 @@ ate_rows <- lapply(biv_rows, function(r) {
   t_mean <- if (!is.null(expected) && !is.null(expected$t_total) && length(expected$t_total) > 0) {
     mean(expected$t_total, na.rm = TRUE)
   } else { NA_real_ }
+  c_sd <- if (!is.null(expected) && !is.null(expected$c_total) && length(expected$c_total) > 1L) {
+    sd(expected$c_total, na.rm = TRUE)
+  } else { NA_real_ }
+  t_sd <- if (!is.null(expected) && !is.null(expected$t_total) && length(expected$t_total) > 1L) {
+    sd(expected$t_total, na.rm = TRUE)
+  } else { NA_real_ }
   saved_diff_mean <- if (is.finite(c_mean) && is.finite(t_mean)) c_mean - t_mean else NA_real_
   sim_sd_total  <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
   base_row <- data.frame(
@@ -1516,6 +1522,8 @@ ate_rows <- lapply(biv_rows, function(r) {
     `Observed N(actual regime)` = obs_post_n,
     `E[N(control everywhere)]` = round(c_mean, 0),
     `E[N(actual treatment regime)]` = round(t_mean, 0),
+    `SD(control everywhere)` = round(c_sd, 0),
+    `SD(actual treatment regime)` = round(t_sd, 0),
     `E[N(treated everywhere)]` = if (!is.null(r$ate$analytic) && !is.null(r$ate$analytic$eta_treat)) {
       round(as.numeric(r$ate$analytic$eta_treat) * n_cty, 0)
     } else { NA_real_ },
@@ -1541,11 +1549,13 @@ ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
-          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+            "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
             "SD(saved)", paste0("Spillover / ", ate_days, "d"))
         } else {
-          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]", "E[N(treated everywhere)]",
+          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
+            "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
             "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
             paste0("Spillover / ", ate_days, "d"))
@@ -1555,7 +1565,7 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
         } else {
           paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
         },
-        align = if (using_pre_bootstrap) "lccccccc" else "lccccccccc") |>
+        align = if (using_pre_bootstrap) "lccccccccc" else "lcccccccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
