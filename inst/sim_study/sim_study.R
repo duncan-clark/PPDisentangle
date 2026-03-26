@@ -1138,27 +1138,53 @@ log_memory("post_ATE")
 # ------------------------------------------------------------------
 # Screen fitted Hawkes mu values and mark failed fits when they exceed
 # a configurable multiple of the true generating mu values.
-is_failed_mu_fit <- function(r, mu_mult) {
-  if (is.null(r) || is.null(r$control_pp) || is.null(r$treated_pp)) return(FALSE)
-  ctrl_mu <- suppressWarnings(as.numeric(r$control_pp$mu))
-  treat_mu <- suppressWarnings(as.numeric(r$treated_pp$mu))
+extract_mu_pair <- function(r, task_obj = NULL) {
+  safe_mu <- function(pp) {
+    if (is.null(pp)) return(NA_real_)
+    mu <- suppressWarnings(as.numeric(pp$mu))
+    if (length(mu) < 1L) return(NA_real_)
+    mu[[1]]
+  }
+  ctrl_pp <- NULL
+  treat_pp <- NULL
+  if (!is.null(r)) {
+    ctrl_pp <- r$control_pp
+    treat_pp <- r$treated_pp
+  }
+  if (is.null(ctrl_pp) && !is.null(task_obj) && !is.null(task_obj$hawkes_params)) {
+    ctrl_pp <- task_obj$hawkes_params$control
+  }
+  if (is.null(treat_pp) && !is.null(task_obj) && !is.null(task_obj$hawkes_params)) {
+    treat_pp <- task_obj$hawkes_params$treated
+  }
+  c(
+    control_mu = safe_mu(ctrl_pp),
+    treated_mu = safe_mu(treat_pp)
+  )
+}
+is_failed_mu_fit <- function(r, task_obj, mu_mult) {
+  mu_pair <- extract_mu_pair(r, task_obj)
+  ctrl_mu <- mu_pair[["control_mu"]]
+  treat_mu <- mu_pair[["treated_mu"]]
   if (!is.finite(ctrl_mu) || !is.finite(treat_mu)) return(TRUE)
   (ctrl_mu > (mu_mult * hawkes_par_1$mu)) || (treat_mu > (mu_mult * hawkes_par_2$mu))
 }
 
 high_mu_failed_idx <- integer(0)
 if (isTRUE(FILTER_HIGH_MU_FITS)) {
-  high_mu_failed_idx <- which(vapply(results_flat, is_failed_mu_fit, logical(1), mu_mult = MU_FAIL_MULTIPLIER))
+  high_mu_failed_idx <- which(vapply(seq_along(results_flat), function(k) {
+    is_failed_mu_fit(results_flat[[k]], tasks[[k]], mu_mult = MU_FAIL_MULTIPLIER)
+  }, logical(1)))
 }
 high_mu_failed_tasks <- if (length(high_mu_failed_idx) > 0) {
   do.call(rbind, lapply(high_mu_failed_idx, function(k) {
-    r <- results_flat[[k]]
+    mu_pair <- extract_mu_pair(results_flat[[k]], tasks[[k]])
     data.frame(
       task_idx = k,
       sim_id = ((k - 1) %% SIM_SIZE) + 1,
       labelling = tasks[[k]]$labelling_name,
-      control_mu = suppressWarnings(as.numeric(r$control_pp$mu)),
-      treated_mu = suppressWarnings(as.numeric(r$treated_pp$mu)),
+      control_mu = mu_pair[["control_mu"]],
+      treated_mu = mu_pair[["treated_mu"]],
       control_mu_threshold = MU_FAIL_MULTIPLIER * hawkes_par_1$mu,
       treated_mu_threshold = MU_FAIL_MULTIPLIER * hawkes_par_2$mu,
       stringsAsFactors = FALSE
@@ -1173,7 +1199,14 @@ high_mu_failed_tasks <- if (length(high_mu_failed_idx) > 0) {
   )
 }
 include_results <- rep(TRUE, length(results_flat))
+if (length(crazy_idx) > 0L) include_results[crazy_idx] <- FALSE
 if (length(high_mu_failed_idx) > 0L) include_results[high_mu_failed_idx] <- FALSE
+if (length(crazy_idx) > 0L) {
+  log_msg(sprintf(
+    "[FIT FILTER] %d/%d fits excluded due to explosive/crazy parameters (pre-ATE screen).",
+    length(crazy_idx), length(results_flat)
+  ))
+}
 if (length(high_mu_failed_idx) > 0L) {
   log_msg(sprintf(
     "[HIGH MU FILTER] %d/%d fits flagged as failed (mu > %.2fx true); excluded from outputs/estimates but retained in saved raw results.",
@@ -1183,29 +1216,45 @@ if (length(high_mu_failed_idx) > 0L) {
   log_msg(sprintf("[HIGH MU FILTER] No fits exceeded %.2fx true mu.", MU_FAIL_MULTIPLIER))
 }
 
-# Build a reusable inclusion lookup so every downstream average/plot can
-# consistently exclude failed high-mu fits by (sim_id, labelling).
-task_sim_ids <- ((seq_along(tasks) - 1L) %% SIM_SIZE) + 1L
-task_labellings <- vapply(tasks, function(tk) tk$labelling_name, character(1))
-task_keys <- paste(task_sim_ids, task_labellings, sep = "::")
-include_lookup <- include_results
-names(include_lookup) <- task_keys
-is_kept_fit <- function(sim_id, labelling_name) {
-  key <- paste(as.integer(sim_id), as.character(labelling_name), sep = "::")
-  val <- include_lookup[[key]]
-  if (is.null(val) || is.na(val)) return(FALSE)
-  isTRUE(val)
+# Central fit-status table used by all downstream summaries and plots.
+fit_status_df <- do.call(rbind, lapply(seq_along(tasks), function(k) {
+  mu_pair <- extract_mu_pair(results_flat[[k]], tasks[[k]])
+  data.frame(
+    task_idx = k,
+    sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
+    labelling = tasks[[k]]$labelling_name,
+    control_mu = mu_pair[["control_mu"]],
+    treated_mu = mu_pair[["treated_mu"]],
+    crazy_fit = k %in% crazy_idx,
+    high_mu_fit = k %in% high_mu_failed_idx,
+    include_result = isTRUE(include_results[[k]]),
+    stringsAsFactors = FALSE
+  )
+}))
+if (!is.null(fit_status_df) && nrow(fit_status_df) > 0) {
+  exclusion_summary <- fit_status_df %>%
+    group_by(.data$labelling) %>%
+    summarize(
+      n_total = n(),
+      n_excluded = sum(!.data$include_result),
+      n_high_mu = sum(.data$high_mu_fit),
+      n_crazy = sum(.data$crazy_fit),
+      .groups = "drop"
+    )
+  log_msg("=== Fit exclusion summary by method ===")
+  print(exclusion_summary)
 }
-method_keep_mask <- function(n_sim, labelling_name) {
-  if (n_sim < 1L) return(logical(0))
-  vapply(seq_len(n_sim), function(i) is_kept_fit(i, labelling_name), logical(1))
+method_kept_idx <- function(labelling_name) {
+  if (is.null(fit_status_df) || nrow(fit_status_df) < 1L) return(integer(0))
+  fit_status_df %>%
+    filter(.data$labelling == labelling_name, .data$include_result) %>%
+    pull(.data$sim_id)
 }
 
 # Recompute classification metrics using only kept fits so paper summaries
 # match the high-mu filtering used for ATE and parameter outputs.
 class_metrics <- lapply(names(labellings), function(nm) {
-  keep_mask <- method_keep_mask(length(labellings[[nm]]), nm)
-  kept_idx <- which(keep_mask)
+  kept_idx <- method_kept_idx(nm)
   accs <- sapply(kept_idx, function(i) {
     y <- labellings[[nm]][[i]]
     keep <- which(y$t > TREATMENT_TIME)
@@ -1223,12 +1272,15 @@ log_msg("")
 log_msg("=== Classification Accuracy (after high-mu filter) ===")
 print(class_metrics)
 
-results_df <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
-  if (!isTRUE(include_results[[k]])) return(NULL)
+results_df_all <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
   r <- results_flat[[k]]
   if (is.null(r)) return(NULL)
   data.frame(
+    task_idx = k,
+    sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
     labelling = tasks[[k]]$labelling_name,
+    control_mu = extract_mu_pair(r, tasks[[k]])[["control_mu"]],
+    treated_mu = extract_mu_pair(r, tasks[[k]])[["treated_mu"]],
     all_nothing_theory = mean(r$all_nothing_theory$ATE),
     tau_1_estim = r$tau_1_estim,
     ATE_total = r$ATE_total,
@@ -1238,6 +1290,14 @@ results_df <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
     stringsAsFactors = FALSE
   )
 }))
+results_df <- if (!is.null(results_df_all) && nrow(results_df_all) > 0) {
+  results_df_all %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    select(-.data$include_result)
+} else {
+  results_df_all
+}
 
 log_msg("")
 log_msg("=== ATE Results ===")
@@ -1261,8 +1321,7 @@ if (!is.finite(TRUE_CTRL_TAU_I) || is.na(TRUE_CTRL_TAU_I) || TRUE_CTRL_TAU_I < 1
 TRUE_CTRL_TAU_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_SIMS", "5")))
 if (!is.finite(TRUE_CTRL_TAU_SIMS) || is.na(TRUE_CTRL_TAU_SIMS) || TRUE_CTRL_TAU_SIMS < 1L) TRUE_CTRL_TAU_SIMS <- 5L
 
-results_df_true_control <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
-  if (!isTRUE(include_results[[k]])) return(NULL)
+results_df_true_control_all <- do.call(rbind, lapply(seq_along(results_flat), function(k) {
   r <- results_flat[[k]]
   if (is.null(r) || is.null(r$treated_pp)) return(NULL)
   treated_pp <- r$treated_pp
@@ -1276,7 +1335,11 @@ results_df_true_control <- do.call(rbind, lapply(seq_along(results_flat), functi
     )
   }, numeric(1))
   data.frame(
+    task_idx = k,
+    sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
     labelling = tasks[[k]]$labelling_name,
+    control_mu = extract_mu_pair(r, tasks[[k]])[["control_mu"]],
+    treated_mu = extract_mu_pair(r, tasks[[k]])[["treated_mu"]],
     all_nothing_true_control =
       (treated_pp$mu * TIME_INT * (1 / (1 - treated_pp$K)) -
          ctrl_true$mu * TIME_INT * (1 / (1 - ctrl_true$K))) / partition$n,
@@ -1288,6 +1351,14 @@ results_df_true_control <- do.call(rbind, lapply(seq_along(results_flat), functi
     stringsAsFactors = FALSE
   )
 }))
+results_df_true_control <- if (!is.null(results_df_true_control_all) && nrow(results_df_true_control_all) > 0) {
+  results_df_true_control_all %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    select(-.data$include_result)
+} else {
+  results_df_true_control_all
+}
 summary_df_true_control <- if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
   results_df_true_control %>%
     group_by(.data$labelling) %>%
@@ -1333,9 +1404,8 @@ if (length(obs_data) > 0) {
 }
 
 # Control and treated parameter estimates from results_flat
-extract_param_rows <- function(results_flat, tasks, sim_size, field_name, include_mask = NULL) {
+extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
   lapply(seq_along(results_flat), function(k) {
-    if (!is.null(include_mask) && !isTRUE(include_mask[[k]])) return(NULL)
     r <- results_flat[[k]]
     task_k <- tasks[[k]]
     par_obj <- if (!is.null(r)) r[[field_name]] else NULL
@@ -1349,6 +1419,7 @@ extract_param_rows <- function(results_flat, tasks, sim_size, field_name, includ
     }
     if (is.null(par_obj)) return(NULL)
     data.frame(
+      task_idx = k,
       labelling = task_k$labelling_name,
       sim_id = ((k - 1) %% sim_size) + 1,
       mu = par_obj$mu, alpha = par_obj$alpha,
@@ -1407,10 +1478,26 @@ build_param_boxplots <- function(params_df, truth_params, oracle_param_means = N
   Filter(Negate(is.null), plots)
 }
 
-control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp", include_mask = include_results)
-treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp", include_mask = include_results)
-control_params_df <- do.call(rbind, control_param_rows)
-treated_params_df <- do.call(rbind, treated_param_rows)
+control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp")
+treated_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "treated_pp")
+control_params_df_all <- do.call(rbind, control_param_rows)
+treated_params_df_all <- do.call(rbind, treated_param_rows)
+control_params_df <- if (!is.null(control_params_df_all) && nrow(control_params_df_all) > 0) {
+  control_params_df_all %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    select(-.data$include_result)
+} else {
+  control_params_df_all
+}
+treated_params_df <- if (!is.null(treated_params_df_all) && nrow(treated_params_df_all) > 0) {
+  treated_params_df_all %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    select(-.data$include_result)
+} else {
+  treated_params_df_all
+}
 if (!is.null(treated_params_df) && nrow(treated_params_df) > 0) {
   present_treated <- unique(as.character(treated_params_df$labelling))
   if (!("oracle" %in% present_treated)) {
@@ -1507,11 +1594,11 @@ if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
 
 # Points per tile (control vs treated theoretical means)
 ate_detail_rows <- lapply(seq_along(results_flat), function(k) {
-  if (!isTRUE(include_results[[k]])) return(NULL)
   r <- results_flat[[k]]
   if (is.null(r) || is.null(r$all_nothing_theory)) return(NULL)
   th <- r$all_nothing_theory
   data.frame(
+    task_idx = rep(k, 2),
     labelling = rep(tasks[[k]]$labelling_name, 2),
     method = c("points_per_tile_control_theory", "points_per_tile_treated_theory"),
     ATE_estim = c(th$c_mean[1], th$t_mean[1]),
@@ -1519,6 +1606,12 @@ ate_detail_rows <- lapply(seq_along(results_flat), function(k) {
   )
 })
 ate_detail_rows <- do.call(rbind, ate_detail_rows)
+if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
+  ate_detail_rows <- ate_detail_rows %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    select(-.data$include_result)
+}
 if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
   ate_detail_rows$labelling <- factor(
     ate_detail_rows$labelling,
@@ -1575,8 +1668,7 @@ sim_study_plots$draw_treated_params_combined <- function() {
 }
 
 if (exists("EM_results") && length(EM_results) > 0) {
-  sem_keep_mask <- method_keep_mask(length(EM_results), "SEM_adaptive")
-  sem_keep_idx <- which(sem_keep_mask)
+  sem_keep_idx <- method_kept_idx("SEM_adaptive")
   acc_list <- lapply(sem_keep_idx, function(i) {
     acc <- EM_results[[i]]$adaptive$accuracies
     if (is.null(acc) || length(acc) == 0) return(NULL)
@@ -1623,7 +1715,7 @@ if (exists("EM_results") && length(EM_results) > 0) {
 
 sem_diagnostics_df_filtered <- sem_diagnostics_df
 if (!is.null(sem_diagnostics_df) && nrow(sem_diagnostics_df) > 0) {
-  sem_keep_idx <- which(method_keep_mask(length(EM_results), "SEM_adaptive"))
+  sem_keep_idx <- method_kept_idx("SEM_adaptive")
   sem_diagnostics_df_filtered <- sem_diagnostics_df %>%
     filter(.data$sim_id %in% sem_keep_idx)
 }
@@ -1710,7 +1802,8 @@ sim_study_results <- list(
   skipped_explosive_tasks = skipped_explosive_tasks,
   high_mu_failed_idx = high_mu_failed_idx,
   high_mu_failed_tasks = high_mu_failed_tasks,
-  kept_result_idx = which(include_results),
+  fit_status = fit_status_df,
+  kept_result_idx = fit_status_df$task_idx[fit_status_df$include_result],
   class_metrics = class_metrics,
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
