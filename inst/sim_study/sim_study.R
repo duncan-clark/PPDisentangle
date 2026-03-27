@@ -247,6 +247,7 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
 }
 
 LOG_MEMORY <- FALSE
+SAVE_LIGHT <- tolower(Sys.getenv("PP_SAVE_LIGHT", "true")) %in% c("1", "true", "yes", "y")
 log_memory <- function(phase = "") {
   if (!LOG_MEMORY) return(invisible(NULL))
   g <- gc(verbose = FALSE)
@@ -320,6 +321,7 @@ log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
 log_msg("High-mu failure filter: enabled=", FILTER_HIGH_MU_FITS,
         " | mu_fail_multiplier=", MU_FAIL_MULTIPLIER)
+log_msg("Save mode: ", ifelse(SAVE_LIGHT, "LIGHT (trimmed traces)", "FULL (all objects)"))
 if (RUN_SEM_PILOT) {
   log_msg("SEM pilot: iters=", SEM_PILOT_ITERS,
           " | sims=", SEM_PILOT_SIMS,
@@ -1877,6 +1879,64 @@ timing_report <- list(
   on_cluster    = ON_CLUSTER
 )
 
+slim_task_for_save <- function(task_obj) {
+  if (is.null(task_obj)) return(NULL)
+  list(
+    labelling_name = task_obj$labelling_name,
+    has_hawkes_params = !is.null(task_obj$hawkes_params),
+    n_post = if (!is.null(task_obj$x)) nrow(task_obj$x) else NA_integer_,
+    n_filtration = if (!is.null(task_obj$filtration_data)) nrow(task_obj$filtration_data) else NA_integer_
+  )
+}
+
+slim_result_for_save <- function(res_obj) {
+  if (is.null(res_obj)) return(NULL)
+  list(
+    all_nothing_theory = res_obj$all_nothing_theory,
+    tau_1_estim = res_obj$tau_1_estim,
+    ATE_total = res_obj$ATE_total,
+    ATE_treatment = res_obj$ATE_treatment,
+    ATE_spillover = res_obj$ATE_spillover,
+    ATE_naive = res_obj$ATE_naive,
+    control_pp = res_obj$control_pp,
+    treated_pp = res_obj$treated_pp
+  )
+}
+
+slim_em_result_for_save <- function(em_obj) {
+  if (is.null(em_obj)) return(NULL)
+  ad <- em_obj$adaptive
+  list(
+    hawkes_params_control = em_obj$hawkes_params_control,
+    hawkes_params_treated = em_obj$hawkes_params_treated,
+    time = em_obj$time,
+    adaptive_summary = list(
+      n_iter = if (!is.null(ad$accuracies)) length(ad$accuracies) else NA_integer_,
+      final_accuracy = if (!is.null(ad$accuracies) && length(ad$accuracies) > 0) tail(ad$accuracies, 1) else NA_real_,
+      final_metric = if (!is.null(ad$metrics) && length(ad$metrics) > 0) tail(ad$metrics, 1) else NA_real_,
+      final_avg_flips = if (!is.null(ad$average_flips) && length(ad$average_flips) > 0) tail(ad$average_flips, 1) else NA_real_,
+      final_acc_flips = if (!is.null(ad$max_metric_flips) && length(ad$max_metric_flips) > 0) tail(ad$max_metric_flips, 1) else NA_real_
+    )
+  )
+}
+
+results_flat_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(results_flat, slim_result_for_save)
+} else {
+  results_flat
+}
+tasks_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(tasks, slim_task_for_save)
+} else {
+  tasks
+}
+EM_results_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(EM_results, slim_em_result_for_save)
+} else {
+  EM_results
+}
+sem_diagnostics_all_save <- if (isTRUE(SAVE_LIGHT)) NULL else sem_diagnostics_df
+
 sim_study_results <- list(
   results_df = results_df,
   summary_df = if (exists("summary_df")) summary_df else NULL,
@@ -1887,8 +1947,8 @@ sim_study_results <- list(
   control_params_df = if (exists("control_params_df")) control_params_df else NULL,
   treated_params_df = if (exists("treated_params_df")) treated_params_df else NULL,
   sem_pilot_summary = sem_pilot_summary,
-  results_flat = results_flat,
-  tasks = tasks,
+  results_flat = results_flat_save,
+  tasks = tasks_save,
   ate_run_idx = ate_run_idx,
   skipped_explosive_tasks = skipped_explosive_tasks,
   high_mu_failed_idx = high_mu_failed_idx,
@@ -1899,9 +1959,9 @@ sim_study_results <- list(
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
-  EM_results = EM_results,
+  EM_results = EM_results_save,
   sem_diagnostics = sem_diagnostics_df_filtered,
-  sem_diagnostics_all = sem_diagnostics_df,
+  sem_diagnostics_all = sem_diagnostics_all_save,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
@@ -1924,6 +1984,7 @@ sim_study_results <- list(
     POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
     OUTPUT_TAG = OUTPUT_TAG,
     RUN_ID = RUN_ID,
+    SAVE_LIGHT = SAVE_LIGHT,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
   ),
@@ -1932,6 +1993,8 @@ sim_study_results <- list(
 
 outfile <- file.path(SAVE_DIR, paste0(RUN_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
+obj_mb <- as.numeric(object.size(sim_study_results)) / (1024^2)
+log_msg(sprintf("Saved object size: %.1f MB", obj_mb))
 log_msg("Results: ", outfile)
 log_msg("Log:     ", LOG_FILE)
 log_msg("=== DONE ", RUN_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
