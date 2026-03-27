@@ -63,27 +63,58 @@ build_core_method <- function(df) {
   out
 }
 
+slim_sim_result <- function(res) {
+  if (is.null(res) || !is.list(res)) return(NULL)
+  keep_keys <- c(
+    "results_df", "summary_df",
+    "results_df_true_control", "summary_df_true_control",
+    "control_param_summary", "treated_param_summary",
+    "control_params_df", "treated_params_df",
+    "fit_status", "kept_result_idx",
+    "class_metrics", "all_nothing_ATE", "true_tau_1",
+    "timing_report", "config", "plots"
+  )
+  out <- res[intersect(keep_keys, names(res))]
+  out
+}
+
 runs_all <- list()
 runs_core <- list()
+per_run_results <- list()
+run_manifest <- list()
+processed_mults <- numeric(0)
 for (mult in multipliers) {
   tag <- format_tag(mult)
+  run_basename <- paste0(output_basename, "_", tag)
   message(sprintf("[time-sweep] running multiplier=%s (tag=%s)", signif(mult, 4), tag))
   env <- c(
     sprintf("PP_POST_TIME_MULTIPLIER=%s", as.character(mult)),
-    sprintf("PP_OUTPUT_BASENAME=%s", output_basename),
-    sprintf("PP_OUTPUT_TAG=%s", tag)
+    sprintf("PP_OUTPUT_BASENAME=%s", run_basename),
+    "PP_OUTPUT_TAG="
   )
-  cmd_args <- c(file.path(script_dir, "sim_study.R"), "--sims", as.character(pp_sims))
+  cmd_args <- c(shQuote(file.path(script_dir, "sim_study.R")), "--sims", as.character(pp_sims))
   if (test_mode) cmd_args <- c(cmd_args, "--test")
   status <- system2(command = "Rscript", args = cmd_args, env = env)
   if (!identical(status, 0L)) stop(sprintf("sim_study.R failed for multiplier=%s", mult))
 
-  rds_path <- file.path(out_dir, paste0(output_basename, "_", tag, ".rds"))
+  rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
   if (!file.exists(rds_path)) stop(sprintf("Expected output missing: %s", rds_path))
   res <- readRDS(rds_path)
   df <- if (!is.null(res$results_df)) res$results_df else NULL
-  if (is.null(df) || nrow(df) < 1L) next
-  if (!("all_nothing_theory" %in% names(df))) next
+  if (is.null(df) || nrow(df) < 1L) {
+    stop(sprintf("results_df missing/empty for multiplier=%s (%s)", mult, rds_path))
+  }
+  if (!("all_nothing_theory" %in% names(df))) {
+    stop(sprintf("results_df lacks all_nothing_theory for multiplier=%s (%s)", mult, rds_path))
+  }
+  got_mult <- if (!is.null(res$config) && !is.null(res$config$POST_TIME_MULTIPLIER)) {
+    suppressWarnings(as.numeric(res$config$POST_TIME_MULTIPLIER))
+  } else {
+    NA_real_
+  }
+  if (is.finite(got_mult) && !isTRUE(all.equal(got_mult, as.numeric(mult), tolerance = 1e-8))) {
+    stop(sprintf("Multiplier mismatch: requested=%s but file has POST_TIME_MULTIPLIER=%s (%s)", mult, got_mult, rds_path))
+  }
   all_df <- df
   all_df$method <- as.character(all_df$labelling)
   core <- build_core_method(df)
@@ -93,11 +124,32 @@ for (mult in multipliers) {
   all_df$time_multiplier <- as.numeric(mult)
   all_df$time_window <- window_len
   runs_all[[length(runs_all) + 1L]] <- all_df
+  per_run_results[[tag]] <- list(
+    multiplier = as.numeric(mult),
+    tag = tag,
+    run_basename = run_basename,
+    rds_path = rds_path,
+    result = slim_sim_result(res)
+  )
+  run_manifest[[length(run_manifest) + 1L]] <- data.frame(
+    multiplier = as.numeric(mult),
+    tag = tag,
+    run_basename = run_basename,
+    rds_path = rds_path,
+    rows_results_df = nrow(df),
+    stringsAsFactors = FALSE
+  )
+  processed_mults <- c(processed_mults, as.numeric(mult))
   if (!is.null(core) && nrow(core) > 0) {
     core$time_multiplier <- as.numeric(mult)
     core$time_window <- window_len
     runs_core[[length(runs_core) + 1L]] <- core
   }
+}
+
+missing_mults <- setdiff(as.numeric(multipliers), unique(processed_mults))
+if (length(missing_mults) > 0) {
+  stop(sprintf("Time sweep missing multipliers: %s", paste(signif(missing_mults, 5), collapse = ", ")))
 }
 
 if (length(runs_all) < 1L) stop("No valid runs found for time sweep.")
@@ -151,8 +203,20 @@ rds_out <- file.path(out_dir, paste0(output_basename, "_summary.rds"))
 saveRDS(list(
   output_basename = output_basename,
   multipliers = multipliers,
+  run_manifest = if (length(run_manifest) > 0) bind_rows(run_manifest) else data.frame(),
+  per_run_results = per_run_results,
   sweep_df_all = sweep_df_all,
-  sweep_df_core = sweep_df_core
+  sweep_df_core = sweep_df_core,
+  grouped_plots = list(
+    all_methods = p_all,
+    core_methods = if (exists("p_core")) p_core else NULL
+  ),
+  grouped_plot_files = list(
+    all_methods_png = png_all,
+    all_methods_pdf = pdf_all,
+    core_methods_png = if (nrow(sweep_df_core) > 0) file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods.png")) else NA_character_,
+    core_methods_pdf = if (nrow(sweep_df_core) > 0) file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods.pdf")) else NA_character_
+  )
 ), rds_out)
 
 message("[time-sweep] wrote grouped boxplot:")
