@@ -637,11 +637,113 @@ if (is.null(cs) || length(cs) == 0) {
 
 ## SEM Configuration
 
-- **Outer iterations:** `r cfg$SEM_N_ITER`
-- **Inner iterations:** `r cfg$SEM_INNER_ITER`
-- **SEM inner proposals (`SEM_INNER_PROPS`):** `r if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS`
-- **SEM labellings (`SEM_N_LABELLINGS`):** `r cfg$SEM_N_LABELLINGS`
-- **Change factor:** `r cfg$SEM_CHANGE_FACTOR`
+Pilot tuning is optional and only targets the Model D SEM relabelling controls.
+When enabled, the code runs a parallel grid over:
+
+- `change_factor`
+- `change_factor_min_mult`
+- `change_factor_max_mult`
+- `selection_temperature`
+
+using a short inner SEM run (default 100 iterations), then ranks candidates by:
+high final SEM score and low tail accepted/average flips. The chosen settings are
+then used for the main county SEM fits in the run.
+
+```{r sem-final-config}
+#| label: sem-final-config
+fmt <- function(x, default = "N/A") {
+  if (length(x) < 1L || is.null(x) || all(is.na(x))) return(default)
+  as.character(x[[1]])
+}
+run_sem_inner_props <- if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS
+final_cfg_tbl <- data.frame(
+  Setting = c(
+    "Outer iterations",
+    "Inner iterations",
+    "SEM inner proposals",
+    "SEM labellings",
+    "Warm start fixed step",
+    "Selection method",
+    "Selection temperature",
+    "Change factor",
+    "Change-factor min multiplier",
+    "Change-factor max multiplier",
+    "Pilot enabled",
+    "Pilot inner iterations",
+    "Pilot cores",
+    "Pilot max combos"
+  ),
+  Value = c(
+    fmt(cfg$SEM_N_ITER),
+    fmt(cfg$SEM_INNER_ITER),
+    fmt(run_sem_inner_props),
+    fmt(cfg$SEM_N_LABELLINGS),
+    fmt(cfg$SEM_WARMSTART_FIXED),
+    fmt(cfg$SEM_OPTIM_METHOD),
+    fmt(cfg$SEM_SELECTION_TEMPERATURE),
+    fmt(cfg$SEM_CHANGE_FACTOR),
+    fmt(cfg$SEM_CHANGE_FACTOR_MIN_MULT),
+    fmt(cfg$SEM_CHANGE_FACTOR_MAX_MULT),
+    fmt(cfg$RUN_SEM_PILOT),
+    fmt(cfg$SEM_PILOT_INNER_ITER),
+    fmt(cfg$SEM_PILOT_CORES),
+    fmt(cfg$SEM_PILOT_MAX_COMBOS)
+  ),
+  stringsAsFactors = FALSE
+)
+kable(final_cfg_tbl, align = "lc", caption = "Final SEM settings used for this run.") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+### SEM Pilot Tuning (Model D)
+
+```{r sem-pilot-summary}
+#| label: sem-pilot-summary
+pilot <- results$sem_pilot_tuning
+if (is.null(pilot) || isFALSE(pilot$enabled)) {
+  cat("Pilot tuning not run for this results file.\n")
+} else {
+  best <- pilot$best
+  cat(sprintf(
+    "Pilot ran with %s combos (inner iter = %s, cores = %s).\n\n",
+    if (!is.null(pilot$grid_size)) as.character(pilot$grid_size) else "N/A",
+    if (!is.null(pilot$inner_iter)) as.character(pilot$inner_iter) else "N/A",
+    if (!is.null(pilot$cores)) as.character(pilot$cores) else "N/A"
+  ))
+  if (!is.null(best) && nrow(best) > 0) {
+    cat(sprintf(
+      "Selected settings from pilot: change_factor = %.4f, min_mult = %.3f, max_mult = %.3f, temperature = %.3f\n\n",
+      as.numeric(best$change_factor[[1]]),
+      as.numeric(best$min_mult[[1]]),
+      as.numeric(best$max_mult[[1]]),
+      as.numeric(best$temperature[[1]])
+    ))
+  } else {
+    cat("No successful pilot candidate was selected; defaults were kept.\n\n")
+  }
+  if (!is.null(pilot$results) && nrow(pilot$results) > 0) {
+    top_tbl <- pilot$results
+    if ("pilot_score" %in% names(top_tbl)) {
+      top_tbl <- top_tbl[order(top_tbl$pilot_score, -top_tbl$final_metric), , drop = FALSE]
+    } else {
+      top_tbl <- top_tbl[order(-top_tbl$final_metric), , drop = FALSE]
+    }
+    top_tbl <- head(top_tbl, 5)
+    keep_cols <- intersect(
+      c("change_factor", "min_mult", "max_mult", "temperature", "final_metric",
+        "mean_avg_flips_tail", "mean_acc_flips_tail", "pilot_score"),
+      names(top_tbl)
+    )
+    top_tbl <- top_tbl[, keep_cols, drop = FALSE]
+    names(top_tbl) <- c(
+      "change_factor", "min_mult", "max_mult", "temperature", "final_metric",
+      "tail_avg_flips", "tail_acc_flips", "pilot_score"
+    )[seq_len(ncol(top_tbl))]
+    kable(top_tbl, digits = 4, caption = "Top pilot candidates (Model D).") |>
+      kable_styling(bootstrap_options = "striped", full_width = FALSE)
+  }
+}
+```
 
 # Results — County Partition
 
