@@ -199,7 +199,6 @@ fmt_scaled_num <- function(x, digits = 2) {
 has_fit <- function(fit_name) {
   !is.null(results[[fit_name]])
 }
-decode_enabled <- isTRUE(cfg$RUN_DECODE) || has_fit("fitG") || has_fit("fitH")
 
 coerce_pp_df <- function(obj) {
   if (is.null(obj)) return(data.frame())
@@ -765,8 +764,8 @@ fit_E_obj <- get_fit_by_letter("E")
 fit_F_obj <- get_fit_by_letter("F")
 fit_G_obj <- get_fit_by_letter("G")
 fit_H_obj <- get_fit_by_letter("H")
-fit_I_obj <- get_fit_by_letter("I", "fitG")
-fit_J_obj <- get_fit_by_letter("J", "fitH")
+fit_I_obj <- get_fit_by_letter("I", "fitI")
+fit_J_obj <- get_fit_by_letter("J", "fitJ")
 
 A_par <- if (!is.null(fit_A_obj)) fit_A_obj$params else NULL
 B_par <- if (!is.null(fit_B_obj)) fit_B_obj$params else NULL
@@ -779,8 +778,18 @@ H_par <- if (!is.null(fit_H_obj)) fit_H_obj$params else NULL
 I_par <- if (!is.null(fit_I_obj)) fit_I_obj$params else NULL
 J_par <- if (!is.null(fit_J_obj)) fit_J_obj$params else NULL
 
-bc <- function(par, p) if (p=="mu") par[["mu_0"]] else par[[paste0(p,"_00")]]
-bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
+bc <- function(par, p) {
+  if (is.null(par)) return(NA_real_)
+  if (!is.null(par$control)) return(suppressWarnings(as.numeric(par$control[[p]])))
+  if (p == "mu") return(suppressWarnings(as.numeric(par[["mu_0"]])))
+  suppressWarnings(as.numeric(par[[paste0(p, "_00")]]))
+}
+bt <- function(par, p) {
+  if (is.null(par)) return(NA_real_)
+  if (!is.null(par$treated)) return(suppressWarnings(as.numeric(par$treated[[p]])))
+  if (p == "mu") return(suppressWarnings(as.numeric(par[["mu_1"]])))
+  suppressWarnings(as.numeric(par[[paste0(p, "_11")]]))
+}
 safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
 safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
 
@@ -829,8 +838,8 @@ model_defs <- list(
   list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (all-free)", long = "F: SEM+KDE (all-free)", par = F_par),
   list(id = "G", fit = "fits_named$G", label = "G: Naive+KDE (struct-fixed)", long = "G: Naive+KDE (struct-fixed)", par = G_par),
   list(id = "H", fit = "fits_named$H", label = "H: SEM+KDE (struct-fixed)", long = "H: SEM+KDE (struct-fixed)", par = H_par),
-  list(id = "I", fit = "fits_named$I", label = "I: Decode", long = "I: Decode Biv", par = I_par),
-  list(id = "J", fit = "fits_named$J", label = "J: Decode+KDE", long = "J: Decode+KDE", par = J_par)
+  list(id = "I", fit = "fits_named$I", label = "I: Naive univariate+KDE", long = "I: Naive Univ+KDE", par = I_par),
+  list(id = "J", fit = "fits_named$J", label = "J: SEM univariate+KDE", long = "J: SEM Univ+KDE", par = J_par)
 )
 param_models <- Filter(function(m) !is.null(m$par), model_defs)
 
@@ -843,8 +852,8 @@ fit_fill_colors <- c(
   "F: SEM Biv+KDE (all-free)" = "#80b1d3",
   "G: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
   "H: SEM Biv+KDE (struct-fixed)" = "#b3de69",
-  "I: Decode Bivariate" = "#66c2a5",
-  "J: Decode Biv+KDE" = "#ffd92f"
+  "I: Naive Univ+KDE" = "#66c2a5",
+  "J: SEM Univ+KDE" = "#ffd92f"
 )
 fit_line_colors <- c(
   "A: Naive Bivariate" = "#d95f02",
@@ -855,8 +864,8 @@ fit_line_colors <- c(
   "F: SEM Biv+KDE (all-free)" = "#3182bd",
   "G: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
   "H: SEM Biv+KDE (struct-fixed)" = "#33a02c",
-  "I: Decode Bivariate" = "#1b9e77",
-  "J: Decode Biv+KDE" = "#b8860b"
+  "I: Naive Univ+KDE" = "#1b9e77",
+  "J: SEM Univ+KDE" = "#b8860b"
 )
 
 get_sem_metric_trace <- function(fit_obj) {
@@ -888,11 +897,12 @@ get_sem_metric_trace <- function(fit_obj) {
 # Lightweight wiring audit to ensure report labels map to the intended objects.
 build_fit_wiring_audit <- function(results_obj) {
   defs <- data.frame(
-    Label = c("A", "B", "C", "D", "E", "F", "G", "H"),
+    Label = c("A", "B", "C", "D", "E", "F", "G", "H", "I", "J"),
     `Result key` = c("fits_named$A", "fits_named$B", "fits_named$C", "fits_named$D",
-                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H"),
-    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
-    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
+                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H",
+                     "fits_named$I", "fits_named$J"),
+    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
+    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -1221,21 +1231,15 @@ if (length(flip_rows) > 0) {
 
 ```{r fig-selected-loglik}
 #| label: fig-selected-loglik
-#| fig-cap: "Decode selected log-likelihood progression across relabelling iterations (when Decode models are present)."
+#| fig-cap: "Selected objective progression for the univariate SEM model (J), when present."
 #| fig-height: 5
 metric_rows <- list()
-if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode) && !is.null(fit_I_obj$decode$trace$objective)) {
+sem_trace_J <- get_sem_metric_trace(fit_J_obj)
+if (!is.null(sem_trace_J)) {
   metric_rows[[length(metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(fit_I_obj$decode$trace$objective),
-    Objective = as.numeric(fit_I_obj$decode$trace$objective),
-    Model = "I: Decode Biv"
-  )
-}
-if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode) && !is.null(fit_J_obj$decode$trace$objective)) {
-  metric_rows[[length(metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(fit_J_obj$decode$trace$objective),
-    Objective = as.numeric(fit_J_obj$decode$trace$objective),
-    Model = "J: Decode Biv+KDE"
+    Iteration = seq_along(sem_trace_J),
+    Objective = as.numeric(sem_trace_J),
+    Model = "J: SEM Univ+KDE"
   )
 }
 if (length(metric_rows) > 0) {
@@ -1255,33 +1259,40 @@ if (length(metric_rows) > 0) {
       inherit.aes = FALSE,
       hjust = 1.05, vjust = -0.4, size = 3.2, colour = "black"
     ) +
-    scale_colour_manual(values = c(
-      "I: Decode Biv" = "#1b9e77",
-      "J: Decode Biv+KDE" = "#b8860b"
-    )) +
+    scale_colour_manual(values = c("J: SEM Univ+KDE" = "#b8860b")) +
     labs(x = "Iteration", y = "Selected objective (log-likelihood scale)") +
     facet_wrap(~Model, scales = "free_y") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "none")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No univariate SEM objective trace found in this results file.")
 }
 ```
 
-```{r fig-decode-flips}
-#| label: fig-decode-flips
-#| fig-cap: "Decode relabelling totals (county models)."
-decode_counts <- data.frame(
-  Model = c("I: Decode Bivariate", "J: Decode Biv+KDE"),
-  Flips = c(
-    if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode$n_flips)) fit_I_obj$decode$n_flips else NA_real_,
-    if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode$n_flips)) fit_J_obj$decode$n_flips else NA_real_
-  )
+```{r fig-univariate-flips}
+#| label: fig-univariate-flips
+#| fig-cap: "Relabelled-point totals for univariate county models I/J."
+count_relabels <- function(fit_obj) {
+  sem_obj <- NULL
+  if (!is.null(fit_obj$fit) && !is.null(fit_obj$fit$adaptive)) sem_obj <- fit_obj$fit
+  if (!is.null(fit_obj$sem) && !is.null(fit_obj$sem$adaptive)) sem_obj <- fit_obj$sem
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive$adaptive_labelling)) return(0)
+  lab <- sem_obj$adaptive$adaptive_labelling
+  lab <- lab[lab$t >= 0, , drop = FALSE]
+  if (nrow(lab) < 1L) return(0)
+  sum(lab$location_process != lab$inferred_process, na.rm = TRUE)
+}
+univ_counts <- data.frame(
+  Model = c("I: Naive Univ+KDE", "J: SEM Univ+KDE"),
+  Flips = c(0, if (!is.null(fit_J_obj)) count_relabels(fit_J_obj) else NA_real_)
 )
-decode_counts <- decode_counts[is.finite(decode_counts$Flips), , drop = FALSE]
-if (nrow(decode_counts) > 0) {
-  ggplot(decode_counts, aes(x = Model, y = Flips, fill = Model)) +
+univ_counts <- univ_counts[is.finite(univ_counts$Flips), , drop = FALSE]
+if (nrow(univ_counts) > 0) {
+  ggplot(univ_counts, aes(x = Model, y = Flips, fill = Model)) +
     geom_col(width = 0.6, alpha = 0.9) +
-    scale_fill_manual(values = c("I: Decode Bivariate" = "#66c2a5",
-                                 "J: Decode Biv+KDE" = "#ffd92f")) +
+    scale_fill_manual(values = c("I: Naive Univ+KDE" = "#66c2a5",
+                                 "J: SEM Univ+KDE" = "#ffd92f")) +
     labs(x = NULL, y = "Number of relabelled points") +
     theme_minimal(base_size = 12) +
     theme(legend.position = "none",
@@ -1298,30 +1309,11 @@ for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv", method = "SEM"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)", method = "SEM"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)", method = "SEM"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM")
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE", method = "SEM")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   tr <- as.numeric(tr)
-  tr <- tr[is.finite(tr)]
-  if (length(tr) > 0) {
-    final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
-      Model = info$lab,
-      Method = info$method,
-      Iterations = length(tr),
-      Final_Objective = tail(tr, 1),
-      stringsAsFactors = FALSE
-    )
-  }
-}
-
-for (info in list(
-  list(obj = fit_I_obj, lab = "I: Decode Biv", method = "Decode"),
-  list(obj = fit_J_obj, lab = "J: Decode Biv+KDE", method = "Decode")
-)) {
-  tr <- NULL
-  if (!is.null(info$obj) && !is.null(info$obj$decode) && !is.null(info$obj$decode$trace$objective)) {
-    tr <- as.numeric(info$obj$decode$trace$objective)
-  }
   tr <- tr[is.finite(tr)]
   if (length(tr) > 0) {
     final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
@@ -1369,8 +1361,12 @@ cm_D <- build_cm(if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, "B")
 cm_F <- build_cm(if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, "D")
 cm_H <- build_cm(if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, "F")
 cm_K <- build_cm(if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, "H")
-cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode)) fit_I_obj$decode$labelling else NULL)
-cm_J <- build_cm_from_labelling(if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode)) fit_J_obj$decode$labelling else NULL)
+cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(results$pp_data) && !is.null(results$pp_data$pp_post)) {
+  tmp <- coerce_pp_df(results$pp_data$pp_post)
+  if (!is.null(tmp$location_process)) tmp$inferred_process <- tmp$location_process
+  tmp
+} else NULL)
+cm_J <- build_cm(if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, "J")
 ```
 
 ### Fit B — SEM Bivariate ETAS
@@ -1453,7 +1449,7 @@ if (!is.null(cm_K)) {
 }
 ```
 
-### Fit I — Decode Bivariate ETAS
+### Fit I — Naive Univariate ETAS + KDE
 
 ```{r tbl-cm-G}
 #| label: tbl-cm-G
@@ -1465,7 +1461,7 @@ if (!is.null(cm_G)) {
     cm_display_G[rn, cn] <- paste0(cm_G[rn, cn], "  (", cm_G_pct[rn, cn], "%)")
   }
   kable(cm_display_G,
-        caption = paste0("Fit I: Location vs Decode-inferred label (n = ", n_post_G,
+        caption = paste0("Fit I: Location vs inferred label (naive baseline, n = ", n_post_G,
                          " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
@@ -1473,7 +1469,7 @@ if (!is.null(cm_G)) {
 }
 ```
 
-### Fit J — Decode Bivariate + KDE Background
+### Fit J — SEM Univariate ETAS + KDE
 
 ```{r tbl-cm-H}
 #| label: tbl-cm-H
@@ -1485,7 +1481,7 @@ if (!is.null(cm_J)) {
     cm_display_H[rn, cn] <- paste0(cm_J[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
   }
   kable(cm_display_H,
-        caption = paste0("Fit J: Location vs Decode-inferred label (n = ", n_post_H,
+        caption = paste0("Fit J: Location vs SEM-inferred label (n = ", n_post_H,
                          " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
@@ -1502,8 +1498,8 @@ for (info in list(list(cm = cm_D, lab = "B: SEM Bivariate"),
                   list(cm = cm_F, lab = "D: SEM Bivariate+KDE (ctrl-fixed)"),
                   list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"),
                   list(cm = cm_K, lab = "H: SEM Bivariate+KDE (struct-fixed)"),
-                  list(cm = cm_G, lab = "I: Decode Bivariate"),
-                  list(cm = cm_J, lab = "J: Decode Biv+KDE"))) {
+                  list(cm = cm_G, lab = "I: Naive Univ+KDE"),
+                  list(cm = cm_J, lab = "J: SEM Univ+KDE"))) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
@@ -1597,10 +1593,10 @@ biv_rows <- list(
   list(lab = "G: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL, louis = NULL),
   list(lab = "H: SEM Biv+KDE (struct-fixed)",   ate = if (!is.null(fit_H_obj)) fit_H_obj$ate else NULL, louis = if (!is.null(fit_H_obj)) fit_H_obj$louis else NULL))
 if (!is.null(fit_I_obj) && !is.null(fit_I_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Decode Bivariate", ate = fit_I_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Naive Univ+KDE", ate = fit_I_obj$ate, louis = NULL)
 }
 if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: Decode Biv+KDE", ate = fit_J_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: SEM Univ+KDE", ate = fit_J_obj$ate, louis = NULL)
 }
 
 boot_obj <- results$bootstrap_ate
@@ -2174,7 +2170,7 @@ effect_lines <- c(
   }
 )
 if (!is.na(total_J_1yr)) {
-  effect_lines <- c(effect_lines, paste0("- **Fit J (Decode+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
+  effect_lines <- c(effect_lines, paste0("- **Fit J (SEM univariate+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
 }
 cat(paste(effect_lines, collapse = "\n"), "\n")
 ```
@@ -2207,7 +2203,7 @@ grid_str <- if (length(grid_vals) > 0L) {
 cdf <- data.frame(
   Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
               "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
-              "SEM change factor","Decode enabled","Decode iterations","Fitting window (days)",
+              "SEM change factor","SEM max relabel step frac","SEM forced refit flip frac","Fitting window (days)",
               "ATE simulation window (days)","Simulation replicates",
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
               "Test mode"),
@@ -2215,8 +2211,8 @@ cdf <- data.frame(
             paste0(scalar_chr(cfg$n_counties), " / ", scalar_chr(cfg$n_treated)),
             scalar_chr(cfg$SEM_N_ITER), scalar_chr(cfg$SEM_INNER_ITER), sem_inner_props, scalar_chr(cfg$SEM_N_LABELLINGS),
             scalar_chr(cfg$SEM_CHANGE_FACTOR),
-            scalar_chr(cfg$RUN_DECODE %||% decode_enabled),
-            scalar_chr(cfg$DECODE_ITER),
+            scalar_chr(cfg$SEM_MAX_RELABEL_STEP_FRAC),
+            scalar_chr(cfg$SEM_FORCE_PARAM_UPDATE_FLIP_FRAC),
             if (!is.null(cfg$windowT_post)) paste(unlist(cfg$windowT_post, use.names = FALSE), collapse=" \u2013 ") else "N/A",
             ate_win, scalar_chr(cfg$ATE_N_SIMS),
             fmt_scaled_num(cfg$spatial_scale_D),

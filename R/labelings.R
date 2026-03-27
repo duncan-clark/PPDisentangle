@@ -898,6 +898,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param include_starting_data Logical; include current data in proposals
 #' @param include_starting_first_n Integer; force-include starting data as a
 #'   candidate proposal for the first N inner iterations.
+#' @param max_relabel_step_frac Maximum fraction of post-treatment points that
+#'   can change labels in a single inner iteration.
+#' @param force_param_update_flip_frac Cumulative accepted-flip fraction
+#'   threshold that forces a parameter update once reached.
 #' @param optim_method One of "max", "sample_weighted", "mean", "truncated_mean"
 #' @param selection_temperature Positive temperature for likelihood-weighted
 #'   sampling when \code{optim_method = "sample_weighted"}. Lower values are
@@ -932,6 +936,8 @@ em_style_labelling <- function(pp_data,
                                update_starting_data = TRUE,
                                include_starting_data = TRUE,
                                include_starting_first_n = 50,
+                               max_relabel_step_frac = 1.0,
+                               force_param_update_flip_frac = 1.0,
                                optim_method = "max",
                                selection_temperature = 0.15,
                                change_factor_min_mult = 0.2,
@@ -965,6 +971,16 @@ em_style_labelling <- function(pp_data,
   if (!is.finite(include_starting_first_n) || is.na(include_starting_first_n) || include_starting_first_n < 0L) {
     include_starting_first_n <- 0L
   }
+  max_relabel_step_frac <- suppressWarnings(as.numeric(max_relabel_step_frac))
+  if (!is.finite(max_relabel_step_frac) || is.na(max_relabel_step_frac) || max_relabel_step_frac <= 0) {
+    max_relabel_step_frac <- 1.0
+  }
+  max_relabel_step_frac <- min(max_relabel_step_frac, 1.0)
+  force_param_update_flip_frac <- suppressWarnings(as.numeric(force_param_update_flip_frac))
+  if (!is.finite(force_param_update_flip_frac) || is.na(force_param_update_flip_frac) || force_param_update_flip_frac <= 0) {
+    force_param_update_flip_frac <- 1.0
+  }
+  force_param_update_flip_frac <- min(force_param_update_flip_frac, 1.0)
   selection_temperature <- suppressWarnings(as.numeric(selection_temperature))
   if (!is.finite(selection_temperature) || is.na(selection_temperature) || selection_temperature <= 0) {
     selection_temperature <- 0.15
@@ -1064,6 +1080,11 @@ em_style_labelling <- function(pp_data,
   pre_data <- starting_data[is_pre, , drop = FALSE]
   post_data <- starting_data[!is_pre, , drop = FALSE]
   post_data <- post_data[order(post_data$t), , drop = FALSE]
+  n_post_total <- nrow(post_data)
+  max_flips_per_step <- max(1L, as.integer(ceiling(max_relabel_step_frac * max(1L, n_post_total))))
+  force_param_update_flip_n <- max(1L, as.integer(ceiling(force_param_update_flip_frac * max(1L, n_post_total))))
+  accepted_flips_cum <- 0L
+  next_forced_param_update_at <- force_param_update_flip_n
   pre_data$location_process <- "control"
   pre_data$inferred_process <- "control"
   history_window_start <- if (nrow(pre_data) > 0) min(pre_data$t) else time_window[1]
@@ -1323,15 +1344,31 @@ em_style_labelling <- function(pp_data,
       cat(sprintf("  [Iter %d/%d] likelihood evaluation done: %.2fs\n", i, iter, t_lik))
     }
 
+    proposed_best <- as.data.frame(max_metric_labelling)
+    accepted_labelling <- proposed_best
+    proposed_best_flips <- sum(post_data$inferred_process != proposed_best$inferred_process, na.rm = TRUE)
+    if (proposed_best_flips > max_flips_per_step) {
+      flip_idx <- which(post_data$inferred_process != proposed_best$inferred_process)
+      keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
+      accepted_labelling <- post_data
+      accepted_labelling$inferred_process[keep_idx] <- proposed_best$inferred_process[keep_idx]
+    }
+    max_diff <- sum(post_data$inferred_process != accepted_labelling$inferred_process, na.rm = TRUE)
+    average <- mean(flips_per_proposal)
+    accepted_flips_cum_next <- accepted_flips_cum + max_diff
+    force_param_update_due <- accepted_flips_cum_next >= next_forced_param_update_at
+    do_param_update <- FALSE
     if (!is.null(param_update_cadence)) {
-      if ((i %% param_update_cadence) == 0 | i == iter) {
+      do_param_update <- ((i %% param_update_cadence) == 0L) || i == iter || force_param_update_due
+    }
+    if (do_param_update) {
         t_param_start <- proc.time()[3]
         if (verbose) print("Updating Parameters")
         if (verbose && sem_timing_verbose) {
           cat(sprintf("  [Iter %d/%d] parameter update starting\n", i, iter))
         }
 
-        mml_post <- max_metric_labelling
+        mml_post <- accepted_labelling
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
@@ -1498,13 +1535,19 @@ em_style_labelling <- function(pp_data,
           print("treated:"); print(unlist(treated_par[[length(treated_par)]]))
           print("control:"); print(unlist(control_par[[length(control_par)]]))
           print(paste0("Updating model params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
+          if (force_param_update_due) {
+            print(paste0("Forced parameter update: cumulative accepted flips reached ",
+                         accepted_flips_cum_next, " (next threshold=", next_forced_param_update_at, ")."))
+          }
         }
         current_metric_cache <- NA_real_
-      }
+        accepted_flips_cum <- accepted_flips_cum_next
+        while (accepted_flips_cum >= next_forced_param_update_at) {
+          next_forced_param_update_at <- next_forced_param_update_at + force_param_update_flip_n
+        }
+    } else {
+      accepted_flips_cum <- accepted_flips_cum_next
     }
-
-    max_diff <- flips_per_proposal[best_metric_idx]
-    average <- mean(flips_per_proposal)
 
     retained_starting <- isTRUE(max_diff == 0)
     if (retained_starting) {
@@ -1521,11 +1564,11 @@ em_style_labelling <- function(pp_data,
     change_factor_trace[i] <- current_change_factor
 
     if (update_starting_data) {
-      post_data <- as.data.frame(max_metric_labelling)
+      post_data <- as.data.frame(accepted_labelling)
       post_data <- post_data[order(post_data$t), , drop = FALSE]
     }
 
-    mml_post_acc <- max_metric_labelling
+    mml_post_acc <- accepted_labelling
     accuracy <- mean(mml_post_acc$inferred_process == mml_post_acc$process)
     accuracies[i] <- accuracy
     metric_vec[i] <- metric[best_metric_idx]

@@ -25,6 +25,8 @@ PP_SEM_OPTIM_METHOD="${PP_SEM_OPTIM_METHOD:-sample_weighted}"
 PP_SEM_SELECTION_TEMPERATURE="${PP_SEM_SELECTION_TEMPERATURE:-0.08}"
 PP_SEM_CHANGE_FACTOR_MIN_MULT="${PP_SEM_CHANGE_FACTOR_MIN_MULT:-0.2}"
 PP_SEM_CHANGE_FACTOR_MAX_MULT="${PP_SEM_CHANGE_FACTOR_MAX_MULT:-2.0}"
+PP_SEM_MAX_RELABEL_STEP_FRAC="${PP_SEM_MAX_RELABEL_STEP_FRAC:-0.05}"
+PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="${PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC:-0.05}"
 PP_RUN_SEM_PILOT="${PP_RUN_SEM_PILOT:-0}"
 PP_SEM_PILOT_INNER="${PP_SEM_PILOT_INNER:-100}"
 PP_SEM_PILOT_CORES="${PP_SEM_PILOT_CORES:-}"
@@ -46,7 +48,6 @@ PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
 PP_KDE_VARIANT_MODE="${PP_KDE_VARIANT_MODE:-}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
 PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
-PP_RUN_DECODE="${PP_RUN_DECODE:-0}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
@@ -77,12 +78,10 @@ SETUP_TEST_EXPLICIT=0
 BOOT_REPS_EXPLICIT=0
 BOOT_OUTER_CORES_EXPLICIT=0
 RUN_SENS_EXPLICIT=0
-RUN_DECODE_EXPLICIT=0
 ATE_N_SIMS_EXPLICIT=0
 if [ -n "$PP_BOOT_REPS" ]; then BOOT_REPS_EXPLICIT=1; fi
 if [ -n "$PP_BOOT_OUTER_CORES" ]; then BOOT_OUTER_CORES_EXPLICIT=1; fi
 if [ "$PP_RUN_SENSITIVITY" != "auto" ]; then RUN_SENS_EXPLICIT=1; fi
-if [ "$PP_RUN_DECODE" != "0" ]; then RUN_DECODE_EXPLICIT=1; fi
 if [ -n "$PP_ATE_N_SIMS" ]; then ATE_N_SIMS_EXPLICIT=1; fi
 
 while [[ "$#" -gt 0 ]]; do
@@ -103,6 +102,8 @@ while [[ "$#" -gt 0 ]]; do
     --sem-selection-temperature) PP_SEM_SELECTION_TEMPERATURE="$2"; SEM_SELECTION_TEMP_EXPLICIT=1; shift 2 ;;
     --sem-change-factor-min-mult) PP_SEM_CHANGE_FACTOR_MIN_MULT="$2"; SEM_MIN_MULT_EXPLICIT=1; shift 2 ;;
     --sem-change-factor-max-mult) PP_SEM_CHANGE_FACTOR_MAX_MULT="$2"; SEM_MAX_MULT_EXPLICIT=1; shift 2 ;;
+    --sem-max-relabel-step-frac) PP_SEM_MAX_RELABEL_STEP_FRAC="$2"; shift 2 ;;
+    --sem-force-param-update-flip-frac) PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="$2"; shift 2 ;;
     --run-sem-pilot) PP_RUN_SEM_PILOT="$2"; RUN_SEM_PILOT_EXPLICIT=1; shift 2 ;;
     --sem-pilot-inner) PP_SEM_PILOT_INNER="$2"; SEM_PILOT_INNER_EXPLICIT=1; shift 2 ;;
     --sem-pilot-cores) PP_SEM_PILOT_CORES="$2"; SEM_PILOT_CORES_EXPLICIT=1; shift 2 ;;
@@ -124,7 +125,6 @@ while [[ "$#" -gt 0 ]]; do
     --kde-variant-mode) PP_KDE_VARIANT_MODE="$2"; KDE_VARIANT_MODE_EXPLICIT=1; shift 2 ;;
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
     --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
-    --run-decode) PP_RUN_DECODE="$2"; RUN_DECODE_EXPLICIT=1; shift 2 ;;
     --ate-n-sims) PP_ATE_N_SIMS="$2"; ATE_N_SIMS_EXPLICIT=1; shift 2 ;;
     --setup-test) PP_SETUP_TEST=1; SETUP_TEST_EXPLICIT=1; shift ;;
     --mem) PP_MEM="$2"; MEM_EXPLICIT=1; shift 2 ;;
@@ -152,7 +152,6 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
-      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=100; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=96G; fi
       ;;
@@ -169,7 +168,6 @@ if [ -n "$PP_MODE" ]; then
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=1; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
-      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=20; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=64G; fi
       ;;
@@ -190,7 +188,6 @@ if [ -n "$PP_MODE" ]; then
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
-      if [ "$RUN_DECODE_EXPLICIT" -ne 1 ]; then PP_RUN_DECODE=0; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       ;;
@@ -264,16 +261,6 @@ if [ "$PP_RUN_SENSITIVITY" = "auto" ]; then
   fi
 fi
 
-decode_norm="$(echo "$PP_RUN_DECODE" | tr '[:upper:]' '[:lower:]')"
-if [ "$decode_norm" = "1" ] || [ "$decode_norm" = "true" ] || [ "$decode_norm" = "yes" ] || [ "$decode_norm" = "y" ]; then
-  PP_RUN_DECODE=1
-elif [ "$decode_norm" = "0" ] || [ "$decode_norm" = "false" ] || [ "$decode_norm" = "no" ] || [ "$decode_norm" = "n" ] || [ -z "$decode_norm" ]; then
-  PP_RUN_DECODE=0
-else
-  echo "Invalid --run-decode '$PP_RUN_DECODE' (expected: 0/1 or true/false)"
-  exit 1
-fi
-
 # ----------------------------
 # Paths
 # ----------------------------
@@ -306,12 +293,12 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     echo "Note: using milan partition for >72 cores."
   fi
 
-  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_WARMSTART_FIXED=$PP_SEM_WARMSTART_FIXED,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SEM_T_TRUNC_DAYS=$PP_SEM_T_TRUNC_DAYS,PP_SEM_T_TRUNC_REL=$PP_SEM_T_TRUNC_REL,PP_SEM_TEMPORAL_WEIGHT=$PP_SEM_TEMPORAL_WEIGHT,PP_SEM_WORKER_LOGS=$PP_SEM_WORKER_LOGS,PP_SEM_WORKER_LOG_VERBOSE=$PP_SEM_WORKER_LOG_VERBOSE,PP_SEM_WORKER_LOG_SPLIT=$PP_SEM_WORKER_LOG_SPLIT,PP_SEM_TIMING_VERBOSE=$PP_SEM_TIMING_VERBOSE,PP_SEM_PROPOSAL_VERBOSE=$PP_SEM_PROPOSAL_VERBOSE,PP_SIM_PROGRESS_EVERY=$PP_SIM_PROGRESS_EVERY,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_REFIT_SCOPE=$PP_BOOT_REFIT_SCOPE,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_ATE_N_SIMS=$PP_ATE_N_SIMS,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_RUN_DECODE=$PP_RUN_DECODE,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
-  SBATCH_EXPORT="${SBATCH_EXPORT},PP_SEM_OPTIM_METHOD=$PP_SEM_OPTIM_METHOD,PP_SEM_SELECTION_TEMPERATURE=$PP_SEM_SELECTION_TEMPERATURE,PP_SEM_CHANGE_FACTOR_MIN_MULT=$PP_SEM_CHANGE_FACTOR_MIN_MULT,PP_SEM_CHANGE_FACTOR_MAX_MULT=$PP_SEM_CHANGE_FACTOR_MAX_MULT,PP_RUN_SEM_PILOT=$PP_RUN_SEM_PILOT,PP_SEM_PILOT_INNER=$PP_SEM_PILOT_INNER,PP_SEM_PILOT_CORES=$PP_SEM_PILOT_CORES,PP_SEM_PILOT_MAX_COMBOS=$PP_SEM_PILOT_MAX_COMBOS,PP_SEM_PILOT_CHANGE_FACTORS=$PP_SEM_PILOT_CHANGE_FACTORS,PP_SEM_PILOT_MIN_MULTS=$PP_SEM_PILOT_MIN_MULTS,PP_SEM_PILOT_MAX_MULTS=$PP_SEM_PILOT_MAX_MULTS,PP_SEM_PILOT_TEMPS=$PP_SEM_PILOT_TEMPS"
+  SBATCH_EXPORT="ALL,PKG_ROOT=$PKG_ROOT,PP_MODE=$PP_MODE,PP_CORES=$PP_CORES,PP_BOOT_REPS=$PP_BOOT_REPS,PP_SEM_INNER=$PP_SEM_INNER,PP_SEM_WARMSTART_FIXED=$PP_SEM_WARMSTART_FIXED,PP_SEM_N_ITER=$PP_SEM_N_ITER,PP_SEM_OUTER_MAXIT=$PP_SEM_OUTER_MAXIT,PP_SEM_OUTER_MAXIT_BIV=$PP_SEM_OUTER_MAXIT_BIV,PP_SEM_T_TRUNC_DAYS=$PP_SEM_T_TRUNC_DAYS,PP_SEM_T_TRUNC_REL=$PP_SEM_T_TRUNC_REL,PP_SEM_TEMPORAL_WEIGHT=$PP_SEM_TEMPORAL_WEIGHT,PP_SEM_WORKER_LOGS=$PP_SEM_WORKER_LOGS,PP_SEM_WORKER_LOG_VERBOSE=$PP_SEM_WORKER_LOG_VERBOSE,PP_SEM_WORKER_LOG_SPLIT=$PP_SEM_WORKER_LOG_SPLIT,PP_SEM_TIMING_VERBOSE=$PP_SEM_TIMING_VERBOSE,PP_SEM_PROPOSAL_VERBOSE=$PP_SEM_PROPOSAL_VERBOSE,PP_SIM_PROGRESS_EVERY=$PP_SIM_PROGRESS_EVERY,PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER,PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER,PP_BOOT_REFIT_SCOPE=$PP_BOOT_REFIT_SCOPE,PP_BOOT_TARGETS=$PP_BOOT_TARGETS,PP_KDE_VARIANT_MODE=$PP_KDE_VARIANT_MODE,PP_BOOT_OUTER_CORES=$PP_BOOT_OUTER_CORES,PP_ATE_N_SIMS=$PP_ATE_N_SIMS,PP_RUN_SENSITIVITY=$PP_RUN_SENSITIVITY,PP_MEM=$PP_MEM,PP_TIME=$PP_TIME"
+  SBATCH_EXPORT="${SBATCH_EXPORT},PP_SEM_OPTIM_METHOD=$PP_SEM_OPTIM_METHOD,PP_SEM_SELECTION_TEMPERATURE=$PP_SEM_SELECTION_TEMPERATURE,PP_SEM_CHANGE_FACTOR_MIN_MULT=$PP_SEM_CHANGE_FACTOR_MIN_MULT,PP_SEM_CHANGE_FACTOR_MAX_MULT=$PP_SEM_CHANGE_FACTOR_MAX_MULT,PP_SEM_MAX_RELABEL_STEP_FRAC=$PP_SEM_MAX_RELABEL_STEP_FRAC,PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC=$PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,PP_RUN_SEM_PILOT=$PP_RUN_SEM_PILOT,PP_SEM_PILOT_INNER=$PP_SEM_PILOT_INNER,PP_SEM_PILOT_CORES=$PP_SEM_PILOT_CORES,PP_SEM_PILOT_MAX_COMBOS=$PP_SEM_PILOT_MAX_COMBOS,PP_SEM_PILOT_CHANGE_FACTORS=$PP_SEM_PILOT_CHANGE_FACTORS,PP_SEM_PILOT_MIN_MULTS=$PP_SEM_PILOT_MIN_MULTS,PP_SEM_PILOT_MAX_MULTS=$PP_SEM_PILOT_MAX_MULTS,PP_SEM_PILOT_TEMPS=$PP_SEM_PILOT_TEMPS"
   SBATCH_EXPORT="${SBATCH_EXPORT},PP_SETUP_TEST=$PP_SETUP_TEST"
   [ -n "${PP_R_GEO_MODULE:-}" ] && SBATCH_EXPORT="${SBATCH_EXPORT},PP_R_GEO_MODULE=$PP_R_GEO_MODULE"
 
-  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=${PP_SEM_T_TRUNC_DAYS:-auto} sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY ate_n_sims=$PP_ATE_N_SIMS boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE kde_variants=$PP_KDE_VARIANT_MODE decode=$PP_RUN_DECODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=${PP_SEM_T_TRUNC_DAYS:-auto} sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT sem_step_cap=$PP_SEM_MAX_RELABEL_STEP_FRAC sem_force_refit_frac=$PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY ate_n_sims=$PP_ATE_N_SIMS boot_reps=$PP_BOOT_REPS sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE kde_variants=$PP_KDE_VARIANT_MODE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -340,7 +327,7 @@ echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=${PP_SEM_T_TRUNC_DAYS:-auto} sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE"
-echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual} decode=$PP_RUN_DECODE"
+echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo ""
 
@@ -522,7 +509,6 @@ export OK_SENS_CORES="${JOB_CORES}"
 # Default ATE sims to single-core execution unless explicitly overridden.
 export OK_ATE_SIM_CORES="${OK_ATE_SIM_CORES:-${PP_ATE_SIM_CORES:-1}}"
 export OK_BOOT_OUTER_CAP_MEMSAFE="${JOB_CORES}"
-export OK_RUN_DECODE=false
 export OK_VERBOSE=false
 export OK_SEM_INNER_ITER="$PP_SEM_INNER"
 export OK_SEM_WARMSTART_FIXED="$PP_SEM_WARMSTART_FIXED"
@@ -536,6 +522,8 @@ export OK_SEM_OPTIM_METHOD="$PP_SEM_OPTIM_METHOD"
 export OK_SEM_SELECTION_TEMPERATURE="$PP_SEM_SELECTION_TEMPERATURE"
 export OK_SEM_CHANGE_FACTOR_MIN_MULT="$PP_SEM_CHANGE_FACTOR_MIN_MULT"
 export OK_SEM_CHANGE_FACTOR_MAX_MULT="$PP_SEM_CHANGE_FACTOR_MAX_MULT"
+export OK_SEM_MAX_RELABEL_STEP_FRAC="$PP_SEM_MAX_RELABEL_STEP_FRAC"
+export OK_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="$PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC"
 if [ "$PP_RUN_SEM_PILOT" = "1" ] || [ "$PP_RUN_SEM_PILOT" = "true" ] || [ "$PP_RUN_SEM_PILOT" = "yes" ]; then
   export OK_RUN_SEM_PILOT=true
 else
@@ -583,7 +571,6 @@ if [ -n "${PP_MODE:-}" ]; then
   mode_norm_runtime="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
   if [ "$mode_norm_runtime" = "very-quick" ] || [ "$mode_norm_runtime" = "veryquick" ] || [ "$mode_norm_runtime" = "smoke" ]; then
     echo "Applying legacy very-quick alias runtime overrides (equivalent to test profile intent)."
-    export OK_DECODE_ITER=2
     export OK_RUN_SENSITIVITY=true
     export OK_RUN_BOOTSTRAP_ATE=true
     export OK_SEM_INNER_ITER=2
@@ -602,7 +589,6 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   echo "Applying setup-test profile: main SEM inner=100, sensitivity inner=2, bootstrap inner=2, sequential bootstrap."
   export OK_SEM_INNER_ITER=100
   export OK_SEM_N_ITER=1
-  export OK_DECODE_ITER=2
   export OK_SENS_SEM_INNER_ITER=2
   export OK_BOOT_SEM_INNER_ITER=2
   export OK_SENS_CORES=1
@@ -616,10 +602,6 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   fi
   export OK_BOOT_TARGETS="E,F"
   export OK_RUN_BOOTSTRAP_ATE=true
-fi
-
-if [ "$PP_RUN_DECODE" = "1" ]; then
-  export OK_RUN_DECODE=true
 fi
 
 "$RSCRIPT_BIN" "$PKG_ROOT/inst/oklahoma/oklahoma_analysis.R" 2>&1

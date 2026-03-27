@@ -130,6 +130,16 @@ SEM_SELECTION_TEMPERATURE <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_SELE
 if (!is.finite(SEM_SELECTION_TEMPERATURE) || is.na(SEM_SELECTION_TEMPERATURE) || SEM_SELECTION_TEMPERATURE <= 0) {
   SEM_SELECTION_TEMPERATURE <- 0.08
 }
+SEM_MAX_RELABEL_STEP_FRAC <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_MAX_RELABEL_STEP_FRAC", "0.05")))
+if (!is.finite(SEM_MAX_RELABEL_STEP_FRAC) || is.na(SEM_MAX_RELABEL_STEP_FRAC) || SEM_MAX_RELABEL_STEP_FRAC <= 0) {
+  SEM_MAX_RELABEL_STEP_FRAC <- 0.05
+}
+SEM_MAX_RELABEL_STEP_FRAC <- min(SEM_MAX_RELABEL_STEP_FRAC, 1.0)
+SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC", "0.05")))
+if (!is.finite(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || is.na(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <= 0) {
+  SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- 0.05
+}
+SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- min(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC, 1.0)
 RUN_SEM_PILOT <- tolower(trimws(Sys.getenv("OK_RUN_SEM_PILOT", "false"))) %in% c("1", "true", "yes", "y")
 SEM_PILOT_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_INNER_ITER", "100")))
 if (!is.finite(SEM_PILOT_INNER_ITER) || is.na(SEM_PILOT_INNER_ITER) || SEM_PILOT_INNER_ITER < 1L) {
@@ -171,14 +181,6 @@ if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
   SEM_OUTER_MAXIT_BIV <- env_sem_outer_maxit_biv
 }
 SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "false")) %in% c("1", "true", "yes", "y")
-# Keep Decode iterations separate from SEM inner iterations.
-DECODE_ITER <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 200
-env_decode_iter <- suppressWarnings(as.integer(Sys.getenv("OK_DECODE_ITER", "")))
-if (!is.na(env_decode_iter) && env_decode_iter > 0L) {
-  DECODE_ITER <- env_decode_iter
-}
-# Leave Decode capability intact, but default off for long runs unless explicitly enabled.
-RUN_DECODE <- tolower(Sys.getenv("OK_RUN_DECODE", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
@@ -470,6 +472,8 @@ cat(sprintf("SEM selection: method=%s | temperature=%.3f\n",
             SEM_OPTIM_METHOD, SEM_SELECTION_TEMPERATURE))
 cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
             SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
+cat(sprintf("SEM relabel controls: max_step_frac=%.3f | force_param_update_flip_frac=%.3f\n",
+            SEM_MAX_RELABEL_STEP_FRAC, SEM_FORCE_PARAM_UPDATE_FLIP_FRAC))
 if (RUN_SEM_PILOT) {
   sem_pilot_cores_planned <- if (!is.na(SEM_PILOT_CORES)) SEM_PILOT_CORES else N_CORES
   cat(sprintf("SEM pilot: enabled | inner_iter=%d | cores=%d | max_combos=%d\n",
@@ -1075,6 +1079,9 @@ run_sem_fit <- function(pp_data_in,
                         partition_processes_in,
                         state_spaces_in,
                         init_params_in,
+                        init_ctrl_params_in = A_ctrl,
+                        init_treat_params_in = A_treat,
+                        model_type_in = "etas_bivariate",
                         fixed_params_in = biv_fixed,
                         background_rate_var_in = NULL,
                         use_pre_history_for_biv_in = TRUE,
@@ -1116,9 +1123,9 @@ run_sem_fit <- function(pp_data_in,
       pp_data = pp_data_sem, partition = partition_in,
       partition_processes = partition_processes_in,
       statespace = win_km, time_window = windowT_post, treatment_time = 0,
-      hawkes_params_control = A_ctrl, hawkes_params_treated = A_treat,
+      hawkes_params_control = init_ctrl_params_in, hawkes_params_treated = init_treat_params_in,
       N_labellings = SEM_N_LABELLINGS, N_iter = SEM_N_ITER, verbose = sem_verbose_effective,
-      model_type = "etas_bivariate",
+      model_type = model_type_in,
       adaptive_control = list(
         param_update_cadence = SEM_PARAM_UPDATE,
         proposal_update_cadence = 1,
@@ -1135,12 +1142,14 @@ run_sem_fit <- function(pp_data_in,
         temporal_scale_days = SEM_TEMPORAL_SCALE_DAYS,
         update_starting_data = TRUE, include_starting_data = TRUE,
         include_starting_first_n = sem_inner_iter_in,
+        max_relabel_step_frac = SEM_MAX_RELABEL_STEP_FRAC,
+        force_param_update_flip_frac = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
         proposal_method = "simulation",
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
       ),
       m0 = ETAS_M0, beta_gr = BETA_GR,
-      etas_bivariate_params = init_params_sem,
+      etas_bivariate_params = if (identical(model_type_in, "etas_bivariate")) init_params_sem else NULL,
       background_rate_var = background_rate_var_in,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
       treated_background_zero_before = treated_background_zero_before_in,
@@ -1151,7 +1160,7 @@ run_sem_fit <- function(pp_data_in,
     tryCatch({
       pp_data_sem <- pp_data_in
       init_params_sem <- init_params_in
-      if (SEM_WARMSTART_FIXED) {
+      if (SEM_WARMSTART_FIXED && identical(model_type_in, "etas_bivariate")) {
         fixed_all <- as.list(init_params_in)
         cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters (mem=%s)...\n",
                     label, mem_snapshot()))
@@ -1739,320 +1748,180 @@ for (vid in kde_variant_ids) {
                 paste(biv_names, round(F_var_params, 4), sep = "=", collapse = ", ")))
   }
 }
-
-# ============================================================================
-# 4H. Decode: hard-EM / coordinate-ascent relabelling (county only)
-# ============================================================================
-cat("\n--- Fit I/J: Decode hard-EM relabelling (county only) ---\n")
-if (!RUN_DECODE) {
-  cat("  Decode disabled (set OK_RUN_DECODE=true to enable).\n")
+G_params <- if (!is.null(kde_variant_fits$E$productivity_free) &&
+                !is.null(kde_variant_fits$E$productivity_free$params)) {
+  kde_variant_fits$E$productivity_free$params
+} else {
+  NULL
+}
+H_params <- if (!is.null(kde_variant_fits$F$productivity_free) &&
+                !is.null(kde_variant_fits$F$productivity_free$params)) {
+  kde_variant_fits$F$productivity_free$params
+} else {
+  NULL
 }
 
-decode_hard_em_bivariate <- function(start_labelling,
-                                     init_params,
-                                     label = "Decode",
-                                     background_rate_var = NULL,
-                                     treated_background_zero_before = 0,
-                                     decode_iter = SEM_INNER_ITER,
-                                     refit_cadence = 10L,
-                                     max_target_cells = 12L,
-                                     max_flips_per_cell = 8L,
-                                     icm_passes = 3L,
-                                     icm_cadence = 25L,
-                                     target_update_cadence = 5L,
-                                     implied_sims = 2L) {
-  if (is.null(start_labelling) || nrow(start_labelling) == 0 || is.null(init_params)) {
-    cat(sprintf("  [%s] skipped (missing start labels/params)\n", label))
-    return(NULL)
-  }
-  dat <- start_labelling[order(start_labelling$t), , drop = FALSE]
-  if (is.null(dat$inferred_process)) dat$inferred_process <- dat$location_process
-  pre <- dat[dat$t < 0, , drop = FALSE]
-  post <- dat[dat$t >= 0, , drop = FALSE]
-  if (nrow(post) == 0) {
-    cat(sprintf("  [%s] skipped (no post-treatment points)\n", label))
-    return(NULL)
-  }
-  pre$location_process <- "control"
-  pre$inferred_process <- "control"
-  history_window_start <- if (nrow(pre) > 0) min(pre$t, na.rm = TRUE) else windowT_post[1]
-  history_window <- c(history_window_start, windowT_post[2])
-  n_pre <- nrow(pre)
-  n_post <- nrow(post)
+# ============================================================================
+# 4I/4J. Univariate ETAS comparison (no cross-excitation)
+# ============================================================================
+cat("\n--- Step 4I/4J: Univariate ETAS (I/J) dispatch ---\n")
 
-  fix_names <- names(FIXED_STRUCTURAL)
-  free_idx <- which(!names(init_params) %in% fix_names)
-  fixed_idx <- which(names(init_params) %in% fix_names)
-
-  rr_full_template <- rbind(pre, post)
-  rr_full_template$..post_idx <- c(rep(NA_integer_, n_pre), seq_len(n_post))
-  rr_full_template <- rr_full_template[order(rr_full_template$t), , drop = FALSE]
-  post_rows <- which(!is.na(rr_full_template$..post_idx))
-  post_label_idx <- as.integer(rr_full_template$..post_idx[post_rows])
-
-  eval_obj <- function(labels, params) {
-    rr_full <- rr_full_template
-    rr_full$inferred_process[post_rows] <- labels[post_label_idx]
-    rr_full$..post_idx <- NULL
-    loglik_etas_bivariate(
-      params = params, realiz = rr_full,
-      windowT = history_window, windowS = win_km,
-      control_state_space = control_ss, treated_state_space = treated_ss,
-      background_rate_var = background_rate_var,
-      treated_background_zero_before = treated_background_zero_before
-    )
-  }
-
-  obj_post <- function(labels, params) {
-    eval_obj(labels, params)
-  }
-
-  refit_params <- function(labels, params_start) {
-    obj <- function(p15) {
-      eval_obj(labels, p15)
+fit_indep_pair <- function(pp_data_in,
+                           background_rate_var_in = NULL,
+                           fixed_params_in = NULL,
+                           ctrl_init_in = A_ctrl,
+                           treat_init_in = A_treat,
+                           fit_label = "Fit I") {
+  dat <- as.data.frame(pp_data_in)
+  dat <- dat[dat$t >= 0, , drop = FALSE]
+  if (nrow(dat) < 1L) return(NULL)
+  ctrl_dat <- dat[dat$location_process == "control", , drop = FALSE]
+  treat_dat <- dat[dat$location_process == "treated", , drop = FALSE]
+  if (nrow(ctrl_dat) < 1L || nrow(treat_dat) < 1L) return(NULL)
+  ctrl_init <- apply_pre_init_etas(ctrl_init_in)
+  treat_init <- apply_pre_init_etas(treat_init_in)
+  fit_ctrl <- tryCatch(
+    fit_etas(
+      params_init = ctrl_init, realiz = ctrl_dat,
+      windowT = windowT_post, windowS = win_km, m0 = ETAS_M0,
+      maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
+      zero_background_region = treated_ss,
+      background_rate_var = background_rate_var_in,
+      t_trunc = SEM_T_TRUNC_DAYS
+    ),
+    error = function(e) {
+      cat(sprintf("  [%s] control independent fit error: %s\n", fit_label, e$message))
+      NULL
     }
-    p_cur <- params_start
-    if (length(fixed_idx) > 0) p_cur[fixed_idx] <- params_start[fixed_idx]
-    if (length(free_idx) == 0) return(p_cur)
-    wrap <- function(pf) {
-      p <- p_cur
-      p[free_idx] <- pf
-      obj(p)
+  )
+  fit_treat <- tryCatch(
+    fit_etas(
+      params_init = treat_init, realiz = treat_dat,
+      windowT = windowT_post, windowS = win_km, m0 = ETAS_M0,
+      maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
+      zero_background_region = control_ss,
+      background_rate_var = background_rate_var_in,
+      t_trunc = SEM_T_TRUNC_DAYS
+    ),
+    error = function(e) {
+      cat(sprintf("  [%s] treated independent fit error: %s\n", fit_label, e$message))
+      NULL
     }
-    fit <- tryCatch(
-      optim(par = p_cur[free_idx], fn = wrap, method = "Nelder-Mead",
-            control = list(fnscale = -1, trace = 0, maxit = 250)),
-      error = function(e) NULL
-    )
-    if (is.null(fit)) return(p_cur)
-    p_out <- p_cur
-    p_out[free_idx] <- fit$par
-    p_out
-  }
-
-  implied_treated_counts <- function(params, n_sims = implied_sims) {
-    nb <- partition$n
-    agg <- numeric(nb)
-    for (s in seq_len(max(1L, n_sims))) {
-      sim <- tryCatch(
-        generate_inhomogeneous_etas_bivariate(
-          Omega = win_km, partition = partition, time_window = windowT_post,
-          partition_processes = partition_processes,
-          etas_bivariate_params = params, m0 = ETAS_M0, beta_gr = BETA_GR,
-          state_spaces = state_spaces, filtration = pre
-        ),
-        error = function(e) NULL
-      )
-      if (is.null(sim) || nrow(sim) == 0) next
-      sim <- sim[sim$t >= 0, , drop = FALSE]
-      if (nrow(sim) == 0) next
-      ti <- as.integer(tileindex(sim$x, sim$y, partition))
-      treated_rows <- if ("process" %in% names(sim)) sim$process == "treated" else sim$process_id == 1
-      agg <- agg + tabulate(ti[treated_rows], nbins = nb)
-    }
-    agg / max(1L, n_sims)
-  }
-
-  labels_cur <- as.character(post$inferred_process)
-  params_cur <- refit_params(labels_cur, init_params)
-  obj_cur <- obj_post(labels_cur, params_cur)
-  if (!is.finite(obj_cur)) obj_cur <- obj_post(labels_cur, init_params)
-  if (!is.finite(obj_cur)) {
-    cat(sprintf("  [%s] skipped (non-finite objective)\n", label))
-    return(NULL)
-  }
-
-  tile_idx <- as.integer(tileindex(post$x, post$y, partition))
-  obs_treat <- tabulate(tile_idx[post$location_process == "treated"], nbins = partition$n)
-  n_flips <- 0L
-  trace_avg_flips <- numeric(0)
-  trace_max_flips <- numeric(0)
-  trace_objective <- numeric(0)
-  trace_phase <- character(0)
-  add_trace <- function(avg_flips, max_flips, objective, phase) {
-    trace_avg_flips <<- c(trace_avg_flips, avg_flips)
-    trace_max_flips <<- c(trace_max_flips, max_flips)
-    trace_objective <<- c(trace_objective, objective)
-    trace_phase <<- c(trace_phase, phase)
-  }
-  eval_one_flip <- function(j, labels, params, obj0) {
-    prop <- labels
-    prop[j] <- if (prop[j] == "control") "treated" else "control"
-    obj1 <- obj_post(prop, params)
-    c(delta = obj1 - obj0, obj = obj1)
-  }
-
-  target_tiles <- integer(0)
-  refit_cad <- max(1L, as.integer(refit_cadence))
-  for (iter_idx in seq_len(max(1L, decode_iter))) {
-    if (iter_idx == 1L || (iter_idx %% refit_cad) == 0L) {
-      params_new <- refit_params(labels_cur, params_cur)
-      obj_new <- obj_post(labels_cur, params_new)
-      if (is.finite(obj_new) && obj_new >= obj_cur) {
-        params_cur <- params_new
-        obj_cur <- obj_new
-      }
-    }
-
-    if (iter_idx == 1L || (iter_idx %% max(1L, as.integer(target_update_cadence))) == 0L) {
-      imp_treat <- implied_treated_counts(params_cur)
-      discrepancy <- abs(obs_treat - imp_treat)
-      target_tiles <- which(discrepancy > 0)
-      if (length(target_tiles) > 0) {
-        ord <- order(discrepancy[target_tiles], decreasing = TRUE)
-        target_tiles <- target_tiles[ord][seq_len(min(length(target_tiles), max_target_cells))]
-      }
-    }
-
-    flips_iter <- 0L
-
-    for (tile in target_tiles) {
-      idx <- which(tile_idx == tile)
-      if (length(idx) == 0) next
-      for (k in seq_len(max_flips_per_cell)) {
-        improved <- FALSE
-        idx_scan <- sample(idx, length(idx), replace = FALSE)
-        for (j in idx_scan) {
-          res <- eval_one_flip(j, labels_cur, params_cur, obj_cur)
-          if (is.finite(res["delta"]) && res["delta"] > 0) {
-            labels_cur[j] <- if (labels_cur[j] == "control") "treated" else "control"
-            obj_cur <- res["obj"]
-            flips_iter <- flips_iter + 1L
-            n_flips <- n_flips + 1L
-            improved <- TRUE
-            break
-          }
-        }
-        if (!improved) break
-      }
-    }
-
-    do_icm <- (iter_idx %% max(1L, as.integer(icm_cadence))) == 0L || iter_idx == max(1L, decode_iter)
-    if (do_icm) {
-      for (pass in seq_len(max(1L, icm_passes))) {
-        improved <- FALSE
-        for (j in seq_len(length(labels_cur))) {
-          res <- eval_one_flip(j, labels_cur, params_cur, obj_cur)
-          if (is.finite(res["delta"]) && res["delta"] > 0) {
-            labels_cur[j] <- if (labels_cur[j] == "control") "treated" else "control"
-            obj_cur <- res["obj"]
-            improved <- TRUE
-            flips_iter <- flips_iter + 1L
-            n_flips <- n_flips + 1L
-          }
-        }
-        if (!improved) break
-      }
-    }
-
-    add_trace(flips_iter, flips_iter, obj_cur, sprintf("decode_iter_%d", iter_idx))
-    if (iter_idx == 1L || iter_idx %% 10L == 0L || iter_idx == max(1L, decode_iter)) {
-      cat(sprintf("  [%s] iter %d/%d | flips_this_iter=%d | objective=%.3f\n",
-                  label, iter_idx, max(1L, decode_iter), flips_iter, obj_cur))
-    }
-  }
-
-  post_dec <- post
-  post_dec$inferred_process <- labels_cur
-  final_lab <- rbind(pre, post_dec)
-  final_lab <- final_lab[order(final_lab$t), , drop = FALSE]
-
-  cat(sprintf("  [%s] complete: %d flips over %d iterations, objective=%.3f\n",
-              label, n_flips, max(1L, decode_iter), obj_cur))
+  )
+  ctrl_par <- if (!is.null(fit_ctrl) && !is.null(fit_ctrl$par)) as.list(fit_ctrl$par) else ctrl_init
+  treat_par <- if (!is.null(fit_treat) && !is.null(fit_treat$par)) as.list(fit_treat$par) else treat_init
+  names(ctrl_par) <- etas_names
+  names(treat_par) <- etas_names
   list(
-    labelling = final_lab, params = params_cur, n_flips = n_flips, objective = obj_cur,
-    trace = list(
-      average_flips = trace_avg_flips,
-      max_metric_flips = trace_max_flips,
-      objective = trace_objective,
-      phase = trace_phase
-    )
+    control = ctrl_par,
+    treated = treat_par,
+    fit_control = fit_ctrl,
+    fit_treated = fit_treat,
+    objective = sum(c(
+      if (!is.null(fit_ctrl)) as.numeric(fit_ctrl$value) else NA_real_,
+      if (!is.null(fit_treat)) as.numeric(fit_treat$value) else NA_real_
+    ), na.rm = TRUE)
   )
 }
 
-decode_D <- NULL
-decode_F <- NULL
-G_params <- NULL
-H_params <- NULL
-pp_post_decode_G <- NULL
-pp_post_decode_H <- NULL
-cat("\n--- Step 4I/4J: Decode (I/J) dispatch ---\n")
-if (RUN_DECODE) {
-  decode_jobs <- c("I", "J")
-  run_one_decode_job <- function(tag) {
-    t0 <- proc.time()[["elapsed"]]
-    out_obj <- NULL
-    cat(sprintf("    [decode-job:%s] start pid=%d mem=%s\n", tag, Sys.getpid(), mem_snapshot()))
-    if (tag == "I") {
-      out_obj <- decode_hard_em_bivariate(
-        start_labelling = pp_all,
-        init_params = B_params,
-        label = "Decode-SEM Biv",
-        background_rate_var = NULL,
-        decode_iter = DECODE_ITER,
-        icm_passes = 1L,
-        icm_cadence = 25L,
-        target_update_cadence = 5L,
-        implied_sims = 1L
-      )
-    } else if (tag == "J") {
-      out_obj <- decode_hard_em_bivariate(
-        start_labelling = pp_all_bg,
-        init_params = E_params,
-        label = "Decode-SEM Biv+KDE",
-        background_rate_var = "W",
-        decode_iter = DECODE_ITER,
-        icm_passes = 1L,
-        icm_cadence = 25L,
-        target_update_cadence = 5L,
-        implied_sims = 1L
-      )
+fit_i <- function() {
+  tryCatch(
+    fit_indep_pair(
+      pp_data_in = pp_all_bg,
+      background_rate_var_in = "W",
+      fixed_params_in = NULL,
+      ctrl_init_in = A_ctrl,
+      treat_init_in = A_treat,
+      fit_label = "Fit I"
+    ),
+    error = function(e) {
+      cat("  Fit I (naive univariate) error:", e$message, "\n")
+      NULL
     }
-    elapsed <- proc.time()[["elapsed"]] - t0
-    cat(sprintf("    [decode-job:%s] done in %.1fs status=%s mem=%s\n",
-                tag, elapsed, ifelse(is.null(out_obj), "failed", "ok"), mem_snapshot()))
-    list(tag = tag, obj = out_obj, elapsed = elapsed)
-  }
-  if (N_CORES > 1L && length(decode_jobs) > 1L) {
-    decode_out <- run_parallel(
-      decode_jobs, run_one_decode_job,
-      cores = min(length(decode_jobs), N_CORES),
-      label = "decode-jobs"
-    )
-  } else {
-    decode_out <- lapply(decode_jobs, run_one_decode_job)
-  }
-  decode_out <- as.list(decode_out)
-  get_decode_job <- function(tag) {
-    idx <- which(vapply(decode_out, function(z) identical(z$tag, tag), logical(1)))
-    if (length(idx) < 1L) return(NULL)
-    decode_out[[idx[1]]]
-  }
-  row_i <- get_decode_job("I")
-  row_j <- get_decode_job("J")
-  decode_D <- if (!is.null(row_i)) row_i$obj else NULL
-  decode_F <- if (!is.null(row_j)) row_j$obj else NULL
-  decode_D_time <- if (!is.null(row_i)) row_i$elapsed else NA_real_
-  decode_F_time <- if (!is.null(row_j)) row_j$elapsed else NA_real_
-  if (is.finite(decode_D_time)) cat("  Decode-biv completed in", round(decode_D_time, 1), "s\n")
-  if (is.finite(decode_F_time)) cat("  Decode-biv+KDE completed in", round(decode_F_time, 1), "s\n")
-  G_params <- if (!is.null(decode_D)) decode_D$params else NULL
-  H_params <- if (!is.null(decode_F)) decode_F$params else NULL
-  pp_post_decode_G <- if (!is.null(decode_D)) decode_D$labelling[decode_D$labelling$t >= 0, ] else NULL
-  pp_post_decode_H <- if (!is.null(decode_F)) decode_F$labelling[decode_F$labelling$t >= 0, ] else NULL
-  add_timing_row(
-    stage = "fit_G_decode_bivariate",
-    elapsed_sec = decode_D_time,
-    status = if (!is.null(decode_D)) "ok" else "failed",
-    detail = "elapsed from decode dispatch"
-  )
-  add_timing_row(
-    stage = "fit_H_decode_bivariate_kde",
-    elapsed_sec = decode_F_time,
-    status = if (!is.null(decode_F)) "ok" else "failed",
-    detail = "elapsed from decode dispatch"
   )
 }
+
+fit_j <- function() {
+  tryCatch(
+    run_sem_fit(
+      pp_data_in = pp_all_bg,
+      partition_in = partition,
+      partition_processes_in = partition_processes,
+      state_spaces_in = state_spaces,
+      init_params_in = NULL,
+      init_ctrl_params_in = A_ctrl,
+      init_treat_params_in = A_treat,
+      model_type_in = "etas",
+      fixed_params_in = NULL,
+      background_rate_var_in = "W",
+      sem_inner_iter_in = SEM_INNER_ITER,
+      verbose_in = DF_VERBOSE,
+      label = "Fit J"
+    ),
+    error = function(e) {
+      cat("  Fit J (SEM univariate) error:", e$message, "\n")
+      NULL
+    }
+  )
+}
+
+univ_jobs <- c("I", "J")
+run_one_univ_job <- function(tag) {
+  t0 <- proc.time()[["elapsed"]]
+  out_obj <- NULL
+  cat(sprintf("    [univ-job:%s] start pid=%d mem=%s\n", tag, Sys.getpid(), mem_snapshot()))
+  if (tag == "I") out_obj <- fit_i()
+  if (tag == "J") out_obj <- fit_j()
+  elapsed <- proc.time()[["elapsed"]] - t0
+  cat(sprintf("    [univ-job:%s] done in %.1fs status=%s mem=%s\n",
+              tag, elapsed, ifelse(is.null(out_obj), "failed", "ok"), mem_snapshot()))
+  list(tag = tag, obj = out_obj, elapsed = elapsed)
+}
+if (N_CORES > 1L && length(univ_jobs) > 1L) {
+  univ_out <- run_parallel(
+    univ_jobs, run_one_univ_job,
+    cores = min(length(univ_jobs), N_CORES),
+    label = "univariate-jobs"
+  )
+} else {
+  univ_out <- lapply(univ_jobs, run_one_univ_job)
+}
+univ_out <- as.list(univ_out)
+get_univ_job <- function(tag) {
+  idx <- which(vapply(univ_out, function(z) identical(z$tag, tag), logical(1)))
+  if (length(idx) < 1L) return(NULL)
+  univ_out[[idx[1]]]
+}
+row_i <- get_univ_job("I")
+row_j <- get_univ_job("J")
+fitI <- if (!is.null(row_i)) row_i$obj else NULL
+semJ <- if (!is.null(row_j)) row_j$obj else NULL
+fit_I_elapsed <- if (!is.null(row_i)) row_i$elapsed else NA_real_
+fit_J_elapsed <- if (!is.null(row_j)) row_j$elapsed else NA_real_
+add_timing_row(
+  stage = "fit_I_naive_univariate_kde",
+  elapsed_sec = fit_I_elapsed,
+  status = if (!is.null(fitI)) "ok" else "failed",
+  detail = "elapsed from univariate dispatch"
+)
+add_timing_row(
+  stage = "fit_J_sem_univariate_kde",
+  elapsed_sec = fit_J_elapsed,
+  status = if (!is.null(semJ)) "ok" else "failed",
+  detail = "elapsed from univariate dispatch"
+)
+I_ctrl <- if (!is.null(fitI)) fitI$control else A_ctrl
+I_treat <- if (!is.null(fitI)) fitI$treated else A_treat
+J_ctrl <- if (!is.null(semJ)) semJ$hawkes_params_control else A_ctrl
+J_treat <- if (!is.null(semJ)) semJ$hawkes_params_treated else A_treat
+I_params <- list(control = I_ctrl, treated = I_treat)
+J_params <- list(control = J_ctrl, treated = J_treat)
+pp_post_sem_J <- if (!is.null(semJ) && !is.null(semJ$adaptive$adaptive_labelling)) {
+  semJ$adaptive$adaptive_labelling
+} else {
+  pp_post_bg
+}
+pp_post_sem_J <- pp_post_sem_J[pp_post_sem_J$t >= 0, , drop = FALSE]
 
 # ============================================================================
 # 4I. KDE bandwidth sensitivity (county partition, inhomogeneous E/F)
@@ -2501,7 +2370,7 @@ for (nm in list(list(res = semD, label = "biv",   title = "SEM Bivariate"),
 # 6. ATE estimation (post-treatment horizon)
 # ============================================================================
 cat(sprintf("\n--- Step 6: ATE estimation (%d-day simulation horizon) ---\n", ATE_WINDOW_DAYS))
-cat("  Stage meaning: computing MAIN-FIT ATE payloads (A-H) now; sensitivity ATEs start at Step 7a.\n")
+cat("  Stage meaning: computing MAIN-FIT ATE payloads (A-J) now; sensitivity ATEs start at Step 7a.\n")
 
 pp_post_sem_D <- if (!is.null(semD)) semD$adaptive$adaptive_labelling else NULL
 pp_post_sem_D <- if (!is.null(pp_post_sem_D)) pp_post_sem_D[pp_post_sem_D$t >= 0, ] else pp_post
@@ -2533,12 +2402,19 @@ extract_marginals <- function(biv_par) {
   list(ctrl = ctrl, treat = treat)
 }
 
+extract_marginals_indep <- function(indep_par) {
+  if (is.null(indep_par) || is.null(indep_par$control) || is.null(indep_par$treated)) return(NULL)
+  list(ctrl = indep_par$control, treat = indep_par$treated)
+}
+
 B_marginals <- extract_marginals(B_params)
 D_marginals <- extract_marginals(D_params)
 E_marginals <- extract_marginals(E_params)
 F_marginals <- extract_marginals(F_params)
 G_marginals <- extract_marginals(G_params)
 H_marginals <- extract_marginals(H_params)
+I_marginals <- extract_marginals_indep(I_params)
+J_marginals <- extract_marginals_indep(J_params)
 
 ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                            n_tiles_used = partition$n,
@@ -2901,27 +2777,23 @@ for (vid in names(kde_variant_specs)) {
     )
   }
 }
-ate_G <- if (RUN_DECODE && !is.null(G_marginals) && !is.null(pp_post_decode_G)) {
-  t_ate_G <- proc.time()[["elapsed"]]
-  ate_estim_fast(G_marginals$ctrl, G_marginals$treat, pp_post_decode_G,
-                 "Fit I (Decode biv)")
+ate_I <- if (!is.null(I_marginals)) {
+  t_ate_I <- proc.time()[["elapsed"]]
+  ate_estim_fast(I_marginals$ctrl, I_marginals$treat, pp_post_bg,
+                 "Fit I (Naive univariate ETAS)")
 } else NULL
-if (exists("t_ate_G", inherits = FALSE)) {
-  ate_G_elapsed <- proc.time()[["elapsed"]] - t_ate_G
-  add_timing_row("ate_G", ate_G_elapsed, if (!is.null(ate_G)) "ok" else "failed")
-} else {
-  add_timing_row("ate_G", NA_real_, "skipped", "decode disabled or unavailable")
+if (exists("t_ate_I", inherits = FALSE)) {
+  ate_I_elapsed <- proc.time()[["elapsed"]] - t_ate_I
+  add_timing_row("ate_I", ate_I_elapsed, if (!is.null(ate_I)) "ok" else "failed")
 }
-ate_H <- if (RUN_DECODE && !is.null(H_marginals) && !is.null(pp_post_decode_H)) {
-  t_ate_H <- proc.time()[["elapsed"]]
-  ate_estim_fast(H_marginals$ctrl, H_marginals$treat, pp_post_decode_H,
-                 "Fit J (Decode biv+KDE)")
+ate_J <- if (!is.null(J_marginals)) {
+  t_ate_J <- proc.time()[["elapsed"]]
+  ate_estim_fast(J_marginals$ctrl, J_marginals$treat, pp_post_sem_J,
+                 "Fit J (SEM univariate ETAS)")
 } else NULL
-if (exists("t_ate_H", inherits = FALSE)) {
-  ate_H_elapsed <- proc.time()[["elapsed"]] - t_ate_H
-  add_timing_row("ate_H", ate_H_elapsed, if (!is.null(ate_H)) "ok" else "failed")
-} else {
-  add_timing_row("ate_H", NA_real_, "skipped", "decode disabled or unavailable")
+if (exists("t_ate_J", inherits = FALSE)) {
+  ate_J_elapsed <- proc.time()[["elapsed"]] - t_ate_J
+  add_timing_row("ate_J", ate_J_elapsed, if (!is.null(ate_J)) "ok" else "failed")
 }
 
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
@@ -2956,26 +2828,28 @@ fits_named_pre_sensitivity <- list(
   H = c(list(letter = "H", label = "SEM biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
-  I = if (RUN_DECODE) list(
-    letter = "I", label = "Decode bivariate (county)",
-    method = "decode_county", algorithm = "decode",
-    params = G_params, decode = decode_D, ate = ate_G
-  ) else NULL,
-  J = if (RUN_DECODE) list(
-    letter = "J", label = "Decode bivariate + KDE (county)",
-    method = "decode_county_kde", algorithm = "decode",
-    params = H_params, decode = decode_F, ate = ate_H
-  ) else NULL
+  I = list(
+    letter = "I", label = "Naive univariate ETAS + KDE (county)",
+    method = "county_univariate_kde", algorithm = "naive",
+    params = I_params, fit = fitI, ate = ate_I
+  ),
+  J = list(
+    letter = "J", label = "SEM univariate ETAS + KDE (county)",
+    method = "county_univariate_kde", algorithm = "sem",
+    params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
+  )
 )
 results_pre_sensitivity <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
+  fitI = list(params = I_params, fit = fitI, ate = ate_I),
+  fitJ = list(params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J),
   fits_named = fits_named_pre_sensitivity,
   kde_variants = kde_variant_fits,
-  fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
-  fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
+  fitG = NULL,
+  fitH = NULL,
   bootstrap_ate = NULL,
   partition_results = NULL,
   ate_partitions = NULL,
@@ -3034,7 +2908,6 @@ results_pre_sensitivity <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
-    RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -3046,7 +2919,8 @@ results_pre_sensitivity <- list(
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
-    DECODE_ITER = DECODE_ITER,
+    SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
@@ -3199,16 +3073,16 @@ fits_named <- list(
   H = c(list(letter = "H", label = "SEM biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
-  I = if (RUN_DECODE) list(
-    letter = "I", label = "Decode bivariate (county)",
-    method = "decode_county", algorithm = "decode",
-    params = G_params, decode = decode_D, ate = ate_G
-  ) else NULL,
-  J = if (RUN_DECODE) list(
-    letter = "J", label = "Decode bivariate + KDE (county)",
-    method = "decode_county_kde", algorithm = "decode",
-    params = H_params, decode = decode_F, ate = ate_H
-  ) else NULL
+  I = list(
+    letter = "I", label = "Naive univariate ETAS + KDE (county)",
+    method = "county_univariate_kde", algorithm = "naive",
+    params = I_params, fit = fitI, ate = ate_I
+  ),
+  J = list(
+    letter = "J", label = "SEM univariate ETAS + KDE (county)",
+    method = "county_univariate_kde", algorithm = "sem",
+    params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
+  )
 )
 
 results_pre_bootstrap <- list(
@@ -3216,10 +3090,12 @@ results_pre_bootstrap <- list(
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
+  fitI = list(params = I_params, fit = fitI, ate = ate_I),
+  fitJ = list(params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J),
   fits_named = fits_named,
   kde_variants = kde_variant_fits,
-  fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
-  fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
+  fitG = NULL,
+  fitH = NULL,
   bootstrap_ate = NULL,
   partition_results = partition_results,
   ate_partitions = ate_partitions,
@@ -3281,7 +3157,6 @@ results_pre_bootstrap <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
-    RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -3293,7 +3168,8 @@ results_pre_bootstrap <- list(
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
-    DECODE_ITER = DECODE_ITER,
+    SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
@@ -3821,10 +3697,12 @@ results <- list(
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D, louis = louis_D),
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F, louis = louis_F),
+  fitI = list(params = I_params, fit = fitI, ate = ate_I),
+  fitJ = list(params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J),
   fits_named = fits_named,
   kde_variants = kde_variant_fits,
-  fitG = if (RUN_DECODE) list(params = G_params, decode = decode_D, ate = ate_G) else NULL,
-  fitH = if (RUN_DECODE) list(params = H_params, decode = decode_F, ate = ate_H) else NULL,
+  fitG = NULL,
+  fitH = NULL,
   bootstrap_ate = bootstrap_ate,
   partition_results = partition_results,
   ate_partitions = ate_partitions,
@@ -3881,7 +3759,6 @@ results <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
-    RUN_DECODE = RUN_DECODE,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -3893,7 +3770,8 @@ results <- list(
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
-    DECODE_ITER = DECODE_ITER,
+    SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
