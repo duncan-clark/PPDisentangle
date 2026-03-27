@@ -15,7 +15,9 @@ get_arg_val <- function(flag, default = NULL) {
 
 parse_multiplier_vec <- function(raw, default = c(0.1, 0.5, 1, 2)) {
   if (is.null(raw) || !nzchar(raw)) return(default)
-  vals <- suppressWarnings(as.numeric(strsplit(raw, ",", fixed = TRUE)[[1]]))
+  toks <- unlist(strsplit(raw, "[,;[:space:]]+", perl = TRUE), use.names = FALSE)
+  toks <- toks[nzchar(toks)]
+  vals <- suppressWarnings(as.numeric(toks))
   vals <- vals[is.finite(vals) & vals > 0]
   if (length(vals) < 1L) return(default)
   unique(vals)
@@ -44,9 +46,13 @@ on.exit(setwd(old_wd), add = TRUE)
 pp_sims <- suppressWarnings(as.integer(get_arg_val("--sims", Sys.getenv("PP_SIMS", "32"))))
 if (!is.finite(pp_sims) || is.na(pp_sims) || pp_sims < 1L) pp_sims <- 32L
 test_mode <- "--test" %in% args
-multipliers <- parse_multiplier_vec(
-  raw = get_arg_val("--multipliers", Sys.getenv("PP_POST_TIME_MULTIPLIERS", "0.1,0.5,1,2"))
-)
+raw_multipliers <- get_arg_val("--multipliers", Sys.getenv("PP_POST_TIME_MULTIPLIERS", "0.1,0.5,1,2"))
+multipliers <- parse_multiplier_vec(raw = raw_multipliers)
+message(sprintf(
+  "[time-sweep] requested multipliers raw='%s' | parsed=%s",
+  ifelse(is.null(raw_multipliers), "<null>", raw_multipliers),
+  paste(signif(multipliers, 5), collapse = ",")
+))
 run_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 output_basename <- paste0("time_sweep_", run_stamp)
 if (nzchar(Sys.getenv("SLURM_JOB_ID", ""))) {
@@ -125,6 +131,11 @@ for (mult in multipliers) {
   window_len <- if (is.finite(end_time) && is.finite(treat_time)) end_time - treat_time else NA_real_
   all_df$time_multiplier <- as.numeric(mult)
   all_df$time_window <- window_len
+  all_df$all_nothing_theory_per_post_time <- if (is.finite(window_len) && window_len > 0) {
+    all_df$all_nothing_theory / window_len
+  } else {
+    NA_real_
+  }
   runs_all[[length(runs_all) + 1L]] <- all_df
   per_run_results[[tag]] <- list(
     multiplier = as.numeric(mult),
@@ -138,6 +149,7 @@ for (mult in multipliers) {
     tag = tag,
     run_basename = run_basename,
     rds_path = rds_path,
+    post_time_window = window_len,
     rows_results_df = nrow(df),
     stringsAsFactors = FALSE
   )
@@ -145,6 +157,11 @@ for (mult in multipliers) {
   if (!is.null(core) && nrow(core) > 0) {
     core$time_multiplier <- as.numeric(mult)
     core$time_window <- window_len
+    core$all_nothing_theory_per_post_time <- if (is.finite(window_len) && window_len > 0) {
+      core$all_nothing_theory / window_len
+    } else {
+      NA_real_
+    }
     runs_core[[length(runs_core) + 1L]] <- core
   }
   if (!is.null(df_tc) && nrow(df_tc) > 0 && "all_nothing_true_control" %in% names(df_tc)) {
@@ -152,10 +169,20 @@ for (mult in multipliers) {
     tc_df$method <- as.character(tc_df$labelling)
     tc_df$time_multiplier <- as.numeric(mult)
     tc_df$time_window <- window_len
+    tc_df$all_nothing_true_control_per_post_time <- if (is.finite(window_len) && window_len > 0) {
+      tc_df$all_nothing_true_control / window_len
+    } else {
+      NA_real_
+    }
     runs_tc_all[[length(runs_tc_all) + 1L]] <- tc_df
     if (!is.null(tc_core) && nrow(tc_core) > 0) {
       tc_core$time_multiplier <- as.numeric(mult)
       tc_core$time_window <- window_len
+      tc_core$all_nothing_true_control_per_post_time <- if (is.finite(window_len) && window_len > 0) {
+        tc_core$all_nothing_true_control / window_len
+      } else {
+        NA_real_
+      }
       runs_tc_core[[length(runs_tc_core) + 1L]] <- tc_core
     }
   }
@@ -174,9 +201,9 @@ sweep_df_all$time_mult_f <- factor(
 )
 method_levels_all <- unique(sweep_df_all$method)
 sweep_df_all$method <- factor(sweep_df_all$method, levels = method_levels_all)
-p_all <- ggplot(sweep_df_all, aes(x = .data$method, y = .data$all_nothing_theory, fill = .data$time_mult_f)) +
+p_all <- ggplot(sweep_df_all, aes(x = .data$method, y = .data$all_nothing_theory_per_post_time, fill = .data$time_mult_f)) +
   geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
-  labs(x = "Method", y = "All-Nothing ATE Estimate", fill = "Post-treatment window") +
+  labs(x = "Method", y = "All-Nothing ATE Estimate (per post-treatment day)", fill = "Post-treatment window") +
   theme_minimal() +
   theme(plot.title = element_blank(), plot.subtitle = element_blank())
 
@@ -192,9 +219,9 @@ if (nrow(sweep_df_core) > 0) {
     levels = paste0(signif(multipliers, 3), "x")
   )
   sweep_df_core$method <- factor(sweep_df_core$method, levels = c("oracle", "naive", "SEM"))
-  p_core <- ggplot(sweep_df_core, aes(x = .data$method, y = .data$all_nothing_theory, fill = .data$time_mult_f)) +
+  p_core <- ggplot(sweep_df_core, aes(x = .data$method, y = .data$all_nothing_theory_per_post_time, fill = .data$time_mult_f)) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
-    labs(x = "Method", y = "All-Nothing ATE Estimate", fill = "Post-treatment window") +
+    labs(x = "Method", y = "All-Nothing ATE Estimate (per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())
   ggsave(
@@ -224,10 +251,10 @@ if (nrow(sweep_df_true_control_all) > 0) {
   sweep_df_true_control_all$method <- factor(sweep_df_true_control_all$method, levels = method_levels_tc_all)
   p_all_true_control <- ggplot(
     sweep_df_true_control_all,
-    aes(x = .data$method, y = .data$all_nothing_true_control, fill = .data$time_mult_f)
+    aes(x = .data$method, y = .data$all_nothing_true_control_per_post_time, fill = .data$time_mult_f)
   ) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
-    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed)", fill = "Post-treatment window") +
+    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed, per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())
   png_all_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_all_methods_true_control.png"))
@@ -243,10 +270,10 @@ if (nrow(sweep_df_true_control_core) > 0) {
   sweep_df_true_control_core$method <- factor(sweep_df_true_control_core$method, levels = c("oracle", "naive", "SEM"))
   p_core_true_control <- ggplot(
     sweep_df_true_control_core,
-    aes(x = .data$method, y = .data$all_nothing_true_control, fill = .data$time_mult_f)
+    aes(x = .data$method, y = .data$all_nothing_true_control_per_post_time, fill = .data$time_mult_f)
   ) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
-    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed)", fill = "Post-treatment window") +
+    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed, per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())
   png_core_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods_true_control.png"))
@@ -270,6 +297,7 @@ if (nrow(sweep_df_true_control_core) > 0) {
 rds_out <- file.path(out_dir, paste0(output_basename, "_summary.rds"))
 saveRDS(list(
   output_basename = output_basename,
+  requested_multipliers_raw = raw_multipliers,
   multipliers = multipliers,
   run_manifest = if (length(run_manifest) > 0) bind_rows(run_manifest) else data.frame(),
   # Master list of the four sim_study runs (one per multiplier)

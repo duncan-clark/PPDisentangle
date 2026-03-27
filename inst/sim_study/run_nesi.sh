@@ -15,6 +15,7 @@ PP_TEST=""
 PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
 PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
+PP_POST_TIME_MULTIPLIERS_B64="${PP_POST_TIME_MULTIPLIERS_B64:-}"
 PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
 HAVE_SIMS_ARG=0
 
@@ -29,6 +30,11 @@ while [[ "$#" -gt 0 ]]; do
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
+
+# Normalize optional sweep list to avoid accidental whitespace artifacts.
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    PP_POST_TIME_MULTIPLIERS="$(echo "$PP_POST_TIME_MULTIPLIERS" | tr -d '[:space:]')"
+fi
 
 if [ -n "$PP_MODE" ]; then
     mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
@@ -114,7 +120,12 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     # Avoid comma-splitting issues in --export when values themselves contain commas
     # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
     # then forward everything with --export=ALL.
-    export PP_SIMS PP_TEST PP_MODE PP_SEM_INNER_ITER PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PKG_ROOT
+    if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+        PP_POST_TIME_MULTIPLIERS_B64="$(printf '%s' "$PP_POST_TIME_MULTIPLIERS" | base64 | tr -d '\n')"
+    else
+        PP_POST_TIME_MULTIPLIERS_B64=""
+    fi
+    export PP_SIMS PP_TEST PP_MODE PP_SEM_INNER_ITER PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -135,6 +146,14 @@ fi
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/output/sim_study"
 
+if [ -n "${PP_POST_TIME_MULTIPLIERS_B64:-}" ]; then
+    decoded_mults="$(printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 --decode 2>/dev/null || printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 -d 2>/dev/null || true)"
+    decoded_mults="$(echo "$decoded_mults" | tr -d '[:space:]')"
+    if [ -n "$decoded_mults" ]; then
+        PP_POST_TIME_MULTIPLIERS="$decoded_mults"
+    fi
+fi
+
 if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
     echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
     PP_SIMS="$SLURM_CPUS_PER_TASK"
@@ -147,6 +166,16 @@ echo "Mode: ${PP_MODE:-manual}"
 echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
 echo "Post-time multipliers (sweep): ${PP_POST_TIME_MULTIPLIERS:-<none>}"
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    SWEEP_COUNT="$(awk -F',' '{print NF}' <<<"$PP_POST_TIME_MULTIPLIERS")"
+    if [ "${SWEEP_COUNT:-0}" -gt 1 ]; then
+        echo "RUN MODE: MASTER LIST TIME SWEEP ENABLED (multi-horizon, $SWEEP_COUNT horizons: $PP_POST_TIME_MULTIPLIERS)"
+    else
+        echo "RUN MODE: TIME SWEEP FLAG SET (single horizon in list: $PP_POST_TIME_MULTIPLIERS)"
+    fi
+else
+    echo "RUN MODE: SINGLE-HORIZON (no master-list time sweep)"
+fi
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
