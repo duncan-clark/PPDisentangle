@@ -1832,7 +1832,9 @@ fit_i <- function() {
     fit_indep_pair(
       pp_data_in = pp_all_bg,
       background_rate_var_in = "W",
-      fixed_params_in = FIXED_STRUCTURAL,
+      # Keep structural terms free so finite-moment constraints are enforced
+      # by the ETAS likelihood's soft-to-hard boundary penalties.
+      fixed_params_in = NULL,
       ctrl_init_in = A_ctrl,
       treat_init_in = A_treat,
       fit_label = "Fit I"
@@ -1855,7 +1857,9 @@ fit_j <- function() {
       init_ctrl_params_in = A_ctrl,
       init_treat_params_in = A_treat,
       model_type_in = "etas",
-      fixed_params_in = FIXED_STRUCTURAL,
+      # Match other SEM fits: enforce finite moments via likelihood penalties,
+      # not by hard-fixing structural terms.
+      fixed_params_in = NULL,
       background_rate_var_in = "W",
       sem_inner_iter_in = SEM_INNER_ITER,
       verbose_in = DF_VERBOSE,
