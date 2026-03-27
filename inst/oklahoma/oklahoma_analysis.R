@@ -110,7 +110,9 @@ if (!is.na(env_sem_n_iter) && env_sem_n_iter > 0L) {
   SEM_N_ITER <- env_sem_n_iter
 }
 SEM_INNER_ITER    <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 1000
-env_sem_inner_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_ITER", "")))
+sem_inner_raw <- Sys.getenv("OK_SEM_INNER_ITER", "")
+if (!nzchar(sem_inner_raw)) sem_inner_raw <- Sys.getenv("PP_SEM_INNER", "")
+env_sem_inner_iter <- suppressWarnings(as.integer(sem_inner_raw))
 if (!is.na(env_sem_inner_iter) && env_sem_inner_iter > 0L) {
   SEM_INNER_ITER <- env_sem_inner_iter
 }
@@ -3243,10 +3245,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   pre_window_boot <- c(min(pp_pre$t, na.rm = TRUE), 0)
   post_window_boot <- windowT_post
   pre_ctrl_seed <- PRE_CTRL_BOOT_PARAMS
-  c_ctrl_seed <- C_marginals$ctrl
-  c_treat_seed <- C_marginals$treat
-  d_ctrl_seed <- D_marginals$ctrl
-  d_treat_seed <- D_marginals$treat
+  # Bootstrap targets C/D correspond to the primary KDE control-fixed pair
+  # represented internally by E/F parameter objects.
+  c_ctrl_seed <- E_marginals$ctrl
+  c_treat_seed <- E_marginals$treat
+  d_ctrl_seed <- F_marginals$ctrl
+  d_treat_seed <- F_marginals$treat
 
   get_num <- function(obj, nm, default = NA_real_) {
     if (is.null(obj) || is.null(obj[[nm]])) return(default)
@@ -3366,11 +3370,11 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     if ("C" %in% boot_targets_run) {
       out$C <- tryCatch({
         sim_C <- simulate_boot_data(c_ctrl_seed, c_treat_seed)
-        c_params_boot <- C_params
+        c_params_boot <- E_params
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
           fit_c_boot <- tryCatch({
             fit_etas_bivariate(
-              params_init = C_params, realiz = sim_C$pp_all_bg_sim,
+              params_init = E_params, realiz = sim_C$pp_all_bg_sim,
               windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
@@ -3401,7 +3405,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     if ("D" %in% boot_targets_run) {
       out$D <- tryCatch({
         sim_D <- simulate_boot_data(d_ctrl_seed, d_treat_seed)
-        d_params_boot <- D_params
+        d_params_boot <- F_params
         pp_post_d_boot <- sim_D$pp_post_bg_sim
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
           sem_boot <- run_sem_fit(
@@ -3409,7 +3413,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             partition_in = partition,
             partition_processes_in = partition_processes,
             state_spaces_in = state_spaces,
-            init_params_in = D_params,
+            init_params_in = F_params,
             fixed_params_in = SENSITIVITY_FIXED_PARAMS,
             background_rate_var_in = "W",
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
