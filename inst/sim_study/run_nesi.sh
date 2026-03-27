@@ -15,12 +15,14 @@ PP_TEST=""
 PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
 PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
+PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
+        --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
         --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
         --post-time-multipliers) PP_POST_TIME_MULTIPLIERS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
@@ -107,9 +109,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME sem_inner=${PP_SEM_INNER_ITER:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PP_POST_TIME_MULTIPLIERS=$PP_POST_TIME_MULTIPLIERS,PKG_ROOT=$PKG_ROOT"
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_SEM_INNER_ITER=$PP_SEM_INNER_ITER,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PP_POST_TIME_MULTIPLIERS=$PP_POST_TIME_MULTIPLIERS,PKG_ROOT=$PKG_ROOT"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -139,11 +141,15 @@ echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
+echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
 echo "Post-time multipliers (sweep): ${PP_POST_TIME_MULTIPLIERS:-<none>}"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
+if [ -n "${PP_SEM_INNER_ITER:-}" ]; then
+    export PP_SEM_INNER_ITER
+fi
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 

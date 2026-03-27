@@ -66,8 +66,20 @@ build_core_method <- function(df) {
   out
 }
 
+slim_sim_result <- function(res) {
+  if (is.null(res) || !is.list(res)) return(NULL)
+  out <- res
+  out$results_flat <- NULL
+  out$tasks <- NULL
+  out$EM_results <- NULL
+  out$sem_diagnostics_all <- NULL
+  out
+}
+
 runs_all <- list()
 runs_core <- list()
+runs_tc_all <- list()
+runs_tc_core <- list()
 per_run_results <- list()
 run_manifest <- list()
 processed_mults <- numeric(0)
@@ -106,6 +118,8 @@ for (mult in multipliers) {
   all_df <- df
   all_df$method <- as.character(all_df$labelling)
   core <- build_core_method(df)
+  df_tc <- if (!is.null(res$results_df_true_control)) res$results_df_true_control else NULL
+  tc_core <- if (!is.null(df_tc)) build_core_method(df_tc) else NULL
   end_time <- if (!is.null(res$config) && !is.null(res$config$END_TIME)) as.numeric(res$config$END_TIME) else NA_real_
   treat_time <- if (!is.null(res$config) && !is.null(res$config$TREATMENT_TIME)) as.numeric(res$config$TREATMENT_TIME) else NA_real_
   window_len <- if (is.finite(end_time) && is.finite(treat_time)) end_time - treat_time else NA_real_
@@ -117,7 +131,7 @@ for (mult in multipliers) {
     tag = tag,
     run_basename = run_basename,
     rds_path = rds_path,
-    result = res
+    result = slim_sim_result(res)
   )
   run_manifest[[length(run_manifest) + 1L]] <- data.frame(
     multiplier = as.numeric(mult),
@@ -132,6 +146,18 @@ for (mult in multipliers) {
     core$time_multiplier <- as.numeric(mult)
     core$time_window <- window_len
     runs_core[[length(runs_core) + 1L]] <- core
+  }
+  if (!is.null(df_tc) && nrow(df_tc) > 0 && "all_nothing_true_control" %in% names(df_tc)) {
+    tc_df <- df_tc
+    tc_df$method <- as.character(tc_df$labelling)
+    tc_df$time_multiplier <- as.numeric(mult)
+    tc_df$time_window <- window_len
+    runs_tc_all[[length(runs_tc_all) + 1L]] <- tc_df
+    if (!is.null(tc_core) && nrow(tc_core) > 0) {
+      tc_core$time_multiplier <- as.numeric(mult)
+      tc_core$time_window <- window_len
+      runs_tc_core[[length(runs_tc_core) + 1L]] <- tc_core
+    }
   }
 }
 
@@ -181,10 +207,64 @@ if (nrow(sweep_df_core) > 0) {
   )
 }
 
+sweep_df_true_control_all <- if (length(runs_tc_all) > 0) bind_rows(runs_tc_all) else data.frame()
+sweep_df_true_control_core <- if (length(runs_tc_core) > 0) bind_rows(runs_tc_core) else data.frame()
+p_all_true_control <- NULL
+p_core_true_control <- NULL
+png_all_true_control <- NA_character_
+pdf_all_true_control <- NA_character_
+png_core_true_control <- NA_character_
+pdf_core_true_control <- NA_character_
+if (nrow(sweep_df_true_control_all) > 0) {
+  sweep_df_true_control_all$time_mult_f <- factor(
+    paste0(signif(sweep_df_true_control_all$time_multiplier, 3), "x"),
+    levels = paste0(signif(multipliers, 3), "x")
+  )
+  method_levels_tc_all <- unique(sweep_df_true_control_all$method)
+  sweep_df_true_control_all$method <- factor(sweep_df_true_control_all$method, levels = method_levels_tc_all)
+  p_all_true_control <- ggplot(
+    sweep_df_true_control_all,
+    aes(x = .data$method, y = .data$all_nothing_true_control, fill = .data$time_mult_f)
+  ) +
+    geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed)", fill = "Post-treatment window") +
+    theme_minimal() +
+    theme(plot.title = element_blank(), plot.subtitle = element_blank())
+  png_all_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_all_methods_true_control.png"))
+  pdf_all_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_all_methods_true_control.pdf"))
+  ggsave(filename = png_all_true_control, plot = p_all_true_control, width = 10.5, height = 5.5, dpi = 300)
+  ggsave(filename = pdf_all_true_control, plot = p_all_true_control, width = 10.5, height = 5.5)
+}
+if (nrow(sweep_df_true_control_core) > 0) {
+  sweep_df_true_control_core$time_mult_f <- factor(
+    paste0(signif(sweep_df_true_control_core$time_multiplier, 3), "x"),
+    levels = paste0(signif(multipliers, 3), "x")
+  )
+  sweep_df_true_control_core$method <- factor(sweep_df_true_control_core$method, levels = c("oracle", "naive", "SEM"))
+  p_core_true_control <- ggplot(
+    sweep_df_true_control_core,
+    aes(x = .data$method, y = .data$all_nothing_true_control, fill = .data$time_mult_f)
+  ) +
+    geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+    labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed)", fill = "Post-treatment window") +
+    theme_minimal() +
+    theme(plot.title = element_blank(), plot.subtitle = element_blank())
+  png_core_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods_true_control.png"))
+  pdf_core_true_control <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods_true_control.pdf"))
+  ggsave(filename = png_core_true_control, plot = p_core_true_control, width = 8.5, height = 5.5, dpi = 300)
+  ggsave(filename = pdf_core_true_control, plot = p_core_true_control, width = 8.5, height = 5.5)
+}
+
 csv_out <- file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_data.csv"))
 write.csv(sweep_df_all, csv_out, row.names = FALSE)
 if (nrow(sweep_df_core) > 0) {
   write.csv(sweep_df_core, file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_data_core_methods.csv")), row.names = FALSE)
+}
+if (nrow(sweep_df_true_control_all) > 0) {
+  write.csv(sweep_df_true_control_all, file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_data_all_methods_true_control.csv")), row.names = FALSE)
+}
+if (nrow(sweep_df_true_control_core) > 0) {
+  write.csv(sweep_df_true_control_core, file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_data_core_methods_true_control.csv")), row.names = FALSE)
 }
 
 rds_out <- file.path(out_dir, paste0(output_basename, "_summary.rds"))
@@ -196,15 +276,23 @@ saveRDS(list(
   per_run_results = per_run_results,
   sweep_df_all = sweep_df_all,
   sweep_df_core = sweep_df_core,
+  sweep_df_true_control_all = sweep_df_true_control_all,
+  sweep_df_true_control_core = sweep_df_true_control_core,
   grouped_plots = list(
     all_methods = p_all,
-    core_methods = if (exists("p_core")) p_core else NULL
+    core_methods = if (exists("p_core")) p_core else NULL,
+    all_methods_true_control = p_all_true_control,
+    core_methods_true_control = p_core_true_control
   ),
   grouped_plot_files = list(
     all_methods_png = png_all,
     all_methods_pdf = pdf_all,
     core_methods_png = if (nrow(sweep_df_core) > 0) file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods.png")) else NA_character_,
-    core_methods_pdf = if (nrow(sweep_df_core) > 0) file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods.pdf")) else NA_character_
+    core_methods_pdf = if (nrow(sweep_df_core) > 0) file.path(out_dir, paste0(output_basename, "_all_nothing_grouped_boxplot_core_methods.pdf")) else NA_character_,
+    all_methods_true_control_png = png_all_true_control,
+    all_methods_true_control_pdf = pdf_all_true_control,
+    core_methods_true_control_png = png_core_true_control,
+    core_methods_true_control_pdf = pdf_core_true_control
   )
 ), rds_out)
 
