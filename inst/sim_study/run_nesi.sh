@@ -14,6 +14,7 @@ PP_SIMS=32
 PP_TEST=""
 PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
+PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
@@ -21,6 +22,7 @@ while [[ "$#" -gt 0 ]]; do
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
         --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
+        --post-time-multipliers) PP_POST_TIME_MULTIPLIERS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -105,9 +107,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME post_time_multiplier=$PP_POST_TIME_MULTIPLIER ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PKG_ROOT=$PKG_ROOT"
+    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PP_POST_TIME_MULTIPLIERS=$PP_POST_TIME_MULTIPLIERS,PKG_ROOT=$PKG_ROOT"
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -138,10 +140,12 @@ echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
+echo "Post-time multipliers (sweep): ${PP_POST_TIME_MULTIPLIERS:-<none>}"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
 export PP_POST_TIME_MULTIPLIER
+export PP_POST_TIME_MULTIPLIERS
 
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
@@ -320,7 +324,14 @@ echo "Verifying PPDisentangle is visible in runtime library paths..."
 "$RSCRIPT_BIN" -e 'user_lib <- Sys.getenv("R_LIBS_USER", ""); if (nzchar(user_lib)) { libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]; libs <- libs[nzchar(libs)]; if (length(libs) > 0L) .libPaths(c(libs, .libPaths())) }; cat(".libPaths()=", paste(.libPaths(), collapse=" | "), "\n", sep=""); if (!requireNamespace("PPDisentangle", quietly = TRUE)) stop("PPDisentangle not visible after install."); library(PPDisentangle); cat("PPDisentangle load check OK.\n")'
 echo ""
 
-"$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_time_sweep.R" \
+      --sims "$PP_SIMS" \
+      --multipliers "$PP_POST_TIME_MULTIPLIERS" \
+      $PP_TEST 2>&1
+else
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
+fi
 
 echo ""
 echo "=== Done $(date) ==="
