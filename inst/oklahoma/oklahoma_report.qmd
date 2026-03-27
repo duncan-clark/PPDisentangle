@@ -822,13 +822,14 @@ etas_trigger_means <- function(par, beta_gr = NULL) {
   if (is.null(par)) {
     return(list(mean_time = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
   }
-  c0 <- suppressWarnings(as.numeric(par[["c"]]))
-  p0 <- suppressWarnings(as.numeric(par[["p"]]))
-  D0 <- suppressWarnings(as.numeric(par[["D"]]))
-  g0 <- suppressWarnings(as.numeric(par[["gamma"]]))
-  q0 <- suppressWarnings(as.numeric(par[["q"]]))
-  b0 <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
-  if (length(b0) < 1L || !is.finite(b0[[1]]) || is.na(b0[[1]]) || b0[[1]] <= 0) b0 <- 2.3 else b0 <- b0[[1]]
+  c0 <- scalar_num_or_na(par[["c"]])
+  p0 <- scalar_num_or_na(par[["p"]])
+  D0 <- scalar_num_or_na(par[["D"]])
+  g0 <- scalar_num_or_na(par[["gamma"]])
+  q0 <- scalar_num_or_na(par[["q"]])
+  b0_vec <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
+  b0 <- if (length(b0_vec) < 1L) NA_real_ else scalar_num_or_na(b0_vec[[1]])
+  if (!is.finite(b0) || b0 <= 0) b0 <- 2.3
 
   mean_time <- if (is.finite(c0) && is.finite(p0) && !is.na(c0) && !is.na(p0) && p0 > 2) {
     c0 / (p0 - 2)
