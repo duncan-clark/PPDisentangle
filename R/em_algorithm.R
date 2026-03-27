@@ -46,6 +46,10 @@ adaptive_SEM <- function(pp_data,
                          model_type = "hawkes",
                          ...) {
   t_global <- proc.time()[3]
+  N_labellings <- suppressWarnings(as.integer(N_labellings))
+  if (!is.finite(N_labellings) || is.na(N_labellings) || N_labellings < 0L) {
+    stop("N_labellings must be a non-negative integer.")
+  }
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
@@ -376,7 +380,7 @@ adaptive_SEM <- function(pp_data,
     if (!is.null(baseline_adaptive_labelling)) {
       if (verbose) cat(sprintf("[SEM] Generating %d labellings from baseline...\n", N_labellings))
       t_gen_start <- proc.time()[3]
-      labellings <- lapply(1:N_labellings, function(i) {
+      labellings <- lapply(seq_len(N_labellings), function(i) {
         simulation_labeling_hawkes_hawkes_fast(
           baseline_adaptive_labelling,
           partition = partition, partition_process = partition_processes,
@@ -393,7 +397,7 @@ adaptive_SEM <- function(pp_data,
       })
       baseline_with_pre <- rbind(pre, baseline_adaptive_labelling)
       labellings[[length(labellings) + 1]] <- baseline_with_pre
-      if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d + baseline, took %.1fs)\n",
+      if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d proposals + baseline, took %.1fs)\n",
                                N_labellings, proc.time()[3] - t_gen_start))
     }
     

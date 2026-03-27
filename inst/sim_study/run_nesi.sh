@@ -111,13 +111,16 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 
     echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME sem_inner=${PP_SEM_INNER_ITER:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_SEM_INNER_ITER=$PP_SEM_INNER_ITER,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PP_POST_TIME_MULTIPLIERS=$PP_POST_TIME_MULTIPLIERS,PKG_ROOT=$PKG_ROOT"
+    # Avoid comma-splitting issues in --export when values themselves contain commas
+    # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
+    # then forward everything with --export=ALL.
+    export PP_SIMS PP_TEST PP_MODE PP_SEM_INNER_ITER PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
         --time="$SB_TIME" \
         $EXTRA_SBATCH \
-        --export="$SBATCH_EXPORT" \
+        --export=ALL \
         --output="$OUTPUT_DIR/%j_slurm.out" \
         --error="$OUTPUT_DIR/%j_slurm.err" \
         "$SCRIPT_DIR/run_nesi.sh")

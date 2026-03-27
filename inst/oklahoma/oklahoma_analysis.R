@@ -100,6 +100,10 @@ VANILLA_STARTS <- list(
 )
 
 SEM_N_LABELLINGS  <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
+env_sem_n_labellings <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_LABELLINGS", "")))
+if (!is.na(env_sem_n_labellings) && env_sem_n_labellings >= 0L) {
+  SEM_N_LABELLINGS <- env_sem_n_labellings
+}
 SEM_N_ITER        <- if (QUICK_CHECK) 1 else if (TEST_MODE) 2 else 10
 env_sem_n_iter <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_ITER", "")))
 if (!is.na(env_sem_n_iter) && env_sem_n_iter > 0L) {
@@ -1338,7 +1342,8 @@ tryCatch({
 
 # Parameter profiles for county KDE bivariate fits.
 # - all_free: no fixed parameters
-# - control_only_fixed: only control-only productivity terms fixed from pre-treatment
+# - control_only_fixed: structural terms fixed from first-half control pre-treatment;
+#   productivity terms (including mu_0 and A_00) are free.
 # - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment
 kde_variant_specs <- list(
   all_free = list(
@@ -1348,12 +1353,8 @@ kde_variant_specs <- list(
   ),
   control_only_fixed = list(
     id = "control_only_fixed",
-    label = "control-only productivity fixed",
-    fixed_params = list(
-      mu_0 = PRE_CTRL_BOOT_PARAMS$mu,
-      A_00 = PRE_CTRL_BOOT_PARAMS$A,
-      alpha_m_00 = PRE_CTRL_BOOT_PARAMS$alpha_m
-    )
+    label = "structural fixed from first-half control pre-treatment",
+    fixed_params = FIXED_STRUCTURAL
   ),
   productivity_free = list(
     id = "productivity_free",
