@@ -135,12 +135,10 @@ SEM_PILOT_INNER_ITER <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_INN
 if (!is.finite(SEM_PILOT_INNER_ITER) || is.na(SEM_PILOT_INNER_ITER) || SEM_PILOT_INNER_ITER < 1L) {
   SEM_PILOT_INNER_ITER <- 100L
 }
-SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv(
-  "OK_SEM_PILOT_CORES",
-  as.character(max(1L, min(parallel::detectCores(), 8L)))
-)))
+# Pilot is intentionally configured to saturate available cores (one fit/core).
+SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_CORES", "")))
 if (!is.finite(SEM_PILOT_CORES) || is.na(SEM_PILOT_CORES) || SEM_PILOT_CORES < 1L) {
-  SEM_PILOT_CORES <- max(1L, min(parallel::detectCores(), 8L))
+  SEM_PILOT_CORES <- NA_integer_
 }
 SEM_PILOT_MAX_COMBOS <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PILOT_MAX_COMBOS", "24")))
 if (!is.finite(SEM_PILOT_MAX_COMBOS) || is.na(SEM_PILOT_MAX_COMBOS) || SEM_PILOT_MAX_COMBOS < 1L) {
@@ -258,7 +256,9 @@ N_CORES <- max(1L, min(N_CORES, parallel::detectCores()))
 if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
   N_CORES <- min(N_CORES, 8L)
 }
-SEM_PILOT_CORES <- max(1L, min(SEM_PILOT_CORES, N_CORES))
+if (!is.na(SEM_PILOT_CORES)) {
+  SEM_PILOT_CORES <- max(1L, min(SEM_PILOT_CORES, N_CORES))
+}
 BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) max(2L, min(8L, as.integer(floor(N_CORES / 4L)))) else N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
@@ -471,8 +471,9 @@ cat(sprintf("SEM selection: method=%s | temperature=%.3f\n",
 cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
             SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
 if (RUN_SEM_PILOT) {
+  sem_pilot_cores_planned <- if (!is.na(SEM_PILOT_CORES)) SEM_PILOT_CORES else N_CORES
   cat(sprintf("SEM pilot: enabled | inner_iter=%d | cores=%d | max_combos=%d\n",
-              SEM_PILOT_INNER_ITER, SEM_PILOT_CORES, SEM_PILOT_MAX_COMBOS))
+              SEM_PILOT_INNER_ITER, sem_pilot_cores_planned, SEM_PILOT_MAX_COMBOS))
 } else {
   cat("SEM pilot: disabled\n")
 }
@@ -1446,14 +1447,21 @@ if (RUN_SEM_PILOT) {
   )
   pilot_grid <- pilot_grid[pilot_grid$max_mult >= pilot_grid$min_mult, , drop = FALSE]
 
-  if (nrow(pilot_grid) > SEM_PILOT_MAX_COMBOS) {
+  pilot_cores_use <- if (!is.na(SEM_PILOT_CORES)) SEM_PILOT_CORES else N_CORES
+  pilot_max_jobs <- min(nrow(pilot_grid), as.integer(pilot_cores_use))
+  pilot_cap <- min(as.integer(SEM_PILOT_MAX_COMBOS), as.integer(pilot_max_jobs))
+  if (nrow(pilot_grid) > pilot_cap) {
     set.seed(derive_run_seed(OK_GLOBAL_SEED, label = "ok_sem_pilot_grid"))
-    keep_idx <- sort(sample(seq_len(nrow(pilot_grid)), SEM_PILOT_MAX_COMBOS))
+    keep_idx <- sort(sample(seq_len(nrow(pilot_grid)), pilot_cap))
     pilot_grid <- pilot_grid[keep_idx, , drop = FALSE]
   }
   pilot_jobs <- split(pilot_grid, seq_len(nrow(pilot_grid)))
   cat(sprintf("  pilot combos: %d (cores=%d, inner_iter=%d)\n",
-              length(pilot_jobs), SEM_PILOT_CORES, SEM_PILOT_INNER_ITER))
+              length(pilot_jobs), pilot_cores_use, SEM_PILOT_INNER_ITER))
+  if (length(pilot_jobs) < pilot_cores_use) {
+    cat(sprintf("  pilot note: grid has fewer combos than cores (%d < %d).\n",
+                length(pilot_jobs), pilot_cores_use))
+  }
 
   run_one_pilot <- function(job_df) {
     cf <- as.numeric(job_df$change_factor[[1]])
@@ -1508,7 +1516,7 @@ if (RUN_SEM_PILOT) {
   pilot_out <- if (length(pilot_jobs) > 0L) {
     run_parallel(
       pilot_jobs, run_one_pilot,
-      cores = min(SEM_PILOT_CORES, length(pilot_jobs)),
+      cores = pilot_cores_use,
       label = "sem-pilot-fitD"
     )
   } else {
@@ -1540,14 +1548,14 @@ if (RUN_SEM_PILOT) {
       sem_pilot_tuning <- list(
         enabled = TRUE,
         inner_iter = SEM_PILOT_INNER_ITER,
-        cores = SEM_PILOT_CORES,
+        cores = pilot_cores_use,
         grid_size = nrow(pilot_grid),
         results = ok_df,
         best = best
       )
     } else {
       cat("  pilot warning: no successful pilot fits; using existing SEM defaults.\n")
-      sem_pilot_tuning <- list(enabled = TRUE, inner_iter = SEM_PILOT_INNER_ITER, cores = SEM_PILOT_CORES, grid_size = nrow(pilot_grid), results = pilot_df, best = NULL)
+      sem_pilot_tuning <- list(enabled = TRUE, inner_iter = SEM_PILOT_INNER_ITER, cores = pilot_cores_use, grid_size = nrow(pilot_grid), results = pilot_df, best = NULL)
     }
   }
 }
