@@ -37,6 +37,9 @@ repo_dir <- if (basename(script_dir) == "sim_study" && basename(dirname(script_d
 }
 out_dir <- file.path(repo_dir, "output", "sim_study")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+old_wd <- getwd()
+setwd(repo_dir)
+on.exit(setwd(old_wd), add = TRUE)
 
 pp_sims <- suppressWarnings(as.integer(get_arg_val("--sims", Sys.getenv("PP_SIMS", "32"))))
 if (!is.finite(pp_sims) || is.na(pp_sims) || pp_sims < 1L) pp_sims <- 32L
@@ -63,21 +66,6 @@ build_core_method <- function(df) {
   out
 }
 
-slim_sim_result <- function(res) {
-  if (is.null(res) || !is.list(res)) return(NULL)
-  keep_keys <- c(
-    "results_df", "summary_df",
-    "results_df_true_control", "summary_df_true_control",
-    "control_param_summary", "treated_param_summary",
-    "control_params_df", "treated_params_df",
-    "fit_status", "kept_result_idx",
-    "class_metrics", "all_nothing_ATE", "true_tau_1",
-    "timing_report", "config", "plots"
-  )
-  out <- res[intersect(keep_keys, names(res))]
-  out
-}
-
 runs_all <- list()
 runs_core <- list()
 per_run_results <- list()
@@ -88,13 +76,13 @@ for (mult in multipliers) {
   run_basename <- paste0(output_basename, "_", tag)
   message(sprintf("[time-sweep] running multiplier=%s (tag=%s)", signif(mult, 4), tag))
   env <- c(
-    sprintf("PP_POST_TIME_MULTIPLIER=%s", as.character(mult)),
-    sprintf("PP_OUTPUT_BASENAME=%s", run_basename),
-    "PP_OUTPUT_TAG="
+    PP_POST_TIME_MULTIPLIER = as.character(mult),
+    PP_OUTPUT_BASENAME = run_basename,
+    PP_OUTPUT_TAG = ""
   )
-  cmd_args <- c(shQuote(file.path(script_dir, "sim_study.R")), "--sims", as.character(pp_sims))
+  cmd_args <- c(file.path("inst", "sim_study", "sim_study.R"), "--sims", as.character(pp_sims))
   if (test_mode) cmd_args <- c(cmd_args, "--test")
-  status <- system2(command = "Rscript", args = cmd_args, env = env)
+  status <- system2(command = "Rscript", args = cmd_args, env = sprintf("%s=%s", names(env), unname(env)))
   if (!identical(status, 0L)) stop(sprintf("sim_study.R failed for multiplier=%s", mult))
 
   rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
@@ -129,7 +117,7 @@ for (mult in multipliers) {
     tag = tag,
     run_basename = run_basename,
     rds_path = rds_path,
-    result = slim_sim_result(res)
+    result = res
   )
   run_manifest[[length(run_manifest) + 1L]] <- data.frame(
     multiplier = as.numeric(mult),
@@ -204,6 +192,7 @@ saveRDS(list(
   output_basename = output_basename,
   multipliers = multipliers,
   run_manifest = if (length(run_manifest) > 0) bind_rows(run_manifest) else data.frame(),
+  # Master list of the four sim_study runs (one per multiplier)
   per_run_results = per_run_results,
   sweep_df_all = sweep_df_all,
   sweep_df_core = sweep_df_core,
