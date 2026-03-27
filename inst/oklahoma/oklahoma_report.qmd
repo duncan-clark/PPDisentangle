@@ -778,35 +778,42 @@ H_par <- if (!is.null(fit_H_obj)) fit_H_obj$params else NULL
 I_par <- if (!is.null(fit_I_obj)) fit_I_obj$params else NULL
 J_par <- if (!is.null(fit_J_obj)) fit_J_obj$params else NULL
 
+scalar_num_or_na <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) < 1L) return(NA_real_)
+  v <- v[[1]]
+  if (is.finite(v)) v else NA_real_
+}
+
 bc <- function(par, p) {
   if (is.null(par)) return(NA_real_)
   if (is.list(par) && !is.null(par$control)) {
-    return(suppressWarnings(as.numeric(par$control[[p]])))
+    return(scalar_num_or_na(par$control[[p]]))
   }
   if (p == "mu") {
-    v <- suppressWarnings(as.numeric(par[["mu_0"]]))
+    v <- scalar_num_or_na(par[["mu_0"]])
     if (is.finite(v)) return(v)
-    v <- suppressWarnings(as.numeric(par[["mu"]]))
+    v <- scalar_num_or_na(par[["mu"]])
     if (is.finite(v)) return(v)
   }
-  v <- suppressWarnings(as.numeric(par[[paste0(p, "_00")]]))
+  v <- scalar_num_or_na(par[[paste0(p, "_00")]])
   if (is.finite(v)) return(v)
-  suppressWarnings(as.numeric(par[[p]]))
+  scalar_num_or_na(par[[p]])
 }
 bt <- function(par, p) {
   if (is.null(par)) return(NA_real_)
   if (is.list(par) && !is.null(par$treated)) {
-    return(suppressWarnings(as.numeric(par$treated[[p]])))
+    return(scalar_num_or_na(par$treated[[p]]))
   }
   if (p == "mu") {
-    v <- suppressWarnings(as.numeric(par[["mu_1"]]))
+    v <- scalar_num_or_na(par[["mu_1"]])
     if (is.finite(v)) return(v)
-    v <- suppressWarnings(as.numeric(par[["mu"]]))
+    v <- scalar_num_or_na(par[["mu"]])
     if (is.finite(v)) return(v)
   }
-  v <- suppressWarnings(as.numeric(par[[paste0(p, "_11")]]))
+  v <- scalar_num_or_na(par[[paste0(p, "_11")]])
   if (is.finite(v)) return(v)
-  suppressWarnings(as.numeric(par[[p]]))
+  scalar_num_or_na(par[[p]])
 }
 safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
 safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
@@ -1011,9 +1018,8 @@ cl <- c("$A_{01}$ (treat$\\to$ctrl)","$\\alpha_{m,01}$",
 cross_tbl <- data.frame(Parameter = cl)
 safe_cross <- function(par, nm) {
   if (is.null(par)) return(NA_real_)
-  if (is.list(par) && !is.null(par[[nm]])) return(suppressWarnings(as.numeric(par[[nm]])))
-  v <- suppressWarnings(as.numeric(par[[nm]]))
-  if (is.finite(v)) v else NA_real_
+  if (is.list(par) && !is.null(par[[nm]])) return(scalar_num_or_na(par[[nm]]))
+  scalar_num_or_na(par[[nm]])
 }
 for (m in param_models) {
   cross_tbl[[m$id]] <- sapply(cn, function(nm) safe_cross(m$par, nm))
