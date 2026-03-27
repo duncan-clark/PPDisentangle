@@ -172,7 +172,7 @@ env_sem_outer_maxit_biv <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_
 if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
   SEM_OUTER_MAXIT_BIV <- env_sem_outer_maxit_biv
 }
-SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "true")) %in% c("1", "true", "yes", "y")
+SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "false")) %in% c("1", "true", "yes", "y")
 # Keep Decode iterations separate from SEM inner iterations.
 DECODE_ITER <- if (QUICK_CHECK) 2 else if (TEST_MODE) 5 else 200
 env_decode_iter <- suppressWarnings(as.integer(Sys.getenv("OK_DECODE_ITER", "")))
