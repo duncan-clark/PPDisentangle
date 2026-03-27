@@ -206,11 +206,14 @@ ATE_WINDOW_DAYS <- 100
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
 BOOT_N_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_N_REPS", "0")))
 if (!is.finite(BOOT_N_REPS) || is.na(BOOT_N_REPS) || BOOT_N_REPS < 0L) BOOT_N_REPS <- 0L
-# Default to bootstrapping both all-free KDE models (E and F); user can override.
-BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E,F"))
+# Default to bootstrapping the control-fixed KDE pair (C and D).
+# Backward compatibility: legacy E/F targets are remapped to C/D.
+BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "C,D"))
 BOOT_TARGETS <- unique(trimws(unlist(strsplit(BOOT_TARGETS_RAW, ","))))
-BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("E", "F")]
-if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E", "F")
+BOOT_TARGETS[BOOT_TARGETS == "E"] <- "C"
+BOOT_TARGETS[BOOT_TARGETS == "F"] <- "D"
+BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("C", "D")]
+if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("C", "D")
 # Safer default is no per-replicate refit (still allows explicit partial/full override).
 BOOT_REFIT_SCOPE <- tolower(trimws(Sys.getenv("OK_BOOT_REFIT_SCOPE", "none")))
 if (!BOOT_REFIT_SCOPE %in% c("none", "partial", "full")) BOOT_REFIT_SCOPE <- "none"
@@ -1361,9 +1364,9 @@ kde_variant_specs <- list(
 kde_primary_variant_id <- "control_only_fixed"
 kde_variant_ids <- if (RUN_KDE_PROFILE_SWEEP) names(kde_variant_specs) else kde_primary_variant_id
 kde_variant_fits <- list(E = list(), F = list())
-# Sensitivity and bootstrap refits should align with Section 6.1 all-free
-# KDE models (E/F), not the control-only-fixed profile.
-SENSITIVITY_FIXED_PARAMS <- kde_variant_specs$all_free$fixed_params
+# Sensitivity and bootstrap refits align with the primary control-fixed
+# KDE pair (C/D), which is the main comparative focus.
+SENSITIVITY_FIXED_PARAMS <- kde_variant_specs$control_only_fixed$fixed_params
 KDE_FIT_LETTERS <- list(
   control_only_fixed = list(E = "C", F = "D"),
   all_free = list(E = "E", F = "F"),
@@ -3122,7 +3125,7 @@ results_pre_bootstrap <- list(
     stage = "pre_bootstrap",
     saved_at = pre_boot_saved_at,
     boot_targets_requested = BOOT_TARGETS,
-    boot_targets_run = intersect(BOOT_TARGETS, c("E", "F")),
+    boot_targets_run = intersect(BOOT_TARGETS, c("C", "D")),
     boot_reps = BOOT_N_REPS
   ),
   fit_name_map = list(
@@ -3201,9 +3204,9 @@ cat(sprintf("Pre-bootstrap checkpoint saved to: %s\n", pre_bootstrap_out_file))
 rm(results_pre_bootstrap)
 invisible(gc(verbose = FALSE))
 
-# Parametric bootstrap ATEs (supports E and F currently).
+# Parametric bootstrap ATEs for the control-fixed KDE pair (C/D).
 bootstrap_ate <- NULL
-boot_targets_run <- intersect(BOOT_TARGETS, c("E", "F"))
+boot_targets_run <- intersect(BOOT_TARGETS, c("C", "D"))
 bootstrap_elapsed <- NA_real_
 if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   t_bootstrap <- proc.time()[["elapsed"]]
@@ -3211,7 +3214,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
 
   if (BOOT_REFIT_SCOPE == "full") {
-    cat("  Full scope selected: for current targets (E/F), this runs per-replicate refits before ATE estimation.\n")
+    cat("  Full scope selected: for current targets (C/D), this runs per-replicate refits before ATE estimation.\n")
   }
 
   as_pp_df <- function(sim_obj, location_process_value, inferred_process_value = NULL) {
@@ -3235,10 +3238,10 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   pre_window_boot <- c(min(pp_pre$t, na.rm = TRUE), 0)
   post_window_boot <- windowT_post
   pre_ctrl_seed <- PRE_CTRL_BOOT_PARAMS
-  e_ctrl_seed <- E_marginals$ctrl
-  e_treat_seed <- E_marginals$treat
-  f_ctrl_seed <- F_marginals$ctrl
-  f_treat_seed <- F_marginals$treat
+  c_ctrl_seed <- C_marginals$ctrl
+  c_treat_seed <- C_marginals$treat
+  d_ctrl_seed <- D_marginals$ctrl
+  d_treat_seed <- D_marginals$treat
 
   get_num <- function(obj, nm, default = NA_real_) {
     if (is.null(obj) || is.null(obj[[nm]])) return(default)
@@ -3355,14 +3358,14 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     boot_ate_crn_seed <- as.integer(100000L + 1000L * boot_rep_seed)
     out <- list(rep = rep_id)
 
-    if ("E" %in% boot_targets_run) {
-      out$E <- tryCatch({
-        sim_E <- simulate_boot_data(e_ctrl_seed, e_treat_seed)
-        e_params_boot <- E_params
+    if ("C" %in% boot_targets_run) {
+      out$C <- tryCatch({
+        sim_C <- simulate_boot_data(c_ctrl_seed, c_treat_seed)
+        c_params_boot <- C_params
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
-          fit_e_boot <- tryCatch({
+          fit_c_boot <- tryCatch({
             fit_etas_bivariate(
-              params_init = E_params, realiz = sim_E$pp_all_bg_sim,
+              params_init = C_params, realiz = sim_C$pp_all_bg_sim,
               windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
@@ -3371,76 +3374,76 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               t_trunc = SEM_T_TRUNC_DAYS
             )
           }, error = function(e) NULL)
-          if (!is.null(fit_e_boot) && !is.null(fit_e_boot$par)) e_params_boot <- fit_e_boot$par
+          if (!is.null(fit_c_boot) && !is.null(fit_c_boot$par)) c_params_boot <- fit_c_boot$par
         }
-        e_marg_boot <- extract_marginals(e_params_boot)
-        ate_e_boot <- ate_estim_fast(
-          e_marg_boot$ctrl, e_marg_boot$treat, sim_E$pp_post_bg_sim,
-          label = sprintf("Boot E #%d", rep_id),
-          filtration_history = sim_E$pre_df,
+        c_marg_boot <- extract_marginals(c_params_boot)
+        ate_c_boot <- ate_estim_fast(
+          c_marg_boot$ctrl, c_marg_boot$treat, sim_C$pp_post_bg_sim,
+          label = sprintf("Boot C #%d", rep_id),
+          filtration_history = sim_C$pre_df,
           crn_base_seed = boot_ate_crn_seed,
           phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
           quiet = TRUE
         )
-        summarize_boot(ate_e_boot, rep_id, sim_E$pre_df, sim_E$post_ctrl_df, sim_E$post_treat_df, e_params_boot)
+        summarize_boot(ate_c_boot, rep_id, sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df, c_params_boot)
       }, error = function(e) {
-        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap E failed: ", conditionMessage(e)))
+        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap C failed: ", conditionMessage(e)))
       })
     }
 
-    if ("F" %in% boot_targets_run) {
-      out$F <- tryCatch({
-        sim_F <- simulate_boot_data(f_ctrl_seed, f_treat_seed)
-        f_params_boot <- F_params
-        pp_post_f_boot <- sim_F$pp_post_bg_sim
+    if ("D" %in% boot_targets_run) {
+      out$D <- tryCatch({
+        sim_D <- simulate_boot_data(d_ctrl_seed, d_treat_seed)
+        d_params_boot <- D_params
+        pp_post_d_boot <- sim_D$pp_post_bg_sim
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
           sem_boot <- run_sem_fit(
-            pp_data_in = sim_F$pp_all_bg_sim,
+            pp_data_in = sim_D$pp_all_bg_sim,
             partition_in = partition,
             partition_processes_in = partition_processes,
             state_spaces_in = state_spaces,
-            init_params_in = F_params,
+            init_params_in = D_params,
             fixed_params_in = SENSITIVITY_FIXED_PARAMS,
             background_rate_var_in = "W",
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
             verbose_in = FALSE,
-            label = sprintf("Boot F #%d", rep_id)
+            label = sprintf("Boot D #%d", rep_id)
           )
           if (!is.null(sem_boot) && !is.null(sem_boot$etas_bivariate_params)) {
-            f_params_boot <- sem_boot$etas_bivariate_params
+            d_params_boot <- sem_boot$etas_bivariate_params
           }
           if (!is.null(sem_boot) && !is.null(sem_boot$adaptive$adaptive_labelling)) {
-            pp_post_f_boot <- sem_boot$adaptive$adaptive_labelling
-            pp_post_f_boot <- pp_post_f_boot[pp_post_f_boot$t >= 0, , drop = FALSE]
+            pp_post_d_boot <- sem_boot$adaptive$adaptive_labelling
+            pp_post_d_boot <- pp_post_d_boot[pp_post_d_boot$t >= 0, , drop = FALSE]
           }
         }
-        f_marg_boot <- extract_marginals(f_params_boot)
-        ate_f_boot <- ate_estim_fast(
-          f_marg_boot$ctrl, f_marg_boot$treat, pp_post_f_boot,
-          label = sprintf("Boot F #%d", rep_id),
-          filtration_history = sim_F$pre_df,
+        d_marg_boot <- extract_marginals(d_params_boot)
+        ate_d_boot <- ate_estim_fast(
+          d_marg_boot$ctrl, d_marg_boot$treat, pp_post_d_boot,
+          label = sprintf("Boot D #%d", rep_id),
+          filtration_history = sim_D$pre_df,
           crn_base_seed = boot_ate_crn_seed,
           phase = "bootstrap",
           n_tiles_used = partition$n,
           treated_idx_used = treated_idx,
           quiet = TRUE
         )
-        summarize_boot(ate_f_boot, rep_id, sim_F$pre_df, sim_F$post_ctrl_df, sim_F$post_treat_df, f_params_boot)
+        summarize_boot(ate_d_boot, rep_id, sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df, d_params_boot)
       }, error = function(e) {
-        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap F failed: ", conditionMessage(e)))
+        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap D failed: ", conditionMessage(e)))
       })
     }
     rm_vars <- intersect(
-      c("sim_E", "fit_e_boot", "e_params_boot", "e_marg_boot", "ate_e_boot",
-        "sim_F", "sem_boot", "f_params_boot", "f_marg_boot", "ate_f_boot", "pp_post_f_boot"),
+      c("sim_C", "fit_c_boot", "c_params_boot", "c_marg_boot", "ate_c_boot",
+        "sim_D", "sem_boot", "d_params_boot", "d_marg_boot", "ate_d_boot", "pp_post_d_boot"),
       ls()
     )
     if (length(rm_vars) > 0L) rm(list = rm_vars)
     invisible(gc(verbose = FALSE))
     elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
-    ok_targets <- names(out)[names(out) %in% c("E", "F")]
+    ok_targets <- names(out)[names(out) %in% c("C", "D")]
     ok_count <- if (length(ok_targets) > 0) {
       sum(vapply(out[ok_targets], function(x) !is.null(x) && isTRUE(x$ok), logical(1)))
     } else {
@@ -3499,33 +3502,36 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       seed = BOOT_SEED
     )
   )
-  if ("E" %in% boot_targets_run) bootstrap_ate$fit_E <- make_boot_block("E")
-  if ("F" %in% boot_targets_run) bootstrap_ate$fit_F <- make_boot_block("F")
+  if ("C" %in% boot_targets_run) bootstrap_ate$fit_C <- make_boot_block("C")
+  if ("D" %in% boot_targets_run) bootstrap_ate$fit_D <- make_boot_block("D")
+  # Backward-compatibility aliases expected by older report code.
+  if (!is.null(bootstrap_ate$fit_C) && is.null(bootstrap_ate$fit_E)) bootstrap_ate$fit_E <- bootstrap_ate$fit_C
+  if (!is.null(bootstrap_ate$fit_D) && is.null(bootstrap_ate$fit_F)) bootstrap_ate$fit_F <- bootstrap_ate$fit_D
 rm(boot_results)
 invisible(gc(verbose = FALSE))
 
-  if (!is.null(bootstrap_ate$fit_E)) {
-    bE <- bootstrap_ate$fit_E$replicate_summary
-    if (nrow(bE) > 0) {
-      cat(sprintf("  Bootstrap E complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bE), bootstrap_ate$fit_E$n_fail,
-                  mean(bE$ate_total_mean, na.rm = TRUE),
-                  stats::sd(bE$ate_total_mean, na.rm = TRUE)))
+  if (!is.null(bootstrap_ate$fit_C)) {
+    bC <- bootstrap_ate$fit_C$replicate_summary
+    if (nrow(bC) > 0) {
+      cat(sprintf("  Bootstrap C complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bC), bootstrap_ate$fit_C$n_fail,
+                  mean(bC$ate_total_mean, na.rm = TRUE),
+                  stats::sd(bC$ate_total_mean, na.rm = TRUE)))
     } else {
-      cat(sprintf("  Bootstrap E complete: success=%d, fail=%d\n",
-                  bootstrap_ate$fit_E$n_success, bootstrap_ate$fit_E$n_fail))
+      cat(sprintf("  Bootstrap C complete: success=%d, fail=%d\n",
+                  bootstrap_ate$fit_C$n_success, bootstrap_ate$fit_C$n_fail))
     }
   }
-  if (!is.null(bootstrap_ate$fit_F)) {
-    bF <- bootstrap_ate$fit_F$replicate_summary
-    if (nrow(bF) > 0) {
-      cat(sprintf("  Bootstrap F complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bF), bootstrap_ate$fit_F$n_fail,
-                  mean(bF$ate_total_mean, na.rm = TRUE),
-                  stats::sd(bF$ate_total_mean, na.rm = TRUE)))
+  if (!is.null(bootstrap_ate$fit_D)) {
+    bD <- bootstrap_ate$fit_D$replicate_summary
+    if (nrow(bD) > 0) {
+      cat(sprintf("  Bootstrap D complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bD), bootstrap_ate$fit_D$n_fail,
+                  mean(bD$ate_total_mean, na.rm = TRUE),
+                  stats::sd(bD$ate_total_mean, na.rm = TRUE)))
     } else {
-      cat(sprintf("  Bootstrap F complete: success=%d, fail=%d\n",
-                  bootstrap_ate$fit_F$n_success, bootstrap_ate$fit_F$n_fail))
+      cat(sprintf("  Bootstrap D complete: success=%d, fail=%d\n",
+                  bootstrap_ate$fit_D$n_success, bootstrap_ate$fit_D$n_fail))
     }
   }
 

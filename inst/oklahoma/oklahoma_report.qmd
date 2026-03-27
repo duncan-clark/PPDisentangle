@@ -1105,7 +1105,8 @@ sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
   list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
   list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)")
+  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, lab = "J: SEM Univ+KDE")
 )
 for (nm in sem_fit_convergence) {
   if (is.null(nm$obj) || is.null(nm$obj$adaptive)) next
@@ -1145,7 +1146,7 @@ if (length(trace_rows) > 0) {
     theme(legend.position = "top")
 } else {
   plot.new()
-  text(0.5, 0.5, "No SEM confusion-matrix trace found for county SEM fits (B/D/F/H).")
+  text(0.5, 0.5, "No SEM confusion-matrix trace found for county SEM fits (B/D/F/H/J).")
 }
 ```
 
@@ -1158,7 +1159,8 @@ for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)")
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   if (!is.null(tr) && length(tr) > 0) {
@@ -1196,7 +1198,8 @@ if (length(sem_metric_rows) > 0) {
       "B: SEM Biv" = "#6a3d9a",
       "D: SEM Biv+KDE (ctrl-fixed)" = "#e31a1c",
       "F: SEM Biv+KDE (all-free)" = "#1f78b4",
-      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00"
+      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00",
+      "J: SEM Univ+KDE" = "#b8860b"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     facet_wrap(~Model, scales = "free_y") +
@@ -1217,7 +1220,8 @@ for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)")
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
 )) {
   ad <- if (!is.null(info$obj)) info$obj$fit$adaptive else NULL
   if (is.null(ad) || is.null(ad$average_flips) || is.null(ad$max_metric_flips)) next
@@ -1631,28 +1635,43 @@ if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
 }
 
 boot_obj <- results$bootstrap_ate
-boot_E_df <- NULL
-boot_F_df <- NULL
+boot_C_df <- NULL
+boot_D_df <- NULL
 if (!is.null(boot_obj) &&
+    !is.null(boot_obj$fit_C) &&
+    !is.null(boot_obj$fit_C$replicate_summary) &&
+    nrow(boot_obj$fit_C$replicate_summary) > 0) {
+  boot_C_df <- boot_obj$fit_C$replicate_summary
+}
+if (!is.null(boot_obj) &&
+    !is.null(boot_obj$fit_D) &&
+    !is.null(boot_obj$fit_D$replicate_summary) &&
+    nrow(boot_obj$fit_D$replicate_summary) > 0) {
+  boot_D_df <- boot_obj$fit_D$replicate_summary
+}
+# Backward compatibility with older saved objects keyed as fit_E/fit_F.
+if (is.null(boot_C_df) &&
+    !is.null(boot_obj) &&
     !is.null(boot_obj$fit_E) &&
     !is.null(boot_obj$fit_E$replicate_summary) &&
     nrow(boot_obj$fit_E$replicate_summary) > 0) {
-  boot_E_df <- boot_obj$fit_E$replicate_summary
+  boot_C_df <- boot_obj$fit_E$replicate_summary
 }
-if (!is.null(boot_obj) &&
+if (is.null(boot_D_df) &&
+    !is.null(boot_obj) &&
     !is.null(boot_obj$fit_F) &&
     !is.null(boot_obj$fit_F$replicate_summary) &&
     nrow(boot_obj$fit_F$replicate_summary) > 0) {
-  boot_F_df <- boot_obj$fit_F$replicate_summary
+  boot_D_df <- boot_obj$fit_F$replicate_summary
 }
 
 get_boot_summary <- function(model_label) {
   vals <- NULL
-  if (model_label == "E: Naive Biv+KDE (all-free)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (model_label == "F: SEM Biv+KDE (all-free)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_C_df)) vals <- boot_C_df$ate_total_mean
+  if (model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_D_df)) vals <- boot_D_df$ate_total_mean
   # Backward compatibility with older report labeling.
-  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(boot_C_df)) vals <- boot_C_df$ate_total_mean
+  if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(boot_D_df)) vals <- boot_D_df$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- vals[is.finite(vals)]
   if (length(vals) < 2) return(NULL)
@@ -1822,6 +1841,47 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 }
 ```
 
+```{r fig-ate-bootstrap-cd}
+#| label: fig-ate-bootstrap-cd
+#| fig-cap: "Bootstrap replicate distribution of all-or-nothing total saved for the control-fixed KDE pair (C/D)."
+#| fig-height: 4
+if (!using_pre_bootstrap && !is.null(boot_C_df) && !is.null(boot_D_df) &&
+    nrow(boot_C_df) > 0 && nrow(boot_D_df) > 0 &&
+    "ate_total_mean" %in% names(boot_C_df) && "ate_total_mean" %in% names(boot_D_df)) {
+  boot_cd <- rbind(
+    data.frame(Model = "C: Naive Biv+KDE (ctrl-fixed)", TotalATE = as.numeric(boot_C_df$ate_total_mean)),
+    data.frame(Model = "D: SEM Biv+KDE (ctrl-fixed)", TotalATE = as.numeric(boot_D_df$ate_total_mean))
+  )
+  boot_cd <- boot_cd[is.finite(boot_cd$TotalATE), , drop = FALSE]
+  if (nrow(boot_cd) > 0) {
+    boot_means <- aggregate(TotalATE ~ Model, boot_cd, mean)
+    ggplot(boot_cd, aes(x = TotalATE, fill = Model)) +
+      geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_vline(data = boot_means, aes(xintercept = TotalATE, colour = Model),
+                 linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
+      scale_fill_manual(values = c(
+        "C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462",
+        "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3"
+      )) +
+      scale_colour_manual(values = c(
+        "C: Naive Biv+KDE (ctrl-fixed)" = "#e6550d",
+        "D: SEM Biv+KDE (ctrl-fixed)" = "#3182bd"
+      )) +
+      labs(x = bquote(hat(Delta)[AoN] ~ "(bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
+           y = "Bootstrap replicate count") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position = "top")
+  } else {
+    plot.new()
+    text(0.5, 0.5, "Bootstrap C/D replicate means are present but non-finite.")
+  }
+} else {
+  plot.new()
+  text(0.5, 0.5, "Bootstrap C/D results are unavailable in this results checkpoint.")
+}
+```
+
 # Partition Sensitivity
 
 The analysis is repeated under alternative spatial partitions to assess
@@ -1833,8 +1893,8 @@ sensitivity to spatial resolution:
 - **AOI region** partition: the AOI polygon defines one treated region,
   everything else is control (2 tiles total).
 
-For each partition, both the naive bivariate + KDE (E-type, all-free)
-and SEM bivariate + KDE (F-type, all-free) models are fitted.
+For each partition, both the naive bivariate + KDE (C-type, control-fixed)
+and SEM bivariate + KDE (D-type, control-fixed) models are fitted.
 
 ```{r fig-partition-all}
 #| label: fig-partition-all
@@ -1867,15 +1927,15 @@ part_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
-         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
+         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
 
   for (fit_type in list(
-    list(lab = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
-    list(lab = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
+    list(lab = "C: Naive Biv+KDE (ctrl-fixed)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
+    list(lab = "D: SEM Biv+KDE (ctrl-fixed)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
   )) {
     expected <- if (!is.null(fit_type$ate)) {
       get_expected_totals(fit_type$ate, n_tiles = info$n_tiles)
@@ -1906,7 +1966,7 @@ for (pname in names(pr)) {
       lp <- fit_type$sem_obj$adaptive$adaptive_labelling
       lp <- lp[lp$t >= 0, , drop = FALSE]
       sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
-    } else if (identical(fit_type$lab, "F: SEM Biv+KDE (all-free)") &&
+    } else if (identical(fit_type$lab, "D: SEM Biv+KDE (ctrl-fixed)") &&
                !is.null(info$n_relabel) && is.finite(info$n_relabel)) {
       as.integer(info$n_relabel)
     } else { 0 }
@@ -1980,7 +2040,7 @@ if (exists("part_df") && nrow(part_df) > 0) {
     geom_line(alpha = 0.45) +
     geom_point(aes(size = is_county), alpha = 0.9) +
     scale_size_manual(values = c(`FALSE` = 2.1, `TRUE` = 3.6), guide = "none") +
-    scale_colour_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
+    scale_colour_manual(values = c("C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462", "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3")) +
     facet_grid(Parameter ~ Process, scales = "free_y", labeller = label_parsed) +
     labs(x = "Partition scheme", y = "Estimate", colour = "Model") +
     theme_minimal(base_size = 12) +
@@ -2005,13 +2065,13 @@ part_sim_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
-         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
+         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
-  for (fit_type in list(list(lab = "E: Naive Biv+KDE (all-free)", ate = ate_info$ate_E),
-                        list(lab = "F: SEM Biv+KDE (all-free)",   ate = ate_info$ate_F))) {
+  for (fit_type in list(list(lab = "C: Naive Biv+KDE (ctrl-fixed)", ate = ate_info$ate_E),
+                        list(lab = "D: SEM Biv+KDE (ctrl-fixed)",   ate = ate_info$ate_F))) {
     if (!is.null(fit_type$ate) && !is.null(fit_type$ate$all_nothing_sim)) {
       part_sim_rows[[length(part_sim_rows) + 1]] <- data.frame(
         Partition = info$label,
@@ -2036,7 +2096,7 @@ if (length(part_sim_rows) > 0) {
     geom_histogram(bins = 25, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
     facet_wrap(~Partition, scales = "fixed") +
-    scale_fill_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
+    scale_fill_manual(values = c("C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462", "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
          y = "Simulation count") +
     theme_minimal(base_size = 12) +
@@ -2049,7 +2109,7 @@ if (length(part_sim_rows) > 0) {
 }
 ```
 
-## KDE Bandwidth Sensitivity (County Inhomogeneous E/F)
+## KDE Bandwidth Sensitivity (County Inhomogeneous C/D)
 
 County-level inhomogeneous fits are re-run across KDE bandwidths:
 Diggle, Diggle$\\times$2, Diggle$\\times$5, and Diggle$\\times$10.
@@ -2072,8 +2132,8 @@ if (!is.null(bws) && length(bws) > 0) {
     info <- bws[[nm]]
     if (is.null(info)) next
     for (fit_type in list(
-      list(model = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = info$ate_E, relab = 0),
-      list(model = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = info$ate_F,
+      list(model = "C: Naive Biv+KDE (ctrl-fixed)", par = info$E_params, ate = info$ate_E, relab = 0),
+      list(model = "D: SEM Biv+KDE (ctrl-fixed)",   par = info$F_params, ate = info$ate_F,
            relab = if (!is.null(info$n_relabel)) info$n_relabel else NA)
     )) {
       if (is.null(fit_type$par)) next
