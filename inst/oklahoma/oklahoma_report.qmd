@@ -58,6 +58,10 @@ DATA_DIR <- file.path(SCRIPT_DIR,
 candidate_out_dirs <- unique(c(
   file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma")
 ))
+explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
+if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {
+  stop("OK_RESULTS_FILE was provided but does not exist: ", explicit_result_file)
+}
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_sensitivity(_[0-9]+)?\\.rds$",
@@ -110,7 +114,11 @@ newest_run_key <- run_latest_rows$run_key[which.max(run_latest_rows$mtime)]
 run_pool <- result_meta[result_meta$run_key == newest_run_key, , drop = FALSE]
 best_stage <- max(run_pool$stage_rank, na.rm = TRUE)
 stage_pool <- run_pool[run_pool$stage_rank == best_stage, , drop = FALSE]
-result_file <- stage_pool$file[which.max(stage_pool$mtime)]
+result_file <- if (nzchar(explicit_result_file)) {
+  normalizePath(explicit_result_file, winslash = "/", mustWork = TRUE)
+} else {
+  stage_pool$file[which.max(stage_pool$mtime)]
+}
 OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
@@ -121,6 +129,31 @@ if (is.null(cfg$ETAS_M0) || length(cfg$ETAS_M0) == 0) {
   cfg$ETAS_M0 <- meta_for_cfg$design$min_mag
 }
 if (is.null(cfg$FIXED_STRUCTURAL)) cfg$FIXED_STRUCTURAL <- list()
+
+expected_main_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_SEM_INNER_ITER", ""))))
+expected_sens_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_SENS_SEM_INNER_ITER", ""))))
+expected_boot_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_BOOT_SEM_INNER_ITER", ""))))
+if (is.finite(expected_main_inner) && !is.na(expected_main_inner) &&
+    !identical(as.integer(cfg$SEM_INNER_ITER), as.integer(expected_main_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$SEM_INNER_ITER=%s but OK_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$SEM_INNER_ITER), as.character(expected_main_inner), result_file
+  ))
+}
+if (is.finite(expected_sens_inner) && !is.na(expected_sens_inner) &&
+    !identical(as.integer(cfg$SENS_SEM_INNER_ITER), as.integer(expected_sens_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$SENS_SEM_INNER_ITER=%s but OK_SENS_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$SENS_SEM_INNER_ITER), as.character(expected_sens_inner), result_file
+  ))
+}
+if (is.finite(expected_boot_inner) && !is.na(expected_boot_inner) &&
+    !identical(as.integer(cfg$BOOT_SEM_INNER_ITER), as.integer(expected_boot_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$BOOT_SEM_INNER_ITER=%s but OK_BOOT_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$BOOT_SEM_INNER_ITER), as.character(expected_boot_inner), result_file
+  ))
+}
 
 # Older pre-bootstrap RDS files omitted pp_data/counties/full config; rebuild from CSV.
 report_rebuilt <- NULL

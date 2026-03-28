@@ -235,6 +235,9 @@ if (!is.finite(BOOT_SEM_INNER_ITER) || is.na(BOOT_SEM_INNER_ITER) || BOOT_SEM_IN
 BOOT_OUTER_CORES_RAW <- Sys.getenv("OK_BOOT_OUTER_CORES", "")
 BOOT_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_SEED", "")))
 OK_GLOBAL_SEED <- suppressWarnings(as.integer(Sys.getenv("OK_GLOBAL_SEED", "1")))
+if ((!is.finite(BOOT_SEED) || is.na(BOOT_SEED)) && is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+  BOOT_SEED <- as.integer(OK_GLOBAL_SEED)
+}
 OK_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_IDENTICAL_RANDOMNESS <- tolower(Sys.getenv("OK_BOOT_IDENTICAL_RANDOMNESS", "false")) %in% c("1", "true", "yes", "y")
 OK_BOOT_GUARD_DEGENERATE <- tolower(Sys.getenv("OK_BOOT_GUARD_DEGENERATE", "true")) %in% c("1", "true", "yes", "y")
@@ -302,6 +305,7 @@ PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
 if (!PARALLEL_BACKEND %in% c("fork", "psock", "sequential")) PARALLEL_BACKEND <- "psock"
 
 if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+  RNGkind("L'Ecuyer-CMRG")
   set.seed(OK_GLOBAL_SEED)
 }
 
@@ -310,10 +314,9 @@ derive_run_seed <- function(base_seed, label = "", offset = 0L) {
   if (!is.finite(seed_base) || is.na(seed_base)) return(NA_integer_)
   label_int <- utf8ToInt(as.character(label))
   if (length(label_int) < 1L) label_int <- 0L
-  # Deterministic per-run seed with label + pid entropy to avoid repeated streams.
+  # Deterministic per-run seed using only explicit inputs (no PID/time entropy).
   seed_val <- seed_base +
     sum(label_int * seq_along(label_int)) +
-    as.integer(Sys.getpid()) +
     as.integer(offset)
   seed_val <- abs(as.integer(seed_val %% .Machine$integer.max))
   if (!is.finite(seed_val) || is.na(seed_val) || seed_val < 1L) seed_val <- 1L
@@ -334,16 +337,20 @@ run_parallel <- function(X, FUN, cores, label = "job") {
   n <- length(X)
   cores_use <- max(1L, min(as.integer(cores), as.integer(n)))
   t0 <- proc.time()[["elapsed"]]
+  RNG_STREAM_CALL_COUNTER <<- RNG_STREAM_CALL_COUNTER + 1L
+  run_seed <- derive_run_seed(OK_GLOBAL_SEED, label = label, offset = n + RNG_STREAM_CALL_COUNTER)
   cat(sprintf("  [parallel:%s] start: n=%d cores=%d backend=%s\n",
               label, n, cores_use, PARALLEL_BACKEND))
   if (n <= 1L || cores_use <= 1L || identical(PARALLEL_BACKEND, "sequential")) {
+    if (is.finite(run_seed) && !is.na(run_seed)) set.seed(run_seed)
     out <- lapply(X, FUN)
     cat(sprintf("  [parallel:%s] done in %.1fs (sequential)\n",
                 label, proc.time()[["elapsed"]] - t0))
     return(out)
   }
   if (identical(PARALLEL_BACKEND, "fork")) {
-    out <- parallel::mclapply(X, FUN, mc.cores = cores_use)
+    if (is.finite(run_seed) && !is.na(run_seed)) set.seed(run_seed)
+    out <- parallel::mclapply(X, FUN, mc.cores = cores_use, mc.set.seed = TRUE)
     cat(sprintf("  [parallel:%s] done in %.1fs (fork)\n",
                 label, proc.time()[["elapsed"]] - t0))
     return(out)
@@ -351,8 +358,8 @@ run_parallel <- function(X, FUN, cores, label = "job") {
   # Stream worker stdout/stderr into the main job log for progress visibility.
   cl <- parallel::makePSOCKcluster(cores_use, outfile = "")
   on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
-  if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
-    parallel::clusterSetRNGStream(cl, iseed = derive_run_seed(OK_GLOBAL_SEED, label = label))
+  if (is.finite(run_seed) && !is.na(run_seed)) {
+    parallel::clusterSetRNGStream(cl, iseed = run_seed)
   }
   if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
     parallel::clusterExport(cl, varlist = c("REPO_DIR"), envir = .GlobalEnv)
@@ -1091,6 +1098,21 @@ cat("\n--- Fit B: SEM bivariate ETAS ---\n")
 biv_init_D <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 biv_fixed <- FIXED_STRUCTURAL
 
+enforce_control_decay_start <- function(params_vec, control_params = A_ctrl) {
+  if (is.null(params_vec)) return(params_vec)
+  decay_names <- c("c", "p", "D", "gamma", "q")
+  out <- params_vec
+  if (is.null(names(out))) return(out)
+  ctrl_vals <- suppressWarnings(as.numeric(unlist(control_params[decay_names])))
+  names(ctrl_vals) <- decay_names
+  for (nm in decay_names) {
+    if (nm %in% names(out) && nm %in% names(ctrl_vals) && is.finite(ctrl_vals[[nm]])) {
+      out[[nm]] <- ctrl_vals[[nm]]
+    }
+  }
+  out
+}
+
 run_sem_fit <- function(pp_data_in,
                         partition_in,
                         partition_processes_in,
@@ -1177,8 +1199,11 @@ run_sem_fit <- function(pp_data_in,
     tryCatch({
       pp_data_sem <- pp_data_in
       init_params_sem <- init_params_in
+      if (identical(model_type_in, "etas_bivariate") && !is.null(init_params_sem)) {
+        init_params_sem <- enforce_control_decay_start(init_params_sem, init_ctrl_params_in)
+      }
       if (SEM_WARMSTART_FIXED && identical(model_type_in, "etas_bivariate")) {
-        fixed_all <- as.list(init_params_in)
+        fixed_all <- as.list(init_params_sem)
         cat(sprintf("  [%s] warm adaptive step with fixed pre-initialized parameters (mem=%s)...\n",
                     label, mem_snapshot()))
         warm_sem <- run_one_sem(pp_data_sem, init_params_sem, fixed_all, paste0(label, " warm"))
@@ -1433,12 +1458,22 @@ fit_f <- function(init_params = biv_init_F,
                   fixed_params = FIXED_STRUCTURAL,
                   fit_label = "Fit D") {
   tryCatch({
+    init_params_use <- enforce_control_decay_start(init_params, A_ctrl)
+    cat(sprintf(
+      "  [%s] start decays from control fit: c=%.4f p=%.4f D=%.4f gamma=%.4f q=%.4f\n",
+      fit_label,
+      as.numeric(init_params_use[["c"]]),
+      as.numeric(init_params_use[["p"]]),
+      as.numeric(init_params_use[["D"]]),
+      as.numeric(init_params_use[["gamma"]]),
+      as.numeric(init_params_use[["q"]])
+    ))
     run_sem_fit(
       pp_data_in = pp_all_bg,
       partition_in = partition,
       partition_processes_in = partition_processes,
       state_spaces_in = state_spaces,
-      init_params_in = init_params,
+      init_params_in = init_params_use,
       fixed_params_in = fixed_params,
       background_rate_var_in = "W",
       verbose_in = DF_VERBOSE,
@@ -3834,6 +3869,8 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
   if (nzchar(quarto_bin)) {
     cat(sprintf("\n--- Rendering report (%s) ---\n", paste(REPORT_FORMATS, collapse = ", ")))
     old_wd <- getwd()
+    old_results_file_env <- Sys.getenv("OK_RESULTS_FILE", unset = NA_character_)
+    Sys.setenv(OK_RESULTS_FILE = normalizePath(out_file, winslash = "/", mustWork = FALSE))
     setwd(dirname(report_file))
     render_errors <- character(0)
     for (fmt in REPORT_FORMATS) {
@@ -3856,6 +3893,11 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
       }
     }
     setwd(old_wd)
+    if (is.na(old_results_file_env)) {
+      Sys.unsetenv("OK_RESULTS_FILE")
+    } else {
+      Sys.setenv(OK_RESULTS_FILE = old_results_file_env)
+    }
     if (length(render_errors) > 0L) {
       cat("Report render failed:\n")
       cat(paste0("  - ", render_errors, collapse = "\n"), "\n")

@@ -129,6 +129,7 @@ while [[ "$#" -gt 0 ]]; do
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
     --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
     --ate-n-sims) PP_ATE_N_SIMS="$2"; ATE_N_SIMS_EXPLICIT=1; shift 2 ;;
+    --seed) PP_SEED="$2"; shift 2 ;;
     --setup-test) PP_SETUP_TEST=1; SETUP_TEST_EXPLICIT=1; shift ;;
     --mem) PP_MEM="$2"; MEM_EXPLICIT=1; shift 2 ;;
     --time) PP_TIME="$2"; shift 2 ;;
@@ -591,6 +592,7 @@ export OK_BOOT_SEM_INNER_ITER="$PP_BOOT_SEM_INNER"
 export OK_BOOT_OUTER_CORES="$PP_BOOT_OUTER_CORES"
 export OK_ATE_N_SIMS="$PP_ATE_N_SIMS"
 export OK_GLOBAL_SEED="$PP_SEED"
+export OK_BOOT_SEED="$PP_SEED"
 export OK_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_GUARD_DEGENERATE=true
