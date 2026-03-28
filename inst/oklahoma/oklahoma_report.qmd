@@ -1597,43 +1597,60 @@ if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
 }
 
 boot_obj <- results$bootstrap_ate
-boot_C_df <- NULL
-boot_D_df <- NULL
-if (!is.null(boot_obj) &&
-    !is.null(boot_obj$fit_C) &&
-    !is.null(boot_obj$fit_C$replicate_summary) &&
-    nrow(boot_obj$fit_C$replicate_summary) > 0) {
-  boot_C_df <- boot_obj$fit_C$replicate_summary
+boot_primary_ids <- c("E", "F")
+if (!is.null(boot_obj) && !is.null(boot_obj$config) && !is.null(boot_obj$config$targets)) {
+  tgt <- unique(toupper(trimws(as.character(boot_obj$config$targets))))
+  if (length(tgt) >= 2 && all(c("E", "F") %in% tgt)) {
+    boot_primary_ids <- c("E", "F")
+  } else if (length(tgt) >= 2 && all(c("C", "D") %in% tgt)) {
+    boot_primary_ids <- c("C", "D")
+  }
 }
-if (!is.null(boot_obj) &&
-    !is.null(boot_obj$fit_D) &&
-    !is.null(boot_obj$fit_D$replicate_summary) &&
-    nrow(boot_obj$fit_D$replicate_summary) > 0) {
-  boot_D_df <- boot_obj$fit_D$replicate_summary
+model_label_by_id <- function(id) {
+  switch(
+    toupper(id),
+    "C" = "C: Naive Biv+KDE (ctrl-fixed)",
+    "D" = "D: SEM Biv+KDE (ctrl-fixed)",
+    "E" = "E: Naive Biv+KDE (all-free)",
+    "F" = "F: SEM Biv+KDE (all-free)",
+    paste0(id, ": model")
+  )
 }
-# Backward compatibility with older saved objects keyed as fit_E/fit_F.
-if (is.null(boot_C_df) &&
-    !is.null(boot_obj) &&
-    !is.null(boot_obj$fit_E) &&
-    !is.null(boot_obj$fit_E$replicate_summary) &&
-    nrow(boot_obj$fit_E$replicate_summary) > 0) {
-  boot_C_df <- boot_obj$fit_E$replicate_summary
+get_boot_df <- function(id) {
+  if (is.null(boot_obj)) return(NULL)
+  key <- paste0("fit_", toupper(id))
+  if (!is.null(boot_obj[[key]]) &&
+      !is.null(boot_obj[[key]]$replicate_summary) &&
+      nrow(boot_obj[[key]]$replicate_summary) > 0) {
+    return(boot_obj[[key]]$replicate_summary)
+  }
+  # Cross-alias fallback between legacy C/D and newer E/F naming.
+  alias <- switch(toupper(id), "C" = "fit_E", "D" = "fit_F", "E" = "fit_C", "F" = "fit_D", NA_character_)
+  if (is.character(alias) && !is.na(alias) &&
+      !is.null(boot_obj[[alias]]) &&
+      !is.null(boot_obj[[alias]]$replicate_summary) &&
+      nrow(boot_obj[[alias]]$replicate_summary) > 0) {
+    return(boot_obj[[alias]]$replicate_summary)
+  }
+  NULL
 }
-if (is.null(boot_D_df) &&
-    !is.null(boot_obj) &&
-    !is.null(boot_obj$fit_F) &&
-    !is.null(boot_obj$fit_F$replicate_summary) &&
-    nrow(boot_obj$fit_F$replicate_summary) > 0) {
-  boot_D_df <- boot_obj$fit_F$replicate_summary
-}
+boot_naive_id <- boot_primary_ids[[1]]
+boot_sem_id <- boot_primary_ids[[2]]
+boot_naive_df <- get_boot_df(boot_naive_id)
+boot_sem_df <- get_boot_df(boot_sem_id)
+boot_naive_label <- model_label_by_id(boot_naive_id)
+boot_sem_label <- model_label_by_id(boot_sem_id)
+boot_pair_label <- paste0(boot_naive_id, "/", boot_sem_id)
 
 get_boot_summary <- function(model_label) {
   vals <- NULL
-  if (model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_C_df)) vals <- boot_C_df$ate_total_mean
-  if (model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_D_df)) vals <- boot_D_df$ate_total_mean
-  # Backward compatibility with older report labeling.
-  if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(boot_C_df)) vals <- boot_C_df$ate_total_mean
-  if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(boot_D_df)) vals <- boot_D_df$ate_total_mean
+  if (model_label == boot_naive_label && !is.null(boot_naive_df)) vals <- boot_naive_df$ate_total_mean
+  if (model_label == boot_sem_label && !is.null(boot_sem_df)) vals <- boot_sem_df$ate_total_mean
+  # Compatibility fallback if table labels differ from selected pair labels.
+  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("C"))) vals <- get_boot_df("C")$ate_total_mean
+  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("D"))) vals <- get_boot_df("D")$ate_total_mean
+  if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("E"))) vals <- get_boot_df("E")$ate_total_mean
+  if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("F"))) vals <- get_boot_df("F")$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- vals[is.finite(vals)]
   if (length(vals) < 2) return(NULL)
@@ -1805,14 +1822,14 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 
 ```{r fig-ate-bootstrap-cd}
 #| label: fig-ate-bootstrap-cd
-#| fig-cap: "Bootstrap replicate distribution of all-or-nothing total saved for the control-fixed KDE pair (C/D)."
+#| fig-cap: "Bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair."
 #| fig-height: 4
-if (!using_pre_bootstrap && !is.null(boot_C_df) && !is.null(boot_D_df) &&
-    nrow(boot_C_df) > 0 && nrow(boot_D_df) > 0 &&
-    "ate_total_mean" %in% names(boot_C_df) && "ate_total_mean" %in% names(boot_D_df)) {
+if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
+    nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
+    "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {
   boot_cd <- rbind(
-    data.frame(Model = "C: Naive Biv+KDE (ctrl-fixed)", TotalATE = as.numeric(boot_C_df$ate_total_mean)),
-    data.frame(Model = "D: SEM Biv+KDE (ctrl-fixed)", TotalATE = as.numeric(boot_D_df$ate_total_mean))
+    data.frame(Model = boot_naive_label, TotalATE = as.numeric(boot_naive_df$ate_total_mean)),
+    data.frame(Model = boot_sem_label, TotalATE = as.numeric(boot_sem_df$ate_total_mean))
   )
   boot_cd <- boot_cd[is.finite(boot_cd$TotalATE), , drop = FALSE]
   if (nrow(boot_cd) > 0) {
@@ -1822,25 +1839,21 @@ if (!using_pre_bootstrap && !is.null(boot_C_df) && !is.null(boot_D_df) &&
       geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
       geom_vline(data = boot_means, aes(xintercept = TotalATE, colour = Model),
                  linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-      scale_fill_manual(values = c(
-        "C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462",
-        "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3"
-      )) +
-      scale_colour_manual(values = c(
-        "C: Naive Biv+KDE (ctrl-fixed)" = "#e6550d",
-        "D: SEM Biv+KDE (ctrl-fixed)" = "#3182bd"
-      )) +
+      scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(boot_naive_label, boot_sem_label))) +
+      scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(boot_naive_label, boot_sem_label))) +
       labs(x = bquote(hat(Delta)[AoN] ~ "(bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
-           y = "Bootstrap replicate count") +
+           y = "Bootstrap replicate count",
+           title = paste0("Bootstrap AoN total-saved distribution (", boot_pair_label, ")")) +
       theme_minimal(base_size = 13) +
-      theme(legend.position = "top")
+      theme(legend.position = "top",
+            plot.title = element_text(hjust = 0.5, face = "bold"))
   } else {
     plot.new()
-    text(0.5, 0.5, "Bootstrap C/D replicate means are present but non-finite.")
+    text(0.5, 0.5, sprintf("Bootstrap %s replicate means are present but non-finite.", boot_pair_label))
   }
 } else {
   plot.new()
-  text(0.5, 0.5, "Bootstrap C/D results are unavailable in this results checkpoint.")
+  text(0.5, 0.5, sprintf("Bootstrap %s results are unavailable in this results checkpoint.", boot_pair_label))
 }
 ```
 
