@@ -1844,8 +1844,8 @@ if (length(E_vec) > 0 || length(F_vec) > 0) {
     `F: SEM Biv+KDE (all-free)` = as.numeric(F_vec[ef_param_order]),
     check.names = FALSE
   )
-  ef_tbl[[2]] <- vapply(ef_tbl[[2]], fmt_num, character(1))
-  ef_tbl[[3]] <- vapply(ef_tbl[[3]], fmt_num, character(1))
+  ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_scaled_num(v, digits = 5), character(1))
+  ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_scaled_num(v, digits = 5), character(1))
   kable(
     ef_tbl,
     caption = "All fitted bivariate ETAS parameters for Models E and F.",
