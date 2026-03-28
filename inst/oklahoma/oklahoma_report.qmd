@@ -851,15 +851,16 @@ bt <- function(par, p) {
 safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
 safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
 
-etas_trigger_means <- function(par, beta_gr = NULL) {
+etas_trigger_means <- function(par, beta_gr = NULL, t_trunc_days = NULL) {
   if (is.null(par)) {
-    return(list(mean_time = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
+    return(list(mean_time = NA_real_, mean_time_trunc = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
   }
   c0 <- scalar_num_or_na(par[["c"]])
   p0 <- scalar_num_or_na(par[["p"]])
   D0 <- scalar_num_or_na(par[["D"]])
   g0 <- scalar_num_or_na(par[["gamma"]])
   q0 <- scalar_num_or_na(par[["q"]])
+  ttr <- scalar_num_or_na(t_trunc_days)
   b0_vec <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
   b0 <- if (length(b0_vec) < 1L) NA_real_ else scalar_num_or_na(b0_vec[[1]])
   if (!is.finite(b0) || b0 <= 0) b0 <- 2.3
@@ -868,6 +869,38 @@ etas_trigger_means <- function(par, beta_gr = NULL) {
     c0 / (p0 - 2)
   } else {
     Inf
+  }
+  mean_time_trunc <- NA_real_
+  if (is.finite(c0) && is.finite(p0) && !is.na(c0) && !is.na(p0) &&
+      c0 > 0 && p0 > 1 && is.finite(ttr) && !is.na(ttr) && ttr > 0) {
+    u <- 1 + (ttr / c0)
+    if (p0 > 1 && p0 != 2) {
+      i0 <- (c0 / (p0 - 1)) * (1 - u^(1 - p0))
+      i1 <- c0^2 * ((u^(2 - p0) - 1) / (2 - p0) - (u^(1 - p0) - 1) / (1 - p0))
+      if (is.finite(i0) && i0 > 0 && is.finite(i1)) {
+        mean_time_trunc <- i1 / i0
+      }
+    } else if (identical(round(p0, 12), 2.0)) {
+      # Closed form limit at p = 2.
+      i0 <- c0 * (1 - 1 / u)
+      i1 <- c0^2 * (log(u) + (1 / u) - 1)
+      if (is.finite(i0) && i0 > 0 && is.finite(i1)) {
+        mean_time_trunc <- i1 / i0
+      }
+    }
+    if (!is.finite(mean_time_trunc) || is.na(mean_time_trunc)) {
+      num <- tryCatch(
+        integrate(function(tt) tt * (1 + tt / c0)^(-p0), lower = 0, upper = ttr)$value,
+        error = function(e) NA_real_
+      )
+      den <- tryCatch(
+        integrate(function(tt) (1 + tt / c0)^(-p0), lower = 0, upper = ttr)$value,
+        error = function(e) NA_real_
+      )
+      if (is.finite(num) && is.finite(den) && den > 0) {
+        mean_time_trunc <- num / den
+      }
+    }
   }
 
   mean_scale <- if (is.finite(D0) && is.finite(g0) && !is.na(D0) && !is.na(g0)) {
@@ -885,7 +918,7 @@ etas_trigger_means <- function(par, beta_gr = NULL) {
     NA_real_
   }
 
-  list(mean_time = mean_time, mean_distance = mean_distance, mean_scale = mean_scale)
+  list(mean_time = mean_time, mean_time_trunc = mean_time_trunc, mean_distance = mean_distance, mean_scale = mean_scale)
 }
 
 model_defs <- list(
@@ -1527,7 +1560,7 @@ if (length(sum_rows) > 0) {
 diag_rows <- list()
 for (fit_info in model_defs) {
   if (is.null(fit_info$par)) next
-  m <- etas_trigger_means(fit_info$par, cfg$BETA_GR)
+  m <- etas_trigger_means(fit_info$par, cfg$BETA_GR, cfg$SEM_T_TRUNC_DAYS)
   for (proc in c("Control", "Treated")) {
     diag_rows[[length(diag_rows) + 1]] <- data.frame(
       Model = fit_info$long,
@@ -1536,6 +1569,15 @@ for (fit_info in model_defs) {
       `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
       check.names = FALSE
     )
+    if (is.finite(m$mean_time_trunc) && !is.na(m$mean_time_trunc)) {
+      diag_rows[[length(diag_rows) + 1]] <- data.frame(
+        Model = fit_info$long,
+        Process = paste0(proc, " (t<=t_trunc)"),
+        `Mean trigger time (days)` = round(m$mean_time_trunc, 3),
+        `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
+        check.names = FALSE
+      )
+    }
   }
 }
 if (length(diag_rows) > 0) {
@@ -1543,6 +1585,7 @@ if (length(diag_rows) > 0) {
   kable(diag_df, align = "llcc",
         caption = paste0(
           "Model-implied ETAS triggering means across all available fits. ",
+          "Rows marked '(t<=t_trunc)' report temporal means under the SEM truncation window. ",
           "Infinite values indicate heavy-tail regimes where the corresponding mean does not exist ",
           "(time: p <= 2, space: q <= 1.5)."
         )) |>
@@ -1766,6 +1809,51 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
               if (!is.null(results$checkpoint) && !is.null(results$checkpoint$stage)) results$checkpoint$stage else "unknown"))
+}
+```
+
+### Full E/F Parameter Estimates
+
+```{r tbl-ef-params-all}
+#| label: tbl-ef-params-all
+to_named_num <- function(x) {
+  if (is.null(x)) return(setNames(numeric(0), character(0)))
+  if (is.list(x)) x <- unlist(x, use.names = TRUE)
+  v <- suppressWarnings(as.numeric(x))
+  nms <- names(x)
+  if (is.null(nms)) nms <- rep("", length(v))
+  names(v) <- nms
+  v
+}
+
+ef_param_order <- c(
+  "mu_0", "mu_1",
+  "A_00", "alpha_m_00",
+  "A_11", "alpha_m_11",
+  "A_01", "alpha_m_01",
+  "A_10", "alpha_m_10",
+  "c", "p", "D", "gamma", "q"
+)
+E_vec <- to_named_num(if (!is.null(fit_E_obj)) fit_E_obj$params else NULL)
+F_vec <- to_named_num(if (!is.null(fit_F_obj)) fit_F_obj$params else NULL)
+
+if (length(E_vec) > 0 || length(F_vec) > 0) {
+  ef_tbl <- data.frame(
+    Parameter = ef_param_order,
+    `E: Naive Biv+KDE (all-free)` = as.numeric(E_vec[ef_param_order]),
+    `F: SEM Biv+KDE (all-free)` = as.numeric(F_vec[ef_param_order]),
+    check.names = FALSE
+  )
+  ef_tbl[[2]] <- vapply(ef_tbl[[2]], fmt_num, character(1))
+  ef_tbl[[3]] <- vapply(ef_tbl[[3]], fmt_num, character(1))
+  kable(
+    ef_tbl,
+    caption = "All fitted bivariate ETAS parameters for Models E and F.",
+    align = "lcc"
+  ) |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
+} else {
+  cat("E/F parameter table unavailable in this results checkpoint.")
 }
 ```
 
