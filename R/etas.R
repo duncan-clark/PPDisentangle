@@ -119,7 +119,7 @@ loglik_etas <- function(params,
   # --- Parameter bounds ---
   if (min(mu, A, cc, D) < 0 || p <= 1 || q <= 1 || gamma_p < 0) return(-1e15)
   p_min <- suppressWarnings(as.numeric(p_lower_bound))
-  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.01
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(q_lower_bound))
   if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
   if (isTRUE(enforce_finite_trigger_moments) && (p <= p_min || q <= q_min)) return(-1e15)
@@ -357,7 +357,7 @@ fit_etas <- function(params_init,
 
   # Keep optimiser starts inside constrained region when constraints are active.
   p_min <- suppressWarnings(as.numeric(dots$p_lower_bound))
-  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.01
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(dots$q_lower_bound))
   if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
   if (!isFALSE(dots$enforce_finite_trigger_moments)) {

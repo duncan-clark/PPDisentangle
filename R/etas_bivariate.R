@@ -49,7 +49,7 @@ loglik_etas_bivariate <- function(params,
                                   treated_background_zero_before = NULL,
                                   beta_gr = NULL,
                                   enforce_finite_trigger_moments = TRUE,
-                                  p_lower_bound = 2.01,
+                                  p_lower_bound = 2.001,
                                   q_lower_bound = 1.501,
                                   finite_moment_soft_width = 0.05,
                                   finite_moment_soft_weight = 2000,
@@ -94,7 +94,7 @@ loglik_etas_bivariate <- function(params,
     return(-1e15)
   }
   p_min <- suppressWarnings(as.numeric(p_lower_bound))
-  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.01
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(q_lower_bound))
   if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
   if (isTRUE(enforce_finite_trigger_moments) && (p <= p_min || q <= q_min)) return(-1e15)
@@ -366,7 +366,7 @@ fit_etas_bivariate <- function(params_init,
   if (is.null(m0)) m0 <- min(realiz$mag)
 
   p_min <- suppressWarnings(as.numeric(dots$p_lower_bound))
-  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.01
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(dots$q_lower_bound))
   if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
   if (!isFALSE(dots$enforce_finite_trigger_moments)) {
