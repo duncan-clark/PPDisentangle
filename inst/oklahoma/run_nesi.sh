@@ -137,7 +137,7 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-if [ -n "$PP_MODE" ]; then
+if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
   mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
   case "$mode_norm" in
     quick)
