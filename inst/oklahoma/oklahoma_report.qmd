@@ -1701,7 +1701,72 @@ get_boot_summary <- function(model_label) {
     sd = stats::sd(vals, na.rm = TRUE),
     lo = as.numeric(stats::quantile(vals, probs = 0.025, na.rm = TRUE)),
     hi = as.numeric(stats::quantile(vals, probs = 0.975, na.rm = TRUE)),
-    n = length(vals)
+    n = length(vals),
+    vals = vals
+  )
+}
+
+boot_ci_efron_bc <- function(boot_vals, theta_hat, conf = 0.95) {
+  x <- suppressWarnings(as.numeric(boot_vals))
+  x <- x[is.finite(x)]
+  theta_hat <- suppressWarnings(as.numeric(theta_hat))
+  if (length(x) < 5L || !is.finite(theta_hat) || is.na(theta_hat)) {
+    return(NULL)
+  }
+  alpha <- (1 - conf) / 2
+  q_pct <- stats::quantile(x, probs = c(alpha, 1 - alpha), na.rm = TRUE, names = FALSE)
+  p_less <- mean(x < theta_hat, na.rm = TRUE)
+  # Guard against p=0 or p=1 leading to infinite z0.
+  eps <- 1 / (length(x) + 1)
+  p_less <- min(max(p_less, eps), 1 - eps)
+  z0 <- stats::qnorm(p_less)
+  z_lo <- stats::qnorm(alpha)
+  z_hi <- stats::qnorm(1 - alpha)
+  a_lo <- stats::pnorm(2 * z0 + z_lo)
+  a_hi <- stats::pnorm(2 * z0 + z_hi)
+  a_lo <- min(max(a_lo, eps), 1 - eps)
+  a_hi <- min(max(a_hi, eps), 1 - eps)
+  if (a_lo > a_hi) {
+    tmp <- a_lo; a_lo <- a_hi; a_hi <- tmp
+  }
+  # If BC collapses to a numerically degenerate interval, use percentile fallback.
+  if (!is.finite(a_lo) || !is.finite(a_hi) || is.na(a_lo) || is.na(a_hi) ||
+      (a_hi - a_lo) < (1 / length(x))) {
+    return(list(
+      lo = as.numeric(q_pct[[1]]),
+      hi = as.numeric(q_pct[[2]]),
+      z0 = z0,
+      p_less = p_less,
+      alpha_lo = alpha,
+      alpha_hi = 1 - alpha,
+      method = "percentile_fallback"
+    ))
+  }
+  lo <- as.numeric(stats::quantile(x, probs = a_lo, na.rm = TRUE, names = FALSE))
+  hi <- as.numeric(stats::quantile(x, probs = a_hi, na.rm = TRUE, names = FALSE))
+  list(lo = lo, hi = hi, z0 = z0, p_less = p_less, alpha_lo = a_lo, alpha_hi = a_hi, method = "bc")
+}
+
+boot_ci_quantile_length <- function(boot_vals, theta_hat, conf = 0.95, center_stat = c("median", "mean")) {
+  center_stat <- match.arg(center_stat)
+  x <- suppressWarnings(as.numeric(boot_vals))
+  x <- x[is.finite(x)]
+  theta_hat <- suppressWarnings(as.numeric(theta_hat))
+  if (length(x) < 5L || !is.finite(theta_hat) || is.na(theta_hat)) return(NULL)
+  alpha <- (1 - conf) / 2
+  q_lo <- as.numeric(stats::quantile(x, probs = alpha, na.rm = TRUE, names = FALSE))
+  q_hi <- as.numeric(stats::quantile(x, probs = 1 - alpha, na.rm = TRUE, names = FALSE))
+  center <- if (identical(center_stat, "median")) stats::median(x, na.rm = TRUE) else mean(x, na.rm = TRUE)
+  if (!is.finite(q_lo) || !is.finite(q_hi) || !is.finite(center)) return(NULL)
+  left_len <- center - q_lo
+  right_len <- q_hi - center
+  if (!is.finite(left_len) || !is.finite(right_len)) return(NULL)
+  list(
+    lo = theta_hat - left_len,
+    hi = theta_hat + right_len,
+    q_lo = q_lo,
+    q_hi = q_hi,
+    center = center
   )
 }
 
@@ -1768,43 +1833,71 @@ ate_rows <- lapply(biv_rows, function(r) {
     } else { NA_real_ },
     `Saved = control - actual` = round(saved_diff_mean, 0),
     `SD(saved)` = round(sim_sd_total, 0),
-    `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
     check.names = FALSE
   )
   if (using_pre_bootstrap) return(base_row)
-  boot_sum <- get_boot_summary(r$lab)
+  # Bootstrap uncertainty is only reported for the primary all-free pair (E/F).
+  boot_models_for_table <- c("E: Naive Biv+KDE (all-free)", "F: SEM Biv+KDE (all-free)")
+  boot_sum <- if (r$lab %in% boot_models_for_table) get_boot_summary(r$lab) else NULL
   boot_sd <- if (!is.null(boot_sum)) round(boot_sum$sd, 0) else NA
-  boot_ci <- if (!is.null(boot_sum)) {
-    sprintf("[%d, %d]", round(boot_sum$lo, 0), round(boot_sum$hi, 0))
+  boot_ci_q_len <- if (!is.null(boot_sum) && is.finite(saved_diff_mean)) {
+    ci <- boot_ci_quantile_length(boot_sum$vals, saved_diff_mean, conf = 0.95, center_stat = "median")
+    if (!is.null(ci) && is.finite(ci$lo) && is.finite(ci$hi)) {
+      sprintf("[%d, %d]", round(ci$lo, 0), round(ci$hi, 0))
+    } else {
+      "NA"
+    }
   } else {
     "NA"
   }
-  base_row$`Bootstrap SD` <- boot_sd
-  base_row$`Bootstrap 95% CI` <- boot_ci
+  base_row$`Bootstrap SD (ATE)` <- boot_sd
+  base_row$`95% quantile-length CI` <- boot_ci_q_len
   base_row
 })
 ate_rows <- Filter(Negate(is.null), ate_rows)
 ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
+  core_cols <- c(
+    "Model",
+    "Observed N(actual regime)",
+    "E[N(control everywhere)]",
+    "E[N(actual treatment regime)]",
+    "SD(control everywhere)",
+    "SD(actual treatment regime)",
+    "E[N(treated everywhere)]",
+    "Saved = control - actual",
+    "SD(saved)"
+  )
+  if (using_pre_bootstrap) {
+    ate_biv <- ate_biv[, core_cols, drop = FALSE]
+  } else {
+    full_cols <- c(core_cols, "Bootstrap SD (ATE)", "95% quantile-length CI")
+    ate_biv <- ate_biv[, full_cols, drop = FALSE]
+  }
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
           c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
             "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)", paste0("Spillover / ", ate_days, "d"))
+            "SD(saved)")
         } else {
           c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
             "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
-            paste0("Spillover / ", ate_days, "d"))
+            "SD(saved)", "Bootstrap SD (ATE)", "95% quantile-length CI")
         },
         caption = if (using_pre_bootstrap) {
           paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
         } else {
-          paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
+          paste0(
+            "All-or-nothing expected counts over ", ate_days,
+            " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)]. ",
+            "Bootstrap SD is estimated from parametric bootstrap replicates; ",
+            "the reported 95% interval uses bootstrap quantile lengths (2.5%/97.5%) ",
+            "recentered around the model's estimated ATE."
+          )
         },
-        align = if (using_pre_bootstrap) "lccccccccc" else "lcccccccccccc") |>
+        align = if (using_pre_bootstrap) "lcccccccc" else "lcccccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
@@ -1910,14 +2003,46 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 
 ```{r fig-ate-bootstrap-cd}
 #| label: fig-ate-bootstrap-cd
-#| fig-cap: "Bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair."
+#| fig-cap: "Bias-corrected bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to observed ATE)."
 #| fig-height: 4
 if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
     nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
     "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {
+  get_fit_obj_by_id <- function(id) {
+    switch(
+      toupper(id),
+      "C" = fit_C_obj,
+      "D" = fit_D_obj,
+      "E" = fit_E_obj,
+      "F" = fit_F_obj,
+      NULL
+    )
+  }
+  obs_ate_mean <- function(id) {
+    fo <- get_fit_obj_by_id(id)
+    if (is.null(fo) || is.null(fo$ate)) return(NA_real_)
+    vals <- get_total_effect_sim(fo$ate, n_tiles = n_cty)
+    vals <- suppressWarnings(as.numeric(vals))
+    vals <- vals[is.finite(vals)]
+    if (length(vals) < 1L) return(NA_real_)
+    mean(vals, na.rm = TRUE)
+  }
+  recenter_boot <- function(boot_vals, target_mean) {
+    bv <- suppressWarnings(as.numeric(boot_vals))
+    if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
+    bmean <- mean(bv, na.rm = TRUE)
+    if (!is.finite(bmean) || is.na(bmean)) return(bv)
+    bv + (target_mean - bmean)
+  }
+
+  naive_obs_mean <- obs_ate_mean(boot_naive_id)
+  sem_obs_mean <- obs_ate_mean(boot_sem_id)
+  naive_bc_vals <- recenter_boot(boot_naive_df$ate_total_mean, naive_obs_mean)
+  sem_bc_vals <- recenter_boot(boot_sem_df$ate_total_mean, sem_obs_mean)
+
   boot_cd <- rbind(
-    data.frame(Model = boot_naive_label, TotalATE = as.numeric(boot_naive_df$ate_total_mean)),
-    data.frame(Model = boot_sem_label, TotalATE = as.numeric(boot_sem_df$ate_total_mean))
+    data.frame(Model = boot_naive_label, TotalATE = naive_bc_vals),
+    data.frame(Model = boot_sem_label, TotalATE = sem_bc_vals)
   )
   boot_cd <- boot_cd[is.finite(boot_cd$TotalATE), , drop = FALSE]
   if (nrow(boot_cd) > 0) {
@@ -1929,19 +2054,19 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
                  linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
       scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(boot_naive_label, boot_sem_label))) +
       scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(boot_naive_label, boot_sem_label))) +
-      labs(x = bquote(hat(Delta)[AoN] ~ "(bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
+      labs(x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
            y = "Bootstrap replicate count",
-           title = paste0("Bootstrap AoN total-saved distribution (", boot_pair_label, ")")) +
+           title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")")) +
       theme_minimal(base_size = 13) +
       theme(legend.position = "top",
             plot.title = element_text(hjust = 0.5, face = "bold"))
   } else {
     plot.new()
-    text(0.5, 0.5, sprintf("Bootstrap %s replicate means are present but non-finite.", boot_pair_label))
+    text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s replicate means are present but non-finite.", boot_pair_label))
   }
 } else {
   plot.new()
-  text(0.5, 0.5, sprintf("Bootstrap %s results are unavailable in this results checkpoint.", boot_pair_label))
+  text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s results are unavailable in this results checkpoint.", boot_pair_label))
 }
 ```
 
@@ -1956,8 +2081,8 @@ sensitivity to spatial resolution:
 - **AOI region** partition: the AOI polygon defines one treated region,
   everything else is control (2 tiles total).
 
-For each partition, both the naive bivariate + KDE (C-type, control-fixed)
-and SEM bivariate + KDE (D-type, control-fixed) models are fitted.
+For each partition, both the naive bivariate + KDE (E-type, all-free)
+and SEM bivariate + KDE (F-type, all-free) models are fitted.
 
 ```{r fig-partition-all}
 #| label: fig-partition-all
@@ -1990,15 +2115,15 @@ part_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
-         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
+         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
 
   for (fit_type in list(
-    list(lab = "C: Naive Biv+KDE (ctrl-fixed)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
-    list(lab = "D: SEM Biv+KDE (ctrl-fixed)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
+    list(lab = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
+    list(lab = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
   )) {
     expected <- if (!is.null(fit_type$ate)) {
       get_expected_totals(fit_type$ate, n_tiles = info$n_tiles)
@@ -2029,7 +2154,7 @@ for (pname in names(pr)) {
       lp <- fit_type$sem_obj$adaptive$adaptive_labelling
       lp <- lp[lp$t >= 0, , drop = FALSE]
       sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
-    } else if (identical(fit_type$lab, "D: SEM Biv+KDE (ctrl-fixed)") &&
+    } else if (identical(fit_type$lab, "F: SEM Biv+KDE (all-free)") &&
                !is.null(info$n_relabel) && is.finite(info$n_relabel)) {
       as.integer(info$n_relabel)
     } else { 0 }
@@ -2103,7 +2228,7 @@ if (exists("part_df") && nrow(part_df) > 0) {
     geom_line(alpha = 0.45) +
     geom_point(aes(size = is_county), alpha = 0.9) +
     scale_size_manual(values = c(`FALSE` = 2.1, `TRUE` = 3.6), guide = "none") +
-    scale_colour_manual(values = c("C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462", "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3")) +
+    scale_colour_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     facet_grid(Parameter ~ Process, scales = "free_y", labeller = label_parsed) +
     labs(x = "Partition scheme", y = "Estimate", colour = "Model") +
     theme_minimal(base_size = 12) +
@@ -2128,13 +2253,13 @@ part_sim_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
-         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
+         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
-  for (fit_type in list(list(lab = "C: Naive Biv+KDE (ctrl-fixed)", ate = ate_info$ate_E),
-                        list(lab = "D: SEM Biv+KDE (ctrl-fixed)",   ate = ate_info$ate_F))) {
+  for (fit_type in list(list(lab = "E: Naive Biv+KDE (all-free)", ate = ate_info$ate_E),
+                        list(lab = "F: SEM Biv+KDE (all-free)",   ate = ate_info$ate_F))) {
     if (!is.null(fit_type$ate) && !is.null(fit_type$ate$all_nothing_sim)) {
       part_sim_rows[[length(part_sim_rows) + 1]] <- data.frame(
         Partition = info$label,
@@ -2159,7 +2284,7 @@ if (length(part_sim_rows) > 0) {
     geom_histogram(bins = 25, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
     facet_wrap(~Partition, scales = "fixed") +
-    scale_fill_manual(values = c("C: Naive Biv+KDE (ctrl-fixed)" = "#fdb462", "D: SEM Biv+KDE (ctrl-fixed)" = "#80b1d3")) +
+    scale_fill_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
          y = "Simulation count") +
     theme_minimal(base_size = 12) +
@@ -2172,7 +2297,7 @@ if (length(part_sim_rows) > 0) {
 }
 ```
 
-## KDE Bandwidth Sensitivity (County Inhomogeneous C/D)
+## KDE Bandwidth Sensitivity (County Inhomogeneous E/F)
 
 County-level inhomogeneous fits are re-run across KDE bandwidths:
 Diggle, Diggle$\\times$2, Diggle$\\times$5, and Diggle$\\times$10.
@@ -2195,8 +2320,8 @@ if (!is.null(bws) && length(bws) > 0) {
     info <- bws[[nm]]
     if (is.null(info)) next
     for (fit_type in list(
-      list(model = "C: Naive Biv+KDE (ctrl-fixed)", par = info$E_params, ate = info$ate_E, relab = 0),
-      list(model = "D: SEM Biv+KDE (ctrl-fixed)",   par = info$F_params, ate = info$ate_F,
+      list(model = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = info$ate_E, relab = 0),
+      list(model = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = info$ate_F,
            relab = if (!is.null(info$n_relabel)) info$n_relabel else NA)
     )) {
       if (is.null(fit_type$par)) next
