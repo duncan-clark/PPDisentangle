@@ -533,6 +533,81 @@ models (E, F), $W_k(x,y)$ is the normalized kernel density estimate from
 control pre-treatment data; for the homogeneous models (B, D),
 $W_k \equiv 1$.
 
+## Likelihood Truncation in This Run
+
+For ETAS likelihood evaluation in this project, temporal triggering is
+truncated at a finite horizon `t_trunc` (days) when enabled. In code,
+parent-child contributions with $\Delta t > t_{\text{trunc}}$ are dropped
+from the triggering sum. The Omori part in the **log-intensity** is scaled by
+
+$$
+\text{temporal\_norm}
+= 1 - \left(1 + \frac{t_{\text{trunc}}}{c}\right)^{-(p-1)},
+$$
+
+so $p$ directly controls how much triggering mass remains inside the truncation
+window. Larger $p$ concentrates mass near zero lag (less tail), smaller $p$
+(still $>1$) leaves heavier temporal tails.
+
+The spatial exponent $q$ does **not** interact with temporal truncation directly.
+It continues to govern spatial tail decay in
+$f(r\mid m)\propto (1+r^2/d(m))^{-q}$, while truncation only limits temporal
+history depth.
+
+```{r tbl-truncation-params}
+#| label: tbl-truncation-params
+safe_num <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) < 1L) return(NA_real_)
+  v <- v[[1]]
+  if (is.finite(v)) v else NA_real_
+}
+fs <- cfg$FIXED_STRUCTURAL
+c_val <- if (!is.null(fs)) safe_num(fs[["c"]]) else NA_real_
+p_val <- if (!is.null(fs)) safe_num(fs[["p"]]) else NA_real_
+q_val <- if (!is.null(fs)) safe_num(fs[["q"]]) else NA_real_
+ttr <- safe_num(cfg$SEM_T_TRUNC_DAYS)
+rel_target <- safe_num(cfg$SEM_T_TRUNC_REL)
+t_source <- if (!is.null(cfg$SEM_T_TRUNC_SOURCE)) as.character(cfg$SEM_T_TRUNC_SOURCE[[1]]) else "N/A"
+
+temporal_mass_retained <- if (is.finite(ttr) && is.finite(c_val) && is.finite(p_val) && c_val > 0 && p_val > 1) {
+  1 - (1 + ttr / c_val)^(-(p_val - 1))
+} else NA_real_
+tail_mass_dropped <- if (is.finite(temporal_mass_retained)) 1 - temporal_mass_retained else NA_real_
+kernel_rel_at_ttr <- if (is.finite(ttr) && is.finite(c_val) && is.finite(p_val) && c_val > 0) {
+  (1 + ttr / c_val)^(-p_val)
+} else NA_real_
+
+trunc_df <- data.frame(
+  Setting = c(
+    "SEM t_trunc (days)",
+    "SEM t_trunc source",
+    "Auto truncation relative level",
+    "Structural c (Omori offset)",
+    "Structural p (temporal exponent)",
+    "Structural q (spatial exponent)",
+    "Temporal mass retained up to t_trunc",
+    "Temporal tail mass dropped beyond t_trunc",
+    "Relative Omori kernel at t_trunc: ((t_trunc+c)/c)^(-p)"
+  ),
+  Value = c(
+    if (is.finite(ttr)) sprintf("%.4f", ttr) else "N/A",
+    t_source,
+    if (is.finite(rel_target)) sprintf("%.4f", rel_target) else "N/A",
+    if (is.finite(c_val)) sprintf("%.4f", c_val) else "N/A",
+    if (is.finite(p_val)) sprintf("%.4f", p_val) else "N/A",
+    if (is.finite(q_val)) sprintf("%.4f", q_val) else "N/A",
+    if (is.finite(temporal_mass_retained)) sprintf("%.4f", temporal_mass_retained) else "N/A",
+    if (is.finite(tail_mass_dropped)) sprintf("%.4f", tail_mass_dropped) else "N/A",
+    if (is.finite(kernel_rel_at_ttr)) sprintf("%.6f", kernel_rel_at_ttr) else "N/A"
+  ),
+  stringsAsFactors = FALSE
+)
+kable(trunc_df, align = "lc",
+      caption = "Temporal truncation settings and implied Omori-tail diagnostics used in likelihood/simulation.") |>
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
 ## Non-Parametric Background Rate
 
 ```{r tbl-kde}
@@ -2483,6 +2558,7 @@ cdf <- data.frame(
   Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
               "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
               "SEM change factor","SEM max relabel step frac","SEM forced refit flip frac","Fitting window (days)",
+              "SEM t_trunc (days)","SEM t_trunc source","SEM t_trunc rel level",
               "ATE simulation window (days)","Simulation replicates",
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
               "Test mode"),
@@ -2493,6 +2569,9 @@ cdf <- data.frame(
             scalar_chr(cfg$SEM_MAX_RELABEL_STEP_FRAC),
             scalar_chr(cfg$SEM_FORCE_PARAM_UPDATE_FLIP_FRAC),
             if (!is.null(cfg$windowT_post)) paste(unlist(cfg$windowT_post, use.names = FALSE), collapse=" \u2013 ") else "N/A",
+            scalar_chr(cfg$SEM_T_TRUNC_DAYS),
+            scalar_chr(cfg$SEM_T_TRUNC_SOURCE),
+            scalar_chr(cfg$SEM_T_TRUNC_REL),
             ate_win, scalar_chr(cfg$ATE_N_SIMS),
             fmt_scaled_num(cfg$spatial_scale_D),
             fmt_scaled_num(if (!is.null(results$kde_info)) results$kde_info$trigger_range_km else NULL),
