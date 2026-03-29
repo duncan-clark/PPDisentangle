@@ -195,7 +195,7 @@ if (!is.finite(END_TIME) || END_TIME <= TREATMENT_TIME) {
 }
 TIME_INT <- END_TIME - TREATMENT_TIME
 
-BASE_SEED <- 123L
+BASE_SEED <- env_int("PP_BASE_SEED", 123L, 1L)
 stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
   as.integer(BASE_SEED + as.integer(stage_offset) * 100000L + as.integer(sim_id) * 1000L + as.integer(extra))
 }
@@ -330,7 +330,7 @@ log_msg("Output (canonical): ", SAVE_DIR)
 # ------------------------------------------------------------------
 # Helper: create a parallel cluster with PPDisentangle loaded
 # ------------------------------------------------------------------
-make_cluster <- function(n_cores) {
+make_cluster <- function(n_cores, rng_seed = NULL) {
   cl <- makeCluster(n_cores)
   registerDoParallel(cl)
   clusterEvalQ(cl, {
@@ -377,6 +377,9 @@ make_cluster <- function(n_cores) {
     library(PPDisentangle)
     library(R.utils)
   })
+  if (!is.null(rng_seed) && is.finite(rng_seed)) {
+    parallel::clusterSetRNGStream(cl, iseed = as.integer(rng_seed))
+  }
   return(cl)
 }
 
@@ -431,7 +434,7 @@ all_nothing_ATE <- (hawkes_par_2$mu * TIME_INT * (1 / (1 - hawkes_par_2$K)) -
                       hawkes_par_1$mu * TIME_INT * (1 / (1 - hawkes_par_1$K))) / partition$n
 
 partition_processes <- rep("control", partition$n)
-set.seed(42)
+set.seed(stage_seed(0L, 0L, 42L))
 partition_processes[sample(1:(NX * NY), NX * NY * TREAT_PROP)] <- "treated"
 treated_idx <- partition_processes == "treated"
 control_state_space <- as.owin(partition[!treated_idx])
@@ -449,7 +452,7 @@ pilot_only_mode <- RUN_SEM_PILOT && PILOT_ONLY
 # Create cluster now that all globals are defined
 cl <- NULL
 if (!pilot_only_mode) {
-  cl <- make_cluster(SEM_WORKERS)
+  cl <- make_cluster(SEM_WORKERS, rng_seed = stage_seed(11L))
   export_globals(cl)
 }
 
@@ -728,7 +731,7 @@ if (RUN_SEM_PILOT) {
   log_msg("Running SEM pilot grid ...")
   pilot_results <- NULL
   if (SEM_PILOT_CORES > 1L) {
-    cl_pilot <- make_cluster(SEM_PILOT_CORES)
+    cl_pilot <- make_cluster(SEM_PILOT_CORES, rng_seed = stage_seed(12L))
     export_globals(cl_pilot)
     clusterExport(cl_pilot, c("run_sem_core", "run_sem_pilot", "stage_seed", "SEM_PILOT_ITERS"), envir = environment())
     pilot_results <- parLapply(cl_pilot, pilot_jobs, run_sem_pilot)
@@ -950,7 +953,8 @@ for (nm in names(labellings)) {
     tasks[[length(tasks) + 1]] <- list(
       x = slim_for_ate(post_x),
       filtration_data = filt_x,
-      labelling_name = nm, hawkes_params = NULL
+      labelling_name = nm, hawkes_params = NULL,
+      seed = stage_seed(4L, i, length(tasks) + 1L)
     )
   }
 }
@@ -970,6 +974,7 @@ for (i in seq_along(EM_results)) {
     x = post_slim,
     filtration_data = filt_x,
     labelling_name = "SEM_full",
+    seed = stage_seed(4L, i, length(tasks) + 1L),
     hawkes_params = list(
       control = ctrl_sem_full,
       treated = EM_results[[i]]$hawkes_params_treated
@@ -1041,6 +1046,9 @@ ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
 
 task_function <- function(task) {
+  if (!is.null(task$seed) && is.finite(task$seed)) {
+    set.seed(as.integer(task$seed))
+  }
   if (!is.null(task$hawkes_params) && params_are_crazy(task$hawkes_params$control, task$hawkes_params$treated)) {
     return(NULL)
   }
@@ -1084,7 +1092,7 @@ if (ATE_SEQUENTIAL) {
   stopCluster(cl)
   if (length(ate_run_idx) > 0L) {
     gc(verbose = FALSE)
-    cl_ate <- make_cluster(min(ATE_WORKERS, length(ate_run_idx)))
+    cl_ate <- make_cluster(min(ATE_WORKERS, length(ate_run_idx)), rng_seed = stage_seed(13L))
     export_ate_globals(cl_ate)
     task_ids <- ate_run_idx
     task_batches <- split(task_ids, ceiling(seq_along(task_ids) / ATE_BATCH_SIZE))
@@ -1404,6 +1412,28 @@ if (length(obs_data) > 0) {
 }
 
 # Control and treated parameter estimates from results_flat
+compute_post_loglik <- function(task_obj, par_obj, process_name) {
+  if (is.null(task_obj) || is.null(par_obj) || is.null(task_obj$x)) return(NA_real_)
+  post_df <- as.data.frame(task_obj$x)
+  if (!all(c("x", "y", "t", "inferred_process") %in% names(post_df))) return(NA_real_)
+  proc_df <- post_df[post_df$inferred_process == process_name, , drop = FALSE]
+  if (nrow(proc_df) < 1L) return(NA_real_)
+  zero_bg_region <- if (identical(process_name, "control")) treated_state_space else control_state_space
+  val <- tryCatch(
+    loglik_hawk_fast(
+      params = c(par_obj$mu, par_obj$alpha, par_obj$beta, par_obj$K),
+      realiz = proc_df,
+      windowT = c(TREATMENT_TIME, END_TIME),
+      windowS = OMEGA,
+      zero_background_region = zero_bg_region,
+      poisson_flag = FALSE,
+      optimized = TRUE
+    ),
+    error = function(e) NA_real_
+  )
+  as.numeric(val)
+}
+
 extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
   lapply(seq_along(results_flat), function(k) {
     r <- results_flat[[k]]
@@ -1418,12 +1448,14 @@ extract_param_rows <- function(results_flat, tasks, sim_size, field_name) {
       par_obj <- if (identical(field_name, "control_pp")) task_k$hawkes_params$control else task_k$hawkes_params$treated
     }
     if (is.null(par_obj)) return(NULL)
+    process_name <- if (identical(field_name, "control_pp")) "control" else "treated"
     data.frame(
       task_idx = k,
       labelling = task_k$labelling_name,
       sim_id = ((k - 1) %% sim_size) + 1,
       mu = par_obj$mu, alpha = par_obj$alpha,
       beta = par_obj$beta, K = par_obj$K,
+      loglik = compute_post_loglik(task_k, par_obj, process_name),
       stringsAsFactors = FALSE
     )
   })
@@ -1476,6 +1508,41 @@ build_param_boxplots <- function(params_df, truth_params, oracle_param_means = N
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
   Filter(Negate(is.null), plots)
+}
+
+build_mu_k_ridge_plot <- function(params_df, truth_params, process_name) {
+  if (is.null(params_df) || nrow(params_df) < 2) return(NULL)
+  dat <- params_df %>%
+    filter(is.finite(.data$mu), is.finite(.data$K))
+  if (nrow(dat) < 2) return(NULL)
+  dat$labelling <- factor(
+    dat$labelling,
+    levels = unique(c(boxplot_method_levels, as.character(dat$labelling)))
+  )
+  p <- ggplot(dat, aes(x = .data$K, y = .data$mu))
+  if ("loglik" %in% names(dat) && any(is.finite(dat$loglik))) {
+    p <- p +
+      geom_point(aes(color = .data$loglik), alpha = 0.65, size = 1.9) +
+      scale_color_viridis_c(option = "C", na.value = "gray75", name = "Log-likelihood")
+  } else {
+    p <- p + geom_point(alpha = 0.5, size = 1.8, color = "#1f77b4")
+  }
+  p +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.8, color = "#d62728") +
+    geom_vline(xintercept = truth_params$K, linetype = "dashed", color = "gray35") +
+    geom_hline(yintercept = truth_params$mu, linetype = "dashed", color = "gray35") +
+    facet_wrap(~ labelling, scales = "free") +
+    labs(
+      x = "K estimate",
+      y = "mu estimate",
+      title = paste0(process_name, ": mu vs K by fit method"),
+      subtitle = "Point color shows fitted post-treatment log-likelihood"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(size = 9),
+      plot.title = element_text(size = 11, face = "bold")
+    )
 }
 
 control_param_rows <- extract_param_rows(results_flat, tasks, SIM_SIZE, "control_pp")
@@ -1550,6 +1617,15 @@ treated_param_plots <- build_param_boxplots(
 )
 if (!is.null(treated_param_plots) && length(treated_param_plots) > 0) {
   sim_study_plots$plot_treated_params <- treated_param_plots
+}
+
+control_mu_k_plot <- build_mu_k_ridge_plot(control_params_df, hawkes_par_1, "Control")
+if (!is.null(control_mu_k_plot)) {
+  sim_study_plots$plot_control_mu_k <- control_mu_k_plot
+}
+treated_mu_k_plot <- build_mu_k_ridge_plot(treated_params_df, hawkes_par_2, "Treated")
+if (!is.null(treated_mu_k_plot)) {
+  sim_study_plots$plot_treated_mu_k <- treated_mu_k_plot
 }
 
 # All-nothing ATE boxplot
