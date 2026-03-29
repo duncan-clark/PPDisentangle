@@ -129,6 +129,12 @@ for (mult in multipliers) {
   end_time <- if (!is.null(res$config) && !is.null(res$config$END_TIME)) as.numeric(res$config$END_TIME) else NA_real_
   treat_time <- if (!is.null(res$config) && !is.null(res$config$TREATMENT_TIME)) as.numeric(res$config$TREATMENT_TIME) else NA_real_
   window_len <- if (is.finite(end_time) && is.finite(treat_time)) end_time - treat_time else NA_real_
+  true_ate_total <- if (!is.null(res$all_nothing_ATE)) suppressWarnings(as.numeric(res$all_nothing_ATE)[1]) else NA_real_
+  true_ate_per_post_time <- if (is.finite(true_ate_total) && is.finite(window_len) && window_len > 0) {
+    true_ate_total / window_len
+  } else {
+    NA_real_
+  }
   all_df$time_multiplier <- as.numeric(mult)
   all_df$time_window <- window_len
   all_df$all_nothing_theory_per_post_time <- if (is.finite(window_len) && window_len > 0) {
@@ -136,6 +142,7 @@ for (mult in multipliers) {
   } else {
     NA_real_
   }
+  all_df$true_ate_per_post_time <- true_ate_per_post_time
   runs_all[[length(runs_all) + 1L]] <- all_df
   per_run_results[[tag]] <- list(
     multiplier = as.numeric(mult),
@@ -162,6 +169,7 @@ for (mult in multipliers) {
     } else {
       NA_real_
     }
+    core$true_ate_per_post_time <- true_ate_per_post_time
     runs_core[[length(runs_core) + 1L]] <- core
   }
   if (!is.null(df_tc) && nrow(df_tc) > 0 && "all_nothing_true_control" %in% names(df_tc)) {
@@ -174,6 +182,7 @@ for (mult in multipliers) {
     } else {
       NA_real_
     }
+    tc_df$true_ate_per_post_time <- true_ate_per_post_time
     runs_tc_all[[length(runs_tc_all) + 1L]] <- tc_df
     if (!is.null(tc_core) && nrow(tc_core) > 0) {
       tc_core$time_multiplier <- as.numeric(mult)
@@ -183,6 +192,7 @@ for (mult in multipliers) {
       } else {
         NA_real_
       }
+      tc_core$true_ate_per_post_time <- true_ate_per_post_time
       runs_tc_core[[length(runs_tc_core) + 1L]] <- tc_core
     }
   }
@@ -201,8 +211,16 @@ sweep_df_all$time_mult_f <- factor(
 )
 method_levels_all <- unique(sweep_df_all$method)
 sweep_df_all$method <- factor(sweep_df_all$method, levels = method_levels_all)
+true_line_all <- sweep_df_all %>%
+  filter(is.finite(.data$true_ate_per_post_time)) %>%
+  distinct(.data$time_mult_f, .data$true_ate_per_post_time)
 p_all <- ggplot(sweep_df_all, aes(x = .data$method, y = .data$all_nothing_theory_per_post_time, fill = .data$time_mult_f)) +
   geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+  geom_hline(
+    data = true_line_all,
+    aes(yintercept = .data$true_ate_per_post_time, colour = .data$time_mult_f),
+    linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE
+  ) +
   labs(x = "Method", y = "All-Nothing ATE Estimate (per post-treatment day)", fill = "Post-treatment window") +
   theme_minimal() +
   theme(plot.title = element_blank(), plot.subtitle = element_blank())
@@ -219,8 +237,16 @@ if (nrow(sweep_df_core) > 0) {
     levels = paste0(signif(multipliers, 3), "x")
   )
   sweep_df_core$method <- factor(sweep_df_core$method, levels = c("oracle", "naive", "SEM"))
+  true_line_core <- sweep_df_core %>%
+    filter(is.finite(.data$true_ate_per_post_time)) %>%
+    distinct(.data$time_mult_f, .data$true_ate_per_post_time)
   p_core <- ggplot(sweep_df_core, aes(x = .data$method, y = .data$all_nothing_theory_per_post_time, fill = .data$time_mult_f)) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+    geom_hline(
+      data = true_line_core,
+      aes(yintercept = .data$true_ate_per_post_time, colour = .data$time_mult_f),
+      linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE
+    ) +
     labs(x = "Method", y = "All-Nothing ATE Estimate (per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())
@@ -249,11 +275,19 @@ if (nrow(sweep_df_true_control_all) > 0) {
   )
   method_levels_tc_all <- unique(sweep_df_true_control_all$method)
   sweep_df_true_control_all$method <- factor(sweep_df_true_control_all$method, levels = method_levels_tc_all)
+  true_line_tc_all <- sweep_df_true_control_all %>%
+    filter(is.finite(.data$true_ate_per_post_time)) %>%
+    distinct(.data$time_mult_f, .data$true_ate_per_post_time)
   p_all_true_control <- ggplot(
     sweep_df_true_control_all,
     aes(x = .data$method, y = .data$all_nothing_true_control_per_post_time, fill = .data$time_mult_f)
   ) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+    geom_hline(
+      data = true_line_tc_all,
+      aes(yintercept = .data$true_ate_per_post_time, colour = .data$time_mult_f),
+      linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE
+    ) +
     labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed, per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())
@@ -268,11 +302,19 @@ if (nrow(sweep_df_true_control_core) > 0) {
     levels = paste0(signif(multipliers, 3), "x")
   )
   sweep_df_true_control_core$method <- factor(sweep_df_true_control_core$method, levels = c("oracle", "naive", "SEM"))
+  true_line_tc_core <- sweep_df_true_control_core %>%
+    filter(is.finite(.data$true_ate_per_post_time)) %>%
+    distinct(.data$time_mult_f, .data$true_ate_per_post_time)
   p_core_true_control <- ggplot(
     sweep_df_true_control_core,
     aes(x = .data$method, y = .data$all_nothing_true_control_per_post_time, fill = .data$time_mult_f)
   ) +
     geom_boxplot(position = position_dodge2(width = 0.8, preserve = "single")) +
+    geom_hline(
+      data = true_line_tc_core,
+      aes(yintercept = .data$true_ate_per_post_time, colour = .data$time_mult_f),
+      linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE
+    ) +
     labs(x = "Method", y = "All-Nothing ATE Estimate (True/Control-Fixed, per post-treatment day)", fill = "Post-treatment window") +
     theme_minimal() +
     theme(plot.title = element_blank(), plot.subtitle = element_blank())

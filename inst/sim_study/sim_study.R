@@ -598,9 +598,8 @@ sem_jobs <- lapply(seq_along(obs_data), function(i) {
 run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
   set.seed(job$seed)
   dat <- job$data
-  total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
-  mu_start     <- total_points / TIME_INT
-  params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
+  # Start treated SEM parameters at true control Hawkes parameters.
+  params_init  <- as.list(hawkes_par_1)
   local_tuning <- if (is.null(tuning)) {
     list(
       param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
@@ -1041,6 +1040,7 @@ ATE_env$ATE_N_TAU_SIMS <- ATE_N_TAU_SIMS
 ATE_env$ATE_N_TAU_I <- ATE_N_TAU_I
 ATE_env$ATE_MAXIT <- ATE_MAXIT
 ATE_env$ATE_CONTROL_FILTRATION_AWARE <- ATE_CONTROL_FILTRATION_AWARE
+ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_par_1
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -1056,6 +1056,7 @@ task_function <- function(task) {
         observed_data = task$x,
         filtration_data = task$filtration_data,
         control_filtration_aware = ATE_CONTROL_FILTRATION_AWARE,
+        treated_params_init = TRUE_CONTROL_HAWKES_INIT,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
         n_sims = ATE_N_SIMS, n_tau_sims = ATE_N_TAU_SIMS, n_tau_i = ATE_N_TAU_I,

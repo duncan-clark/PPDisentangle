@@ -1090,6 +1090,61 @@ em_style_labelling <- function(pp_data,
   history_window_start <- if (nrow(pre_data) > 0) min(pre_data$t) else time_window[1]
   history_window <- c(history_window_start, time_window[2])
   current_metric_cache <- NA_real_
+  select_pre_history_by_label <- function(label) {
+    if (nrow(pre_data) < 1L) return(pre_data[0, c("x", "y", "t"), drop = FALSE])
+    src <- if ("inferred_process" %in% names(pre_data)) pre_data$inferred_process else pre_data$location_process
+    out <- pre_data[src == label, c("x", "y", "t"), drop = FALSE]
+    out <- out[out$t < time_window[1], , drop = FALSE]
+    out[order(out$t), , drop = FALSE]
+  }
+  hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
+    if (nrow(post_realiz) < 1L) return(-Inf)
+    post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
+    p <- suppressWarnings(as.numeric(params_vec[c("mu", "alpha", "beta", "K")]))
+    names(p) <- c("mu", "alpha", "beta", "K")
+    if (any(!is.finite(p))) return(-Inf)
+    if (p[["mu"]] < 0 || p[["alpha"]] < 0 || p[["beta"]] <= 0 || p[["K"]] < 0 || p[["K"]] >= 1) return(-Inf)
+    if (is.null(pre_hist)) pre_hist <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
+    pre_hist <- pre_hist[pre_hist$t < time_window[1], c("x", "y", "t"), drop = FALSE]
+    pre_hist <- pre_hist[order(pre_hist$t), , drop = FALSE]
+    W_post <- if (!is.null(background_rate_var) && background_rate_var %in% names(post_realiz)) {
+      as.numeric(post_realiz[[background_rate_var]])
+    } else {
+      rep(1, nrow(post_realiz))
+    }
+    W_post[!is.finite(W_post)] <- 0
+    total_area <- spatstat.geom::area(statespace)
+    active_area <- total_area
+    if (!is.null(zero_background_region)) {
+      zero_area <- spatstat.geom::area(zero_background_region)
+      active_area <- max(1e-12, total_area - zero_area)
+      in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_background_region)
+      W_post[in_zero] <- 0
+    }
+    parent_x <- c(pre_hist$x, post_realiz$x)
+    parent_y <- c(pre_hist$y, post_realiz$y)
+    parent_t <- c(pre_hist$t, post_realiz$t)
+    loglik <- hawkes_loglik_inhom_filtration_cpp(
+      post_t = as.numeric(post_realiz$t),
+      post_x = as.numeric(post_realiz$x),
+      post_y = as.numeric(post_realiz$y),
+      W_val = as.numeric(W_post),
+      parent_t = as.numeric(parent_t),
+      parent_x = as.numeric(parent_x),
+      parent_y = as.numeric(parent_y),
+      mu = p[["mu"]],
+      alpha = p[["alpha"]],
+      beta = p[["beta"]],
+      K = p[["K"]],
+      areaS = active_area,
+      t_start = time_window[1],
+      t_end = time_window[2],
+      adjust_factor = 1.0,
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+    )
+    if (!is.finite(loglik)) return(-Inf)
+    loglik
+  }
 
   fits <- list()
   labelling_proposals <- list()
@@ -1243,37 +1298,41 @@ em_style_labelling <- function(pp_data,
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
       printed_metric_diag <- FALSE
+      pre_ctrl_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("control") else NULL
+      pre_treat_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("treated") else NULL
       eval_nonbiv <- function(realiz, ctrl_idx, treat_idx) {
         if (length(ctrl_idx) < 1L) return(-Inf)
-        control_lik <- loglik_fn(
-          params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_ctrl_all$active_area,
-                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
-        )
-
         if (length(treat_idx) < 1L) return(-Inf)
-        treat_lik <- loglik_fn(
-          params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_treat_all$active_area,
-                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
-        )
+        if (hawkes_use_filtration_history && !is_etas) {
+          control_lik <- hawkes_conditional_loglik(
+            params_vec = ctrl_params_vec,
+            post_realiz = realiz[ctrl_idx, , drop = FALSE],
+            zero_background_region = treated_state_space,
+            pre_hist = pre_ctrl_hist
+          )
+          treat_lik <- hawkes_conditional_loglik(
+            params_vec = treat_params_vec,
+            post_realiz = realiz[treat_idx, , drop = FALSE],
+            zero_background_region = control_state_space,
+            pre_hist = pre_treat_hist
+          )
+        } else {
+          control_lik <- loglik_fn(
+            params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = list(active_area = pc_ctrl_all$active_area,
+                           in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
+          )
+          treat_lik <- loglik_fn(
+            params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = list(active_area = pc_treat_all$active_area,
+                           in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
+          )
+        }
         if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
                       length(ctrl_idx), length(treat_idx), signif(control_lik, 6), signif(treat_lik, 6)))
-          cat(sprintf("    ctrl params: %s\n", paste(names(ctrl_params_vec), signif(ctrl_params_vec, 5), sep="=", collapse="  ")))
-          cat(sprintf("    treat params: %s\n", paste(names(treat_params_vec), signif(treat_params_vec, 5), sep="=", collapse="  ")))
-          cat(sprintf("    pc_ctrl active_area=%.1f  pc_treat active_area=%.1f\n",
-                      pc_ctrl_all$active_area, pc_treat_all$active_area))
-          cat(sprintf("    in_zero_bg ctrl: %d of %d TRUE  treat: %d of %d TRUE\n",
-                      sum(pc_ctrl_all$in_zero_bg_all[ctrl_idx]), length(ctrl_idx),
-                      sum(pc_treat_all$in_zero_bg_all[treat_idx]), length(treat_idx)))
-          ctrl_sub <- realiz[ctrl_idx, , drop = FALSE]
-          cat(sprintf("    ctrl W range: [%s, %s]  treat W range: [%s, %s]\n",
-                      signif(min(ctrl_sub$W, na.rm=TRUE), 4), signif(max(ctrl_sub$W, na.rm=TRUE), 4),
-                      signif(min(realiz[treat_idx, "W"], na.rm=TRUE), 4),
-                      signif(max(realiz[treat_idx, "W"], na.rm=TRUE), 4)))
           printed_metric_diag <<- TRUE
         }
         control_lik + treat_lik
@@ -1297,11 +1356,20 @@ em_style_labelling <- function(pp_data,
     if (metric_name == "post_likelihood_control") {
       metric <- vapply(labelling_proposals, function(y) {
         post_ctrl <- y[y$inferred_process == "control", ]
-        loglik_hawk_fast(
-          params = unlist(hawkes_params_control), realiz = post_ctrl,
-          windowT = time_window, windowS = statespace,
-          zero_background_region = treated_state_space, ...
-        )
+        if (hawkes_use_filtration_history && !is_etas && !is_biv_etas) {
+          hawkes_conditional_loglik(
+            params_vec = unlist(hawkes_params_control),
+            post_realiz = post_ctrl,
+            zero_background_region = treated_state_space,
+            pre_hist = select_pre_history_by_label("control")
+          )
+        } else {
+          loglik_hawk_fast(
+            params = unlist(hawkes_params_control), realiz = post_ctrl,
+            windowT = time_window, windowS = statespace,
+            zero_background_region = treated_state_space, ...
+          )
+        }
       }, numeric(1))
     }
     if (metric_name == "cheating") {
@@ -1497,18 +1565,36 @@ em_style_labelling <- function(pp_data,
 
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_treated,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_treated,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = control_state_space, ...
+              )
+            }
           }
           optim_func_control <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_control,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = treated_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_control,
+                zero_background_region = treated_state_space,
+                pre_hist = select_pre_history_by_label("control")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_control,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = treated_state_space, ...
+              )
+            }
           }
           res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func_treat, "treated")
           fits[[i]] <- res_t$fit
@@ -1518,11 +1604,20 @@ em_style_labelling <- function(pp_data,
           control_par[[length(control_par) + 1]] <- res_c$par_list
         } else {
           optim_func <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_treated,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_treated,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = control_state_space, ...
+              )
+            }
           }
           res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func, "treated")
           fits[[i]] <- res_t$fit
