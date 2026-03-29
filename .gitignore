@@ -29,6 +29,8 @@ output/run_logs/
 # Oklahoma: rendered report + local pipeline output (D)
 inst/oklahoma/oklahoma_report.html
 inst/oklahoma/oklahoma_report.pdf
+inst/oklahoma/oklahoma_report_*.html
+inst/oklahoma/oklahoma_report_*.pdf
 inst/oklahoma/oklahoma_report.tex
 inst/oklahoma/oklahoma_report_files/
 inst/oklahoma/output/
@@ -37,3 +39,5 @@ inst/oklahoma/output/
 output/*.rds
 output/plots/
 output/last_run_sync_stamp.txt
+output/oklahoma/
+output/sim_study/

@@ -228,7 +228,8 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              n_sims = 100, windowT = c(0, 1), windowS = c(0, 1, 0, 1),
                              maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE),
                              filtration_data = NULL, explosive_K_threshold = 0.98,
-                             control_filtration_aware = TRUE) {
+                             control_filtration_aware = TRUE,
+                             treated_params_init = NULL) {
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -267,12 +268,29 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       beta = dt_fit / 100,
       K = 0.01
     )
-    treat_init <- list(
-      mu = max(1e-8, nrow(treat_realiz) / dt_fit),
-      alpha = 0,
-      beta = dt_fit / 100,
-      K = 0.01
-    )
+    if (!is.null(treated_params_init)) {
+      treat_init <- as.list(treated_params_init)
+      treat_init <- treat_init[c("mu", "alpha", "beta", "K")]
+      if (is.null(names(treat_init)) || any(is.na(names(treat_init)))) {
+        stop("treated_params_init must be a named list/vector with mu, alpha, beta, K")
+      }
+      defaults <- c(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0, beta = dt_fit / 100, K = 0.01)
+      for (nm in names(defaults)) {
+        val <- suppressWarnings(as.numeric(treat_init[[nm]]))
+        if (length(val) != 1L || !is.finite(val) || is.na(val)) {
+          treat_init[[nm]] <- defaults[[nm]]
+        } else {
+          treat_init[[nm]] <- val
+        }
+      }
+    } else {
+      treat_init <- list(
+        mu = max(1e-8, nrow(treat_realiz) / dt_fit),
+        alpha = 0,
+        beta = dt_fit / 100,
+        K = 0.01
+      )
+    }
 
     if (isTRUE(control_filtration_aware)) {
       # Control fit can optionally use full pre-treatment filtration.

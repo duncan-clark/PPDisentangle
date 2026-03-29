@@ -46,6 +46,10 @@ adaptive_SEM <- function(pp_data,
                          model_type = "hawkes",
                          ...) {
   t_global <- proc.time()[3]
+  N_labellings <- suppressWarnings(as.integer(N_labellings))
+  if (!is.finite(N_labellings) || is.na(N_labellings) || N_labellings < 0L) {
+    stop("N_labellings must be a non-negative integer.")
+  }
   dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
@@ -105,7 +109,10 @@ adaptive_SEM <- function(pp_data,
   ac_defaults <- list(
     update_control_params = FALSE, param_update_cadence = 20,
     proposal_update_cadence = 1, update_starting_data = TRUE,
-    include_starting_data = FALSE, iter = 100, n_props = 10,
+    include_starting_data = FALSE, include_starting_first_n = 50, iter = 100, n_props = 10,
+    max_relabel_step_frac = 1.0, force_param_update_flip_frac = 1.0,
+    optim_method = "max", selection_temperature = 0.15,
+    change_factor_min_mult = 0.2, change_factor_max_mult = 2.0,
     change_factor = 0.1, stagnation_trigger_every = 10, proposal_method = "simulation",
     temporal_weight = 0, temporal_scale_days = NULL,
     fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
@@ -132,8 +139,14 @@ adaptive_SEM <- function(pp_data,
       proposal_update_cadence = adaptive_control$proposal_update_cadence,
       update_starting_data = adaptive_control$update_starting_data,
       include_starting_data = adaptive_control$include_starting_data,
+      include_starting_first_n = adaptive_control$include_starting_first_n,
+      max_relabel_step_frac = adaptive_control$max_relabel_step_frac,
+      force_param_update_flip_frac = adaptive_control$force_param_update_flip_frac,
       metric_name = "post_likelihood",
-      optim_method = "max",
+      optim_method = adaptive_control$optim_method,
+      selection_temperature = adaptive_control$selection_temperature,
+      change_factor_min_mult = adaptive_control$change_factor_min_mult,
+      change_factor_max_mult = adaptive_control$change_factor_max_mult,
       iter = adaptive_control$iter,
       n_props = adaptive_control$n_props,
       change_factor = adaptive_control$change_factor,
@@ -367,7 +380,7 @@ adaptive_SEM <- function(pp_data,
     if (!is.null(baseline_adaptive_labelling)) {
       if (verbose) cat(sprintf("[SEM] Generating %d labellings from baseline...\n", N_labellings))
       t_gen_start <- proc.time()[3]
-      labellings <- lapply(1:N_labellings, function(i) {
+      labellings <- lapply(seq_len(N_labellings), function(i) {
         simulation_labeling_hawkes_hawkes_fast(
           baseline_adaptive_labelling,
           partition = partition, partition_process = partition_processes,
@@ -384,7 +397,7 @@ adaptive_SEM <- function(pp_data,
       })
       baseline_with_pre <- rbind(pre, baseline_adaptive_labelling)
       labellings[[length(labellings) + 1]] <- baseline_with_pre
-      if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d + baseline, took %.1fs)\n",
+      if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d proposals + baseline, took %.1fs)\n",
                                N_labellings, proc.time()[3] - t_gen_start))
     }
     

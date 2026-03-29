@@ -14,17 +14,27 @@ PP_SIMS=32
 PP_TEST=""
 PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
+PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
+PP_POST_TIME_MULTIPLIERS_B64="${PP_POST_TIME_MULTIPLIERS_B64:-}"
+PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
+        --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
         --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
+        --post-time-multipliers) PP_POST_TIME_MULTIPLIERS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
+
+# Normalize optional sweep list to avoid accidental whitespace artifacts.
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    PP_POST_TIME_MULTIPLIERS="$(echo "$PP_POST_TIME_MULTIPLIERS" | tr -d '[:space:]')"
+fi
 
 if [ -n "$PP_MODE" ]; then
     mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
@@ -105,15 +115,23 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME post_time_multiplier=$PP_POST_TIME_MULTIPLIER ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME sem_inner=${PP_SEM_INNER_ITER:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
-    SBATCH_EXPORT="ALL,PP_SIMS=$PP_SIMS,PP_TEST=$PP_TEST,PP_MODE=$PP_MODE,PP_POST_TIME_MULTIPLIER=$PP_POST_TIME_MULTIPLIER,PKG_ROOT=$PKG_ROOT"
+    # Avoid comma-splitting issues in --export when values themselves contain commas
+    # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
+    # then forward everything with --export=ALL.
+    if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+        PP_POST_TIME_MULTIPLIERS_B64="$(printf '%s' "$PP_POST_TIME_MULTIPLIERS" | base64 | tr -d '\n')"
+    else
+        PP_POST_TIME_MULTIPLIERS_B64=""
+    fi
+    export PP_SIMS PP_TEST PP_MODE PP_SEM_INNER_ITER PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
         --time="$SB_TIME" \
         $EXTRA_SBATCH \
-        --export="$SBATCH_EXPORT" \
+        --export=ALL \
         --output="$OUTPUT_DIR/%j_slurm.out" \
         --error="$OUTPUT_DIR/%j_slurm.err" \
         "$SCRIPT_DIR/run_nesi.sh")
@@ -128,6 +146,14 @@ fi
 cd "$PKG_ROOT"
 mkdir -p "$PKG_ROOT/output/sim_study"
 
+if [ -n "${PP_POST_TIME_MULTIPLIERS_B64:-}" ]; then
+    decoded_mults="$(printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 --decode 2>/dev/null || printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 -d 2>/dev/null || true)"
+    decoded_mults="$(echo "$decoded_mults" | tr -d '[:space:]')"
+    if [ -n "$decoded_mults" ]; then
+        PP_POST_TIME_MULTIPLIERS="$decoded_mults"
+    fi
+fi
+
 if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
     echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
     PP_SIMS="$SLURM_CPUS_PER_TASK"
@@ -137,11 +163,27 @@ echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
+echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
+echo "Post-time multipliers (sweep): ${PP_POST_TIME_MULTIPLIERS:-<none>}"
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    SWEEP_COUNT="$(awk -F',' '{print NF}' <<<"$PP_POST_TIME_MULTIPLIERS")"
+    if [ "${SWEEP_COUNT:-0}" -gt 1 ]; then
+        echo "RUN MODE: MASTER LIST TIME SWEEP ENABLED (multi-horizon, $SWEEP_COUNT horizons: $PP_POST_TIME_MULTIPLIERS)"
+    else
+        echo "RUN MODE: TIME SWEEP FLAG SET (single horizon in list: $PP_POST_TIME_MULTIPLIERS)"
+    fi
+else
+    echo "RUN MODE: SINGLE-HORIZON (no master-list time sweep)"
+fi
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo ""
 
+if [ -n "${PP_SEM_INNER_ITER:-}" ]; then
+    export PP_SEM_INNER_ITER
+fi
 export PP_POST_TIME_MULTIPLIER
+export PP_POST_TIME_MULTIPLIERS
 
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
@@ -320,7 +362,14 @@ echo "Verifying PPDisentangle is visible in runtime library paths..."
 "$RSCRIPT_BIN" -e 'user_lib <- Sys.getenv("R_LIBS_USER", ""); if (nzchar(user_lib)) { libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]; libs <- libs[nzchar(libs)]; if (length(libs) > 0L) .libPaths(c(libs, .libPaths())) }; cat(".libPaths()=", paste(.libPaths(), collapse=" | "), "\n", sep=""); if (!requireNamespace("PPDisentangle", quietly = TRUE)) stop("PPDisentangle not visible after install."); library(PPDisentangle); cat("PPDisentangle load check OK.\n")'
 echo ""
 
-"$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
+if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_time_sweep.R" \
+      --sims "$PP_SIMS" \
+      --multipliers "$PP_POST_TIME_MULTIPLIERS" \
+      $PP_TEST 2>&1
+else
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study.R" --cluster --sims "$PP_SIMS" $PP_TEST 2>&1
+fi
 
 echo ""
 echo "=== Done $(date) ==="

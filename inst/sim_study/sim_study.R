@@ -187,7 +187,7 @@ env_num <- function(name, default_value, min_value = NULL) {
 N_PROPOSALS <- env_int("PP_LABEL_PROPOSALS", N_PROPOSALS, 1L)
 SEM_EM_ADAPTIVE_ITER <- env_int("PP_SEM_INNER_ITER", SEM_EM_ADAPTIVE_ITER, 1L)
 SEM_N_ITER <- env_int("PP_SEM_OUTER_ITER", SEM_N_ITER, 1L)
-SEM_N_LABELLINGS <- env_int("PP_SEM_N_LABELLINGS", SEM_N_LABELLINGS, 1L)
+SEM_N_LABELLINGS <- env_int("PP_SEM_N_LABELLINGS", SEM_N_LABELLINGS, 0L)
 POST_TIME_MULTIPLIER <- env_num("PP_POST_TIME_MULTIPLIER", 1, min_value = 0.1)
 END_TIME <- TREATMENT_TIME + POST_TIME_MULTIPLIER * (END_TIME_BASE - TREATMENT_TIME)
 if (!is.finite(END_TIME) || END_TIME <= TREATMENT_TIME) {
@@ -218,13 +218,16 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 # ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
-JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
+JOB_ID <- trimws(Sys.getenv("PP_OUTPUT_BASENAME", ""))
+if (JOB_ID == "") JOB_ID <- Sys.getenv("SLURM_JOB_ID", "")
 if (JOB_ID == "") JOB_ID <- paste0("local_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+OUTPUT_TAG <- trimws(Sys.getenv("PP_OUTPUT_TAG", ""))
+RUN_ID <- if (nzchar(OUTPUT_TAG)) paste0(JOB_ID, "_", OUTPUT_TAG) else JOB_ID
 
 for (d in unique(c(SAVE_DIR))) {
   dir.create(d, showWarnings = FALSE, recursive = TRUE)
 }
-LOG_FILE <- file.path(SAVE_DIR, paste0(JOB_ID, ".log"))
+LOG_FILE <- file.path(SAVE_DIR, paste0(RUN_ID, ".log"))
 log_con <- file(LOG_FILE, open = "wt")
 on.exit(tryCatch(close(log_con), error = function(e) NULL), add = TRUE)
 
@@ -244,6 +247,7 @@ log_elapsed <- function(phase, elapsed_sec, n_done = NULL, n_total = NULL) {
 }
 
 LOG_MEMORY <- FALSE
+SAVE_LIGHT <- tolower(Sys.getenv("PP_SAVE_LIGHT", "true")) %in% c("1", "true", "yes", "y")
 log_memory <- function(phase = "") {
   if (!LOG_MEMORY) return(invisible(NULL))
   g <- gc(verbose = FALSE)
@@ -317,6 +321,7 @@ log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
 log_msg("High-mu failure filter: enabled=", FILTER_HIGH_MU_FITS,
         " | mu_fail_multiplier=", MU_FAIL_MULTIPLIER)
+log_msg("Save mode: ", ifelse(SAVE_LIGHT, "LIGHT (trimmed traces)", "FULL (all objects)"))
 if (RUN_SEM_PILOT) {
   log_msg("SEM pilot: iters=", SEM_PILOT_ITERS,
           " | sims=", SEM_PILOT_SIMS,
@@ -596,9 +601,8 @@ sem_jobs <- lapply(seq_along(obs_data), function(i) {
 run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
   set.seed(job$seed)
   dat <- job$data
-  total_points <- sum(dat$location_process == "treated" & dat$t >= TREATMENT_TIME)
-  mu_start     <- total_points / TIME_INT
-  params_init  <- list(mu = mu_start, alpha = 0.1, beta = TIME_INT / 10, K = 0.1)
+  # Start treated SEM parameters at true control Hawkes parameters.
+  params_init  <- as.list(hawkes_par_1)
   local_tuning <- if (is.null(tuning)) {
     list(
       param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
@@ -1041,6 +1045,7 @@ ATE_env$ATE_N_TAU_SIMS <- ATE_N_TAU_SIMS
 ATE_env$ATE_N_TAU_I <- ATE_N_TAU_I
 ATE_env$ATE_MAXIT <- ATE_MAXIT
 ATE_env$ATE_CONTROL_FILTRATION_AWARE <- ATE_CONTROL_FILTRATION_AWARE
+ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_par_1
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -1059,6 +1064,7 @@ task_function <- function(task) {
         observed_data = task$x,
         filtration_data = task$filtration_data,
         control_filtration_aware = ATE_CONTROL_FILTRATION_AWARE,
+        treated_params_init = TRUE_CONTROL_HAWKES_INIT,
         treated_partitions = treated_partitions,
         hawkes_params = task$hawkes_params,
         n_sims = ATE_N_SIMS, n_tau_sims = ATE_N_TAU_SIMS, n_tau_i = ATE_N_TAU_I,
@@ -1397,6 +1403,27 @@ log_msg("Building plots ...")
 sim_study_plots <- list()
 boxplot_method_levels <- c("oracle", "naive", "best", "SEM_adaptive", "SEM_full")
 
+subset_core_methods <- function(df, label_col = "labelling") {
+  if (is.null(df) || nrow(df) < 1L || !(label_col %in% names(df))) return(df[0, , drop = FALSE])
+  out <- df %>% filter(.data[[label_col]] %in% c("oracle", "naive", "SEM_full"))
+  out[[label_col]] <- as.character(out[[label_col]])
+  out[[label_col]][out[[label_col]] == "SEM_full"] <- "SEM"
+  out[[label_col]] <- factor(out[[label_col]], levels = c("oracle", "naive", "SEM"))
+  out
+}
+
+strip_titles_from_plots <- function(x) {
+  if (inherits(x, "ggplot")) {
+    return(
+      x +
+        labs(title = NULL, subtitle = NULL) +
+        theme(plot.title = element_blank(), plot.subtitle = element_blank())
+    )
+  }
+  if (is.list(x)) return(lapply(x, strip_titles_from_plots))
+  x
+}
+
 # Point pattern plots (first realization)
 if (length(obs_data) > 0) {
   post_first <- as.data.frame(obs_data[[1]]) %>% filter(.data$t > TREATMENT_TIME)
@@ -1647,6 +1674,21 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     coord_cartesian(ylim = c(y_lo, y_hi))
+  results_df_core <- subset_core_methods(results_df, "labelling")
+  if (!is.null(results_df_core) && nrow(results_df_core) > 0) {
+    oracle_ate_core <- results_df_core %>% filter(.data$labelling == "oracle")
+    oracle_mean_ate_core <- if (nrow(oracle_ate_core) > 0) mean(oracle_ate_core$all_nothing_theory, na.rm = TRUE) else NA_real_
+    sim_study_plots$plot_all_nothing_ATE_core <- ggplot(results_df_core) +
+      geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_theory)) +
+      geom_hline(data = lines_data_ate, aes(yintercept = .data$all_nothing_ATE),
+        linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+      { if (!is.na(oracle_mean_ate_core)) geom_hline(yintercept = oracle_mean_ate_core, linetype = "dotted",
+        color = "blue", linewidth = 0.8) } +
+      labs(x = "Method", y = "All-Nothing ATE Estimate") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      coord_cartesian(ylim = c(y_lo, y_hi))
+  }
 }
 
 if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
@@ -1666,6 +1708,20 @@ if (!is.null(results_df_true_control) && nrow(results_df_true_control) > 0) {
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     coord_cartesian(ylim = c(y_lo_tc, y_hi_tc))
+  results_df_true_control_core <- subset_core_methods(results_df_true_control, "labelling")
+  if (!is.null(results_df_true_control_core) && nrow(results_df_true_control_core) > 0) {
+    oracle_tc_core <- results_df_true_control_core %>% filter(.data$labelling == "oracle")
+    oracle_tc_core_mean <- if (nrow(oracle_tc_core) > 0) mean(oracle_tc_core$all_nothing_true_control, na.rm = TRUE) else NA_real_
+    sim_study_plots$plot_all_nothing_ATE_true_control_core <- ggplot(results_df_true_control_core) +
+      geom_boxplot(aes(x = .data$labelling, y = .data$all_nothing_true_control)) +
+      geom_hline(yintercept = all_nothing_ATE, linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+      { if (!is.na(oracle_tc_core_mean)) geom_hline(yintercept = oracle_tc_core_mean, linetype = "dotted",
+        color = "blue", linewidth = 0.8) } +
+      labs(x = "Method", y = "All-Nothing ATE (True Control Fixed)") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      coord_cartesian(ylim = c(y_lo_tc, y_hi_tc))
+  }
 }
 
 # Points per tile (control vs treated theoretical means)
@@ -1715,6 +1771,25 @@ if (!is.null(ate_detail_rows) && nrow(ate_detail_rows) > 0) {
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
     coord_cartesian(ylim = c(0, max(true_means_pts$mean_ATE) * 1.05))
+  ate_detail_rows_core <- subset_core_methods(ate_detail_rows, "labelling")
+  if (!is.null(ate_detail_rows_core) && nrow(ate_detail_rows_core) > 0) {
+    oracle_means_pts_core <- ate_detail_rows_core %>%
+      filter(.data$labelling == "oracle") %>%
+      group_by(.data$method) %>%
+      summarize(mean_ATE = mean(.data$ATE_estim, na.rm = TRUE), .groups = "drop")
+    sim_study_plots$plot_points_per_tile_core <- ggplot(ate_detail_rows_core,
+      aes(x = .data$labelling, y = .data$ATE_estim, fill = .data$method)) +
+      geom_boxplot() +
+      facet_wrap(~ method) +
+      geom_hline(aes(yintercept = .data$mean_ATE, colour = "Oracle mean"), data = oracle_means_pts_core, linetype = "dashed", linewidth = 1) +
+      geom_hline(aes(yintercept = .data$mean_ATE, colour = "True mean"), data = true_means_pts, linetype = "dashed", linewidth = 1) +
+      scale_colour_manual(name = "Reference", values = c("Oracle mean" = "#0072B2", "True mean" = "#D55E00")) +
+      guides(fill = guide_legend(order = 1), colour = guide_legend(order = 2)) +
+      labs(x = "Method", y = "Points Per Tile") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
+      coord_cartesian(ylim = c(0, max(true_means_pts$mean_ATE) * 1.05))
+  }
 }
 
 # One-flip ATE boxplot
@@ -1731,6 +1806,20 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
     labs(x = "Method", y = "Single Flip ATE Estimate") +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  results_df_core_tau <- subset_core_methods(results_df, "labelling")
+  if (!is.null(results_df_core_tau) && nrow(results_df_core_tau) > 0) {
+    oracle_tau_core <- results_df_core_tau %>% filter(.data$labelling == "oracle")
+    oracle_mean_tau_core <- if (nrow(oracle_tau_core) > 0) mean(oracle_tau_core$tau_1_estim, na.rm = TRUE) else NA_real_
+    sim_study_plots$plot_one_flip_ATE_core <- ggplot(results_df_core_tau) +
+      geom_boxplot(aes(x = .data$labelling, y = .data$tau_1_estim)) +
+      geom_hline(data = lines_data_tau, aes(yintercept = .data$true_1_flip),
+        linetype = "solid", color = scales::hue_pal()(3)[1], linewidth = 1) +
+      { if (!is.na(oracle_mean_tau_core)) geom_hline(yintercept = oracle_mean_tau_core, linetype = "dotted",
+        color = "blue", linewidth = 0.8) } +
+      labs(x = "Method", y = "Single Flip ATE Estimate") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  }
 }
 
 # Draw helpers (grid.arrange objects don't survive save/load)
@@ -1846,6 +1935,9 @@ if (!is.null(sem_diagnostics_df_filtered) && nrow(sem_diagnostics_df_filtered) >
 
 log_msg("Plots: ", paste(names(sim_study_plots), collapse = ", "))
 
+# Publication-ready default: remove plot titles/subtitles.
+sim_study_plots <- strip_titles_from_plots(sim_study_plots)
+
 # ------------------------------------------------------------------
 # 13. Timing report and save results (including plots)
 # ------------------------------------------------------------------
@@ -1856,11 +1948,71 @@ timing_report <- list(
   end_iso       = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
   elapsed_sec   = elapsed_sec,
   elapsed_min   = round(elapsed_sec / 60, 2),
+  run_id        = RUN_ID,
   job_id        = Sys.getenv("SLURM_JOB_ID", NA_character_),
+  output_tag    = OUTPUT_TAG,
   n_cores       = N_CORES,
   sim_size      = SIM_SIZE,
   on_cluster    = ON_CLUSTER
 )
+
+slim_task_for_save <- function(task_obj) {
+  if (is.null(task_obj)) return(NULL)
+  list(
+    labelling_name = task_obj$labelling_name,
+    has_hawkes_params = !is.null(task_obj$hawkes_params),
+    n_post = if (!is.null(task_obj$x)) nrow(task_obj$x) else NA_integer_,
+    n_filtration = if (!is.null(task_obj$filtration_data)) nrow(task_obj$filtration_data) else NA_integer_
+  )
+}
+
+slim_result_for_save <- function(res_obj) {
+  if (is.null(res_obj)) return(NULL)
+  list(
+    all_nothing_theory = res_obj$all_nothing_theory,
+    tau_1_estim = res_obj$tau_1_estim,
+    ATE_total = res_obj$ATE_total,
+    ATE_treatment = res_obj$ATE_treatment,
+    ATE_spillover = res_obj$ATE_spillover,
+    ATE_naive = res_obj$ATE_naive,
+    control_pp = res_obj$control_pp,
+    treated_pp = res_obj$treated_pp
+  )
+}
+
+slim_em_result_for_save <- function(em_obj) {
+  if (is.null(em_obj)) return(NULL)
+  ad <- em_obj$adaptive
+  list(
+    hawkes_params_control = em_obj$hawkes_params_control,
+    hawkes_params_treated = em_obj$hawkes_params_treated,
+    time = em_obj$time,
+    adaptive_summary = list(
+      n_iter = if (!is.null(ad$accuracies)) length(ad$accuracies) else NA_integer_,
+      final_accuracy = if (!is.null(ad$accuracies) && length(ad$accuracies) > 0) tail(ad$accuracies, 1) else NA_real_,
+      final_metric = if (!is.null(ad$metrics) && length(ad$metrics) > 0) tail(ad$metrics, 1) else NA_real_,
+      final_avg_flips = if (!is.null(ad$average_flips) && length(ad$average_flips) > 0) tail(ad$average_flips, 1) else NA_real_,
+      final_acc_flips = if (!is.null(ad$max_metric_flips) && length(ad$max_metric_flips) > 0) tail(ad$max_metric_flips, 1) else NA_real_
+    )
+  )
+}
+
+results_flat_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(results_flat, slim_result_for_save)
+} else {
+  results_flat
+}
+tasks_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(tasks, slim_task_for_save)
+} else {
+  tasks
+}
+EM_results_save <- if (isTRUE(SAVE_LIGHT)) {
+  lapply(EM_results, slim_em_result_for_save)
+} else {
+  EM_results
+}
+sem_diagnostics_all_save <- if (isTRUE(SAVE_LIGHT)) NULL else sem_diagnostics_df
 
 sim_study_results <- list(
   results_df = results_df,
@@ -1872,8 +2024,8 @@ sim_study_results <- list(
   control_params_df = if (exists("control_params_df")) control_params_df else NULL,
   treated_params_df = if (exists("treated_params_df")) treated_params_df else NULL,
   sem_pilot_summary = sem_pilot_summary,
-  results_flat = results_flat,
-  tasks = tasks,
+  results_flat = results_flat_save,
+  tasks = tasks_save,
   ate_run_idx = ate_run_idx,
   skipped_explosive_tasks = skipped_explosive_tasks,
   high_mu_failed_idx = high_mu_failed_idx,
@@ -1884,9 +2036,9 @@ sim_study_results <- list(
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
-  EM_results = EM_results,
+  EM_results = EM_results_save,
   sem_diagnostics = sem_diagnostics_df_filtered,
-  sem_diagnostics_all = sem_diagnostics_df,
+  sem_diagnostics_all = sem_diagnostics_all_save,
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
@@ -1907,15 +2059,20 @@ sim_study_results <- list(
     SEM_PILOT_CORES = SEM_PILOT_CORES,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
+    OUTPUT_TAG = OUTPUT_TAG,
+    RUN_ID = RUN_ID,
+    SAVE_LIGHT = SAVE_LIGHT,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
     NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
   ),
   plots = sim_study_plots
 )
 
-outfile <- file.path(SAVE_DIR, paste0(JOB_ID, ".rds"))
+outfile <- file.path(SAVE_DIR, paste0(RUN_ID, ".rds"))
 saveRDS(sim_study_results, outfile)
+obj_mb <- as.numeric(object.size(sim_study_results)) / (1024^2)
+log_msg(sprintf("Saved object size: %.1f MB", obj_mb))
 log_msg("Results: ", outfile)
 log_msg("Log:     ", LOG_FILE)
-log_msg("=== DONE ", JOB_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
+log_msg("=== DONE ", RUN_ID, " | ", round(elapsed_sec, 1), "s (", round(elapsed_sec / 60, 1), " min) ===")
 close(log_con)

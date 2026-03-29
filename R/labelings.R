@@ -896,7 +896,20 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param proposal_update_cadence How often to regenerate proposals
 #' @param update_starting_data Logical; update starting data each iteration
 #' @param include_starting_data Logical; include current data in proposals
-#' @param optim_method One of "max", "mean", "truncated_mean"
+#' @param include_starting_first_n Integer; force-include starting data as a
+#'   candidate proposal for the first N inner iterations.
+#' @param max_relabel_step_frac Maximum fraction of post-treatment points that
+#'   can change labels in a single inner iteration.
+#' @param force_param_update_flip_frac Cumulative accepted-flip fraction
+#'   threshold that forces a parameter update once reached.
+#' @param optim_method One of "max", "sample_weighted", "mean", "truncated_mean"
+#' @param selection_temperature Positive temperature for likelihood-weighted
+#'   sampling when \code{optim_method = "sample_weighted"}. Lower values are
+#'   more concentrated near the maximum-likelihood proposal.
+#' @param change_factor_min_mult Lower bound multiplier for adaptive
+#'   \code{change_factor} relative to the initial value.
+#' @param change_factor_max_mult Upper bound multiplier for adaptive
+#'   \code{change_factor} relative to the initial value.
 #' @param state_spaces Optional precomputed state spaces
 #' @param metric_name Metric for selecting best labeling
 #' @param iter Number of iterations
@@ -922,7 +935,13 @@ em_style_labelling <- function(pp_data,
                                proposal_update_cadence = 1,
                                update_starting_data = TRUE,
                                include_starting_data = TRUE,
+                               include_starting_first_n = 50,
+                               max_relabel_step_frac = 1.0,
+                               force_param_update_flip_frac = 1.0,
                                optim_method = "max",
+                               selection_temperature = 0.15,
+                               change_factor_min_mult = 0.2,
+                               change_factor_max_mult = 2.0,
                                state_spaces = NULL,
                                metric_name = "post_likelihood",
                                iter = 100,
@@ -948,9 +967,35 @@ em_style_labelling <- function(pp_data,
   if (is.na(stagnation_trigger_every) || stagnation_trigger_every < 1L) {
     stop("stagnation_trigger_every must be an integer >= 1.")
   }
+  include_starting_first_n <- suppressWarnings(as.integer(include_starting_first_n))
+  if (!is.finite(include_starting_first_n) || is.na(include_starting_first_n) || include_starting_first_n < 0L) {
+    include_starting_first_n <- 0L
+  }
+  max_relabel_step_frac <- suppressWarnings(as.numeric(max_relabel_step_frac))
+  if (!is.finite(max_relabel_step_frac) || is.na(max_relabel_step_frac) || max_relabel_step_frac <= 0) {
+    max_relabel_step_frac <- 1.0
+  }
+  max_relabel_step_frac <- min(max_relabel_step_frac, 1.0)
+  force_param_update_flip_frac <- suppressWarnings(as.numeric(force_param_update_flip_frac))
+  if (!is.finite(force_param_update_flip_frac) || is.na(force_param_update_flip_frac) || force_param_update_flip_frac <= 0) {
+    force_param_update_flip_frac <- 1.0
+  }
+  force_param_update_flip_frac <- min(force_param_update_flip_frac, 1.0)
+  selection_temperature <- suppressWarnings(as.numeric(selection_temperature))
+  if (!is.finite(selection_temperature) || is.na(selection_temperature) || selection_temperature <= 0) {
+    selection_temperature <- 0.15
+  }
+  change_factor_min_mult <- suppressWarnings(as.numeric(change_factor_min_mult))
+  change_factor_max_mult <- suppressWarnings(as.numeric(change_factor_max_mult))
+  if (!is.finite(change_factor_min_mult) || is.na(change_factor_min_mult) || change_factor_min_mult <= 0) {
+    change_factor_min_mult <- 0.2
+  }
+  if (!is.finite(change_factor_max_mult) || is.na(change_factor_max_mult) || change_factor_max_mult < change_factor_min_mult) {
+    change_factor_max_mult <- max(2.0, change_factor_min_mult)
+  }
   # Keep adaptive proposal size changes moderate around the initial setting.
-  change_factor_min <- 0.2 * base_change_factor
-  change_factor_max <- 2.0 * base_change_factor
+  change_factor_min <- change_factor_min_mult * base_change_factor
+  change_factor_max <- change_factor_max_mult * base_change_factor
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
   hawkes_use_filtration_history <- if ("hawkes_use_filtration_history" %in% names(dots)) {
     isTRUE(dots$hawkes_use_filtration_history)
@@ -1035,11 +1080,71 @@ em_style_labelling <- function(pp_data,
   pre_data <- starting_data[is_pre, , drop = FALSE]
   post_data <- starting_data[!is_pre, , drop = FALSE]
   post_data <- post_data[order(post_data$t), , drop = FALSE]
+  n_post_total <- nrow(post_data)
+  max_flips_per_step <- max(1L, as.integer(ceiling(max_relabel_step_frac * max(1L, n_post_total))))
+  force_param_update_flip_n <- max(1L, as.integer(ceiling(force_param_update_flip_frac * max(1L, n_post_total))))
+  accepted_flips_cum <- 0L
+  next_forced_param_update_at <- force_param_update_flip_n
   pre_data$location_process <- "control"
   pre_data$inferred_process <- "control"
   history_window_start <- if (nrow(pre_data) > 0) min(pre_data$t) else time_window[1]
   history_window <- c(history_window_start, time_window[2])
   current_metric_cache <- NA_real_
+  select_pre_history_by_label <- function(label) {
+    if (nrow(pre_data) < 1L) return(pre_data[0, c("x", "y", "t"), drop = FALSE])
+    src <- if ("inferred_process" %in% names(pre_data)) pre_data$inferred_process else pre_data$location_process
+    out <- pre_data[src == label, c("x", "y", "t"), drop = FALSE]
+    out <- out[out$t < time_window[1], , drop = FALSE]
+    out[order(out$t), , drop = FALSE]
+  }
+  hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
+    if (nrow(post_realiz) < 1L) return(-Inf)
+    post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
+    p <- suppressWarnings(as.numeric(params_vec[c("mu", "alpha", "beta", "K")]))
+    names(p) <- c("mu", "alpha", "beta", "K")
+    if (any(!is.finite(p))) return(-Inf)
+    if (p[["mu"]] < 0 || p[["alpha"]] < 0 || p[["beta"]] <= 0 || p[["K"]] < 0 || p[["K"]] >= 1) return(-Inf)
+    if (is.null(pre_hist)) pre_hist <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
+    pre_hist <- pre_hist[pre_hist$t < time_window[1], c("x", "y", "t"), drop = FALSE]
+    pre_hist <- pre_hist[order(pre_hist$t), , drop = FALSE]
+    W_post <- if (!is.null(background_rate_var) && background_rate_var %in% names(post_realiz)) {
+      as.numeric(post_realiz[[background_rate_var]])
+    } else {
+      rep(1, nrow(post_realiz))
+    }
+    W_post[!is.finite(W_post)] <- 0
+    total_area <- spatstat.geom::area(statespace)
+    active_area <- total_area
+    if (!is.null(zero_background_region)) {
+      zero_area <- spatstat.geom::area(zero_background_region)
+      active_area <- max(1e-12, total_area - zero_area)
+      in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_background_region)
+      W_post[in_zero] <- 0
+    }
+    parent_x <- c(pre_hist$x, post_realiz$x)
+    parent_y <- c(pre_hist$y, post_realiz$y)
+    parent_t <- c(pre_hist$t, post_realiz$t)
+    loglik <- hawkes_loglik_inhom_filtration_cpp(
+      post_t = as.numeric(post_realiz$t),
+      post_x = as.numeric(post_realiz$x),
+      post_y = as.numeric(post_realiz$y),
+      W_val = as.numeric(W_post),
+      parent_t = as.numeric(parent_t),
+      parent_x = as.numeric(parent_x),
+      parent_y = as.numeric(parent_y),
+      mu = p[["mu"]],
+      alpha = p[["alpha"]],
+      beta = p[["beta"]],
+      K = p[["K"]],
+      areaS = active_area,
+      t_start = time_window[1],
+      t_end = time_window[2],
+      adjust_factor = 1.0,
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+    )
+    if (!is.finite(loglik)) return(-Inf)
+    loglik
+  }
 
   fits <- list()
   labelling_proposals <- list()
@@ -1118,8 +1223,9 @@ em_style_labelling <- function(pp_data,
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
     }
-    include_starting_this_iter <- isTRUE(include_starting_data) && !isTRUE(trigger_explore)
-    if (i != 1 && include_starting_this_iter) {
+    force_include_starting <- isTRUE(include_starting_data) && (i <= include_starting_first_n)
+    include_starting_this_iter <- (isTRUE(include_starting_data) && !isTRUE(trigger_explore)) || force_include_starting
+    if (include_starting_this_iter) {
       if (length(labelling_proposals) == 0) {
         labelling_proposals <- list()
       }
@@ -1192,37 +1298,41 @@ em_style_labelling <- function(pp_data,
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
       printed_metric_diag <- FALSE
+      pre_ctrl_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("control") else NULL
+      pre_treat_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("treated") else NULL
       eval_nonbiv <- function(realiz, ctrl_idx, treat_idx) {
         if (length(ctrl_idx) < 1L) return(-Inf)
-        control_lik <- loglik_fn(
-          params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_ctrl_all$active_area,
-                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
-        )
-
         if (length(treat_idx) < 1L) return(-Inf)
-        treat_lik <- loglik_fn(
-          params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_treat_all$active_area,
-                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
-        )
+        if (hawkes_use_filtration_history && !is_etas) {
+          control_lik <- hawkes_conditional_loglik(
+            params_vec = ctrl_params_vec,
+            post_realiz = realiz[ctrl_idx, , drop = FALSE],
+            zero_background_region = treated_state_space,
+            pre_hist = pre_ctrl_hist
+          )
+          treat_lik <- hawkes_conditional_loglik(
+            params_vec = treat_params_vec,
+            post_realiz = realiz[treat_idx, , drop = FALSE],
+            zero_background_region = control_state_space,
+            pre_hist = pre_treat_hist
+          )
+        } else {
+          control_lik <- loglik_fn(
+            params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = list(active_area = pc_ctrl_all$active_area,
+                           in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
+          )
+          treat_lik <- loglik_fn(
+            params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = list(active_area = pc_treat_all$active_area,
+                           in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
+          )
+        }
         if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
                       length(ctrl_idx), length(treat_idx), signif(control_lik, 6), signif(treat_lik, 6)))
-          cat(sprintf("    ctrl params: %s\n", paste(names(ctrl_params_vec), signif(ctrl_params_vec, 5), sep="=", collapse="  ")))
-          cat(sprintf("    treat params: %s\n", paste(names(treat_params_vec), signif(treat_params_vec, 5), sep="=", collapse="  ")))
-          cat(sprintf("    pc_ctrl active_area=%.1f  pc_treat active_area=%.1f\n",
-                      pc_ctrl_all$active_area, pc_treat_all$active_area))
-          cat(sprintf("    in_zero_bg ctrl: %d of %d TRUE  treat: %d of %d TRUE\n",
-                      sum(pc_ctrl_all$in_zero_bg_all[ctrl_idx]), length(ctrl_idx),
-                      sum(pc_treat_all$in_zero_bg_all[treat_idx]), length(treat_idx)))
-          ctrl_sub <- realiz[ctrl_idx, , drop = FALSE]
-          cat(sprintf("    ctrl W range: [%s, %s]  treat W range: [%s, %s]\n",
-                      signif(min(ctrl_sub$W, na.rm=TRUE), 4), signif(max(ctrl_sub$W, na.rm=TRUE), 4),
-                      signif(min(realiz[treat_idx, "W"], na.rm=TRUE), 4),
-                      signif(max(realiz[treat_idx, "W"], na.rm=TRUE), 4)))
           printed_metric_diag <<- TRUE
         }
         control_lik + treat_lik
@@ -1246,11 +1356,20 @@ em_style_labelling <- function(pp_data,
     if (metric_name == "post_likelihood_control") {
       metric <- vapply(labelling_proposals, function(y) {
         post_ctrl <- y[y$inferred_process == "control", ]
-        loglik_hawk_fast(
-          params = unlist(hawkes_params_control), realiz = post_ctrl,
-          windowT = time_window, windowS = statespace,
-          zero_background_region = treated_state_space, ...
-        )
+        if (hawkes_use_filtration_history && !is_etas && !is_biv_etas) {
+          hawkes_conditional_loglik(
+            params_vec = unlist(hawkes_params_control),
+            post_realiz = post_ctrl,
+            zero_background_region = treated_state_space,
+            pre_hist = select_pre_history_by_label("control")
+          )
+        } else {
+          loglik_hawk_fast(
+            params = unlist(hawkes_params_control), realiz = post_ctrl,
+            windowT = time_window, windowS = statespace,
+            zero_background_region = treated_state_space, ...
+          )
+        }
       }, numeric(1))
     }
     if (metric_name == "cheating") {
@@ -1260,33 +1379,64 @@ em_style_labelling <- function(pp_data,
       }, numeric(1))
     }
 
-    if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
+    sample_metric_idx <- function(metric_values, temp) {
+      vals <- as.numeric(metric_values)
+      finite_idx <- which(is.finite(vals))
+      if (length(finite_idx) < 1L) return(which.max(vals))
+      shifted <- (vals[finite_idx] - max(vals[finite_idx])) / temp
+      shifted <- pmax(shifted, -700) # avoid underflow warnings in exp()
+      w <- exp(shifted)
+      if (!all(is.finite(w)) || sum(w) <= 0) return(finite_idx[[which.max(vals[finite_idx])]])
+      finite_idx[[sample.int(length(finite_idx), size = 1L, prob = w)]]
+    }
+    if (identical(optim_method, "sample_weighted") && metric_name == "post_likelihood") {
+      best_metric_idx <- sample_metric_idx(metric, selection_temperature)
+      max_metric_labelling <- labelling_proposals[[best_metric_idx]]
+    } else if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
       tmp <- exp(metric[1] - metric[2])
       tmp <- runif(1) < min(tmp, 1)
       if (tmp) {
-        max_metric_labelling <- labelling_proposals[[which.max(metric)]]
+        best_metric_idx <- which.max(metric)
+        max_metric_labelling <- labelling_proposals[[best_metric_idx]]
       } else {
-        max_metric_labelling <- labelling_proposals[[length(labelling_proposals)]]
+        best_metric_idx <- length(labelling_proposals)
+        max_metric_labelling <- labelling_proposals[[best_metric_idx]]
       }
     } else {
-      max_metric_labelling <- labelling_proposals[[which.max(metric)]]
+      best_metric_idx <- which.max(metric)
+      max_metric_labelling <- labelling_proposals[[best_metric_idx]]
     }
-    best_metric_idx <- which.max(metric)
     t_lik <- proc.time()[3] - t_lik
     total_likelihood <- total_likelihood + t_lik
     if (verbose && sem_timing_verbose) {
       cat(sprintf("  [Iter %d/%d] likelihood evaluation done: %.2fs\n", i, iter, t_lik))
     }
 
+    proposed_best <- as.data.frame(max_metric_labelling)
+    accepted_labelling <- proposed_best
+    proposed_best_flips <- sum(post_data$inferred_process != proposed_best$inferred_process, na.rm = TRUE)
+    if (proposed_best_flips > max_flips_per_step) {
+      flip_idx <- which(post_data$inferred_process != proposed_best$inferred_process)
+      keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
+      accepted_labelling <- post_data
+      accepted_labelling$inferred_process[keep_idx] <- proposed_best$inferred_process[keep_idx]
+    }
+    max_diff <- sum(post_data$inferred_process != accepted_labelling$inferred_process, na.rm = TRUE)
+    average <- mean(flips_per_proposal)
+    accepted_flips_cum_next <- accepted_flips_cum + max_diff
+    force_param_update_due <- accepted_flips_cum_next >= next_forced_param_update_at
+    do_param_update <- FALSE
     if (!is.null(param_update_cadence)) {
-      if ((i %% param_update_cadence) == 0 | i == iter) {
+      do_param_update <- ((i %% param_update_cadence) == 0L) || i == iter || force_param_update_due
+    }
+    if (do_param_update) {
         t_param_start <- proc.time()[3]
         if (verbose) print("Updating Parameters")
         if (verbose && sem_timing_verbose) {
           cat(sprintf("  [Iter %d/%d] parameter update starting\n", i, iter))
         }
 
-        mml_post <- max_metric_labelling
+        mml_post <- accepted_labelling
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
@@ -1415,18 +1565,36 @@ em_style_labelling <- function(pp_data,
 
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_treated,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_treated,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = control_state_space, ...
+              )
+            }
           }
           optim_func_control <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_control,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = treated_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_control,
+                zero_background_region = treated_state_space,
+                pre_hist = select_pre_history_by_label("control")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_control,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = treated_state_space, ...
+              )
+            }
           }
           res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func_treat, "treated")
           fits[[i]] <- res_t$fit
@@ -1436,11 +1604,20 @@ em_style_labelling <- function(pp_data,
           control_par[[length(control_par) + 1]] <- res_c$par_list
         } else {
           optim_func <- function(params, ...) {
-            loglik_fn(
-              params = params, realiz = mml_post_treated,
-              windowT = time_window, windowS = statespace,
-              zero_background_region = control_state_space, ...
-            )
+            if (hawkes_use_filtration_history && !is_etas) {
+              hawkes_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else {
+              loglik_fn(
+                params = params, realiz = mml_post_treated,
+                windowT = time_window, windowS = statespace,
+                zero_background_region = control_state_space, ...
+              )
+            }
           }
           res_t <- profile_optim(treated_par[[length(treated_par)]], optim_func, "treated")
           fits[[i]] <- res_t$fit
@@ -1453,13 +1630,19 @@ em_style_labelling <- function(pp_data,
           print("treated:"); print(unlist(treated_par[[length(treated_par)]]))
           print("control:"); print(unlist(control_par[[length(control_par)]]))
           print(paste0("Updating model params on iteration ", i, " took ", signif(proc.time()[3] - t_param_start, 2)))
+          if (force_param_update_due) {
+            print(paste0("Forced parameter update: cumulative accepted flips reached ",
+                         accepted_flips_cum_next, " (next threshold=", next_forced_param_update_at, ")."))
+          }
         }
         current_metric_cache <- NA_real_
-      }
+        accepted_flips_cum <- accepted_flips_cum_next
+        while (accepted_flips_cum >= next_forced_param_update_at) {
+          next_forced_param_update_at <- next_forced_param_update_at + force_param_update_flip_n
+        }
+    } else {
+      accepted_flips_cum <- accepted_flips_cum_next
     }
-
-    max_diff <- flips_per_proposal[best_metric_idx]
-    average <- mean(flips_per_proposal)
 
     retained_starting <- isTRUE(max_diff == 0)
     if (retained_starting) {
@@ -1476,11 +1659,11 @@ em_style_labelling <- function(pp_data,
     change_factor_trace[i] <- current_change_factor
 
     if (update_starting_data) {
-      post_data <- as.data.frame(max_metric_labelling)
+      post_data <- as.data.frame(accepted_labelling)
       post_data <- post_data[order(post_data$t), , drop = FALSE]
     }
 
-    mml_post_acc <- max_metric_labelling
+    mml_post_acc <- accepted_labelling
     accuracy <- mean(mml_post_acc$inferred_process == mml_post_acc$process)
     accuracies[i] <- accuracy
     metric_vec[i] <- metric[best_metric_idx]

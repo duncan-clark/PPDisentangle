@@ -58,6 +58,10 @@ DATA_DIR <- file.path(SCRIPT_DIR,
 candidate_out_dirs <- unique(c(
   file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma")
 ))
+explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
+if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {
+  stop("OK_RESULTS_FILE was provided but does not exist: ", explicit_result_file)
+}
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_sensitivity(_[0-9]+)?\\.rds$",
@@ -110,7 +114,11 @@ newest_run_key <- run_latest_rows$run_key[which.max(run_latest_rows$mtime)]
 run_pool <- result_meta[result_meta$run_key == newest_run_key, , drop = FALSE]
 best_stage <- max(run_pool$stage_rank, na.rm = TRUE)
 stage_pool <- run_pool[run_pool$stage_rank == best_stage, , drop = FALSE]
-result_file <- stage_pool$file[which.max(stage_pool$mtime)]
+result_file <- if (nzchar(explicit_result_file)) {
+  normalizePath(explicit_result_file, winslash = "/", mustWork = TRUE)
+} else {
+  stage_pool$file[which.max(stage_pool$mtime)]
+}
 OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
@@ -121,6 +129,31 @@ if (is.null(cfg$ETAS_M0) || length(cfg$ETAS_M0) == 0) {
   cfg$ETAS_M0 <- meta_for_cfg$design$min_mag
 }
 if (is.null(cfg$FIXED_STRUCTURAL)) cfg$FIXED_STRUCTURAL <- list()
+
+expected_main_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_SEM_INNER_ITER", ""))))
+expected_sens_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_SENS_SEM_INNER_ITER", ""))))
+expected_boot_inner <- suppressWarnings(as.integer(trimws(Sys.getenv("OK_BOOT_SEM_INNER_ITER", ""))))
+if (is.finite(expected_main_inner) && !is.na(expected_main_inner) &&
+    !identical(as.integer(cfg$SEM_INNER_ITER), as.integer(expected_main_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$SEM_INNER_ITER=%s but OK_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$SEM_INNER_ITER), as.character(expected_main_inner), result_file
+  ))
+}
+if (is.finite(expected_sens_inner) && !is.na(expected_sens_inner) &&
+    !identical(as.integer(cfg$SENS_SEM_INNER_ITER), as.integer(expected_sens_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$SENS_SEM_INNER_ITER=%s but OK_SENS_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$SENS_SEM_INNER_ITER), as.character(expected_sens_inner), result_file
+  ))
+}
+if (is.finite(expected_boot_inner) && !is.na(expected_boot_inner) &&
+    !identical(as.integer(cfg$BOOT_SEM_INNER_ITER), as.integer(expected_boot_inner))) {
+  stop(sprintf(
+    "Report/results mismatch: cfg$BOOT_SEM_INNER_ITER=%s but OK_BOOT_SEM_INNER_ITER=%s (file: %s)",
+    as.character(cfg$BOOT_SEM_INNER_ITER), as.character(expected_boot_inner), result_file
+  ))
+}
 
 # Older pre-bootstrap RDS files omitted pp_data/counties/full config; rebuild from CSV.
 report_rebuilt <- NULL
@@ -199,7 +232,6 @@ fmt_scaled_num <- function(x, digits = 2) {
 has_fit <- function(fit_name) {
   !is.null(results[[fit_name]])
 }
-decode_enabled <- isTRUE(cfg$RUN_DECODE) || has_fit("fitG") || has_fit("fitH")
 
 coerce_pp_df <- function(obj) {
   if (is.null(obj)) return(data.frame())
@@ -637,11 +669,113 @@ if (is.null(cs) || length(cs) == 0) {
 
 ## SEM Configuration
 
-- **Outer iterations:** `r cfg$SEM_N_ITER`
-- **Inner iterations:** `r cfg$SEM_INNER_ITER`
-- **SEM inner proposals (`SEM_INNER_PROPS`):** `r if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS`
-- **SEM labellings (`SEM_N_LABELLINGS`):** `r cfg$SEM_N_LABELLINGS`
-- **Change factor:** `r cfg$SEM_CHANGE_FACTOR`
+Pilot tuning is optional and only targets the Model D SEM relabelling controls.
+When enabled, the code runs a parallel grid over:
+
+- `change_factor`
+- `change_factor_min_mult`
+- `change_factor_max_mult`
+- `selection_temperature`
+
+using a short inner SEM run (default 100 iterations), then ranks candidates by:
+high final SEM score and low tail accepted/average flips. The chosen settings are
+then used for the main county SEM fits in the run.
+
+```{r sem-final-config}
+#| label: sem-final-config
+fmt <- function(x, default = "N/A") {
+  if (length(x) < 1L || is.null(x) || all(is.na(x))) return(default)
+  as.character(x[[1]])
+}
+run_sem_inner_props <- if (!is.null(cfg$SEM_INNER_PROPS)) cfg$SEM_INNER_PROPS else cfg$SEM_N_LABELLINGS
+final_cfg_tbl <- data.frame(
+  Setting = c(
+    "Outer iterations",
+    "Inner iterations",
+    "SEM inner proposals",
+    "SEM labellings",
+    "Warm start fixed step",
+    "Selection method",
+    "Selection temperature",
+    "Change factor",
+    "Change-factor min multiplier",
+    "Change-factor max multiplier",
+    "Pilot enabled",
+    "Pilot inner iterations",
+    "Pilot cores",
+    "Pilot max combos"
+  ),
+  Value = c(
+    fmt(cfg$SEM_N_ITER),
+    fmt(cfg$SEM_INNER_ITER),
+    fmt(run_sem_inner_props),
+    fmt(cfg$SEM_N_LABELLINGS),
+    fmt(cfg$SEM_WARMSTART_FIXED),
+    fmt(cfg$SEM_OPTIM_METHOD),
+    fmt(cfg$SEM_SELECTION_TEMPERATURE),
+    fmt(cfg$SEM_CHANGE_FACTOR),
+    fmt(cfg$SEM_CHANGE_FACTOR_MIN_MULT),
+    fmt(cfg$SEM_CHANGE_FACTOR_MAX_MULT),
+    fmt(cfg$RUN_SEM_PILOT),
+    fmt(cfg$SEM_PILOT_INNER_ITER),
+    fmt(cfg$SEM_PILOT_CORES),
+    fmt(cfg$SEM_PILOT_MAX_COMBOS)
+  ),
+  stringsAsFactors = FALSE
+)
+kable(final_cfg_tbl, align = "lc", caption = "Final SEM settings used for this run.") |>
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+### SEM Pilot Tuning (Model D)
+
+```{r sem-pilot-summary}
+#| label: sem-pilot-summary
+pilot <- results$sem_pilot_tuning
+if (is.null(pilot) || isFALSE(pilot$enabled)) {
+  cat("Pilot tuning not run for this results file.\n")
+} else {
+  best <- pilot$best
+  cat(sprintf(
+    "Pilot ran with %s combos (inner iter = %s, cores = %s).\n\n",
+    if (!is.null(pilot$grid_size)) as.character(pilot$grid_size) else "N/A",
+    if (!is.null(pilot$inner_iter)) as.character(pilot$inner_iter) else "N/A",
+    if (!is.null(pilot$cores)) as.character(pilot$cores) else "N/A"
+  ))
+  if (!is.null(best) && nrow(best) > 0) {
+    cat(sprintf(
+      "Selected settings from pilot: change_factor = %.4f, min_mult = %.3f, max_mult = %.3f, temperature = %.3f\n\n",
+      as.numeric(best$change_factor[[1]]),
+      as.numeric(best$min_mult[[1]]),
+      as.numeric(best$max_mult[[1]]),
+      as.numeric(best$temperature[[1]])
+    ))
+  } else {
+    cat("No successful pilot candidate was selected; defaults were kept.\n\n")
+  }
+  if (!is.null(pilot$results) && nrow(pilot$results) > 0) {
+    top_tbl <- pilot$results
+    if ("pilot_score" %in% names(top_tbl)) {
+      top_tbl <- top_tbl[order(top_tbl$pilot_score, -top_tbl$final_metric), , drop = FALSE]
+    } else {
+      top_tbl <- top_tbl[order(-top_tbl$final_metric), , drop = FALSE]
+    }
+    top_tbl <- head(top_tbl, 5)
+    keep_cols <- intersect(
+      c("change_factor", "min_mult", "max_mult", "temperature", "final_metric",
+        "mean_avg_flips_tail", "mean_acc_flips_tail", "pilot_score"),
+      names(top_tbl)
+    )
+    top_tbl <- top_tbl[, keep_cols, drop = FALSE]
+    names(top_tbl) <- c(
+      "change_factor", "min_mult", "max_mult", "temperature", "final_metric",
+      "tail_avg_flips", "tail_acc_flips", "pilot_score"
+    )[seq_len(ncol(top_tbl))]
+    kable(top_tbl, digits = 4, caption = "Top pilot candidates (Model D).") |>
+      kable_styling(bootstrap_options = "striped", full_width = FALSE)
+  }
+}
+```
 
 # Results — County Partition
 
@@ -663,8 +797,8 @@ fit_E_obj <- get_fit_by_letter("E")
 fit_F_obj <- get_fit_by_letter("F")
 fit_G_obj <- get_fit_by_letter("G")
 fit_H_obj <- get_fit_by_letter("H")
-fit_I_obj <- get_fit_by_letter("I", "fitG")
-fit_J_obj <- get_fit_by_letter("J", "fitH")
+fit_I_obj <- get_fit_by_letter("I", "fitI")
+fit_J_obj <- get_fit_by_letter("J", "fitJ")
 
 A_par <- if (!is.null(fit_A_obj)) fit_A_obj$params else NULL
 B_par <- if (!is.null(fit_B_obj)) fit_B_obj$params else NULL
@@ -677,27 +811,96 @@ H_par <- if (!is.null(fit_H_obj)) fit_H_obj$params else NULL
 I_par <- if (!is.null(fit_I_obj)) fit_I_obj$params else NULL
 J_par <- if (!is.null(fit_J_obj)) fit_J_obj$params else NULL
 
-bc <- function(par, p) if (p=="mu") par[["mu_0"]] else par[[paste0(p,"_00")]]
-bt <- function(par, p) if (p=="mu") par[["mu_1"]] else par[[paste0(p,"_11")]]
+scalar_num_or_na <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) < 1L) return(NA_real_)
+  v <- v[[1]]
+  if (is.finite(v)) v else NA_real_
+}
+
+bc <- function(par, p) {
+  if (is.null(par)) return(NA_real_)
+  if (is.list(par) && !is.null(par$control)) {
+    return(scalar_num_or_na(par$control[[p]]))
+  }
+  if (p == "mu") {
+    v <- scalar_num_or_na(par[["mu_0"]])
+    if (is.finite(v)) return(v)
+    v <- scalar_num_or_na(par[["mu"]])
+    if (is.finite(v)) return(v)
+  }
+  v <- scalar_num_or_na(par[[paste0(p, "_00")]])
+  if (is.finite(v)) return(v)
+  scalar_num_or_na(par[[p]])
+}
+bt <- function(par, p) {
+  if (is.null(par)) return(NA_real_)
+  if (is.list(par) && !is.null(par$treated)) {
+    return(scalar_num_or_na(par$treated[[p]]))
+  }
+  if (p == "mu") {
+    v <- scalar_num_or_na(par[["mu_1"]])
+    if (is.finite(v)) return(v)
+    v <- scalar_num_or_na(par[["mu"]])
+    if (is.finite(v)) return(v)
+  }
+  v <- scalar_num_or_na(par[[paste0(p, "_11")]])
+  if (is.finite(v)) return(v)
+  scalar_num_or_na(par[[p]])
+}
 safe_bc <- function(par, p) if (is.null(par)) NA_real_ else bc(par, p)
 safe_bt <- function(par, p) if (is.null(par)) NA_real_ else bt(par, p)
 
-etas_trigger_means <- function(par, beta_gr = NULL) {
+etas_trigger_means <- function(par, beta_gr = NULL, t_trunc_days = NULL) {
   if (is.null(par)) {
-    return(list(mean_time = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
+    return(list(mean_time = NA_real_, mean_time_trunc = NA_real_, mean_distance = NA_real_, mean_scale = NA_real_))
   }
-  c0 <- suppressWarnings(as.numeric(par[["c"]]))
-  p0 <- suppressWarnings(as.numeric(par[["p"]]))
-  D0 <- suppressWarnings(as.numeric(par[["D"]]))
-  g0 <- suppressWarnings(as.numeric(par[["gamma"]]))
-  q0 <- suppressWarnings(as.numeric(par[["q"]]))
-  b0 <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
-  if (length(b0) < 1L || !is.finite(b0[[1]]) || is.na(b0[[1]]) || b0[[1]] <= 0) b0 <- 2.3 else b0 <- b0[[1]]
+  c0 <- scalar_num_or_na(par[["c"]])
+  p0 <- scalar_num_or_na(par[["p"]])
+  D0 <- scalar_num_or_na(par[["D"]])
+  g0 <- scalar_num_or_na(par[["gamma"]])
+  q0 <- scalar_num_or_na(par[["q"]])
+  ttr <- scalar_num_or_na(t_trunc_days)
+  b0_vec <- suppressWarnings(as.numeric(unlist(beta_gr, use.names = FALSE)))
+  b0 <- if (length(b0_vec) < 1L) NA_real_ else scalar_num_or_na(b0_vec[[1]])
+  if (!is.finite(b0) || b0 <= 0) b0 <- 2.3
 
   mean_time <- if (is.finite(c0) && is.finite(p0) && !is.na(c0) && !is.na(p0) && p0 > 2) {
     c0 / (p0 - 2)
   } else {
     Inf
+  }
+  mean_time_trunc <- NA_real_
+  if (is.finite(c0) && is.finite(p0) && !is.na(c0) && !is.na(p0) &&
+      c0 > 0 && p0 > 1 && is.finite(ttr) && !is.na(ttr) && ttr > 0) {
+    u <- 1 + (ttr / c0)
+    if (p0 > 1 && p0 != 2) {
+      i0 <- (c0 / (p0 - 1)) * (1 - u^(1 - p0))
+      i1 <- c0^2 * ((u^(2 - p0) - 1) / (2 - p0) - (u^(1 - p0) - 1) / (1 - p0))
+      if (is.finite(i0) && i0 > 0 && is.finite(i1)) {
+        mean_time_trunc <- i1 / i0
+      }
+    } else if (identical(round(p0, 12), 2.0)) {
+      # Closed form limit at p = 2.
+      i0 <- c0 * (1 - 1 / u)
+      i1 <- c0^2 * (log(u) + (1 / u) - 1)
+      if (is.finite(i0) && i0 > 0 && is.finite(i1)) {
+        mean_time_trunc <- i1 / i0
+      }
+    }
+    if (!is.finite(mean_time_trunc) || is.na(mean_time_trunc)) {
+      num <- tryCatch(
+        integrate(function(tt) tt * (1 + tt / c0)^(-p0), lower = 0, upper = ttr)$value,
+        error = function(e) NA_real_
+      )
+      den <- tryCatch(
+        integrate(function(tt) (1 + tt / c0)^(-p0), lower = 0, upper = ttr)$value,
+        error = function(e) NA_real_
+      )
+      if (is.finite(num) && is.finite(den) && den > 0) {
+        mean_time_trunc <- num / den
+      }
+    }
   }
 
   mean_scale <- if (is.finite(D0) && is.finite(g0) && !is.na(D0) && !is.na(g0)) {
@@ -715,7 +918,7 @@ etas_trigger_means <- function(par, beta_gr = NULL) {
     NA_real_
   }
 
-  list(mean_time = mean_time, mean_distance = mean_distance, mean_scale = mean_scale)
+  list(mean_time = mean_time, mean_time_trunc = mean_time_trunc, mean_distance = mean_distance, mean_scale = mean_scale)
 }
 
 model_defs <- list(
@@ -727,8 +930,8 @@ model_defs <- list(
   list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (all-free)", long = "F: SEM+KDE (all-free)", par = F_par),
   list(id = "G", fit = "fits_named$G", label = "G: Naive+KDE (struct-fixed)", long = "G: Naive+KDE (struct-fixed)", par = G_par),
   list(id = "H", fit = "fits_named$H", label = "H: SEM+KDE (struct-fixed)", long = "H: SEM+KDE (struct-fixed)", par = H_par),
-  list(id = "I", fit = "fits_named$I", label = "I: Decode", long = "I: Decode Biv", par = I_par),
-  list(id = "J", fit = "fits_named$J", label = "J: Decode+KDE", long = "J: Decode+KDE", par = J_par)
+  list(id = "I", fit = "fits_named$I", label = "I: Naive univariate+KDE", long = "I: Naive Univ+KDE", par = I_par),
+  list(id = "J", fit = "fits_named$J", label = "J: SEM univariate+KDE", long = "J: SEM Univ+KDE", par = J_par)
 )
 param_models <- Filter(function(m) !is.null(m$par), model_defs)
 
@@ -741,8 +944,8 @@ fit_fill_colors <- c(
   "F: SEM Biv+KDE (all-free)" = "#80b1d3",
   "G: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
   "H: SEM Biv+KDE (struct-fixed)" = "#b3de69",
-  "I: Decode Bivariate" = "#66c2a5",
-  "J: Decode Biv+KDE" = "#ffd92f"
+  "I: Naive Univ+KDE" = "#66c2a5",
+  "J: SEM Univ+KDE" = "#ffd92f"
 )
 fit_line_colors <- c(
   "A: Naive Bivariate" = "#d95f02",
@@ -753,8 +956,8 @@ fit_line_colors <- c(
   "F: SEM Biv+KDE (all-free)" = "#3182bd",
   "G: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
   "H: SEM Biv+KDE (struct-fixed)" = "#33a02c",
-  "I: Decode Bivariate" = "#1b9e77",
-  "J: Decode Biv+KDE" = "#b8860b"
+  "I: Naive Univ+KDE" = "#1b9e77",
+  "J: SEM Univ+KDE" = "#b8860b"
 )
 
 get_sem_metric_trace <- function(fit_obj) {
@@ -786,11 +989,12 @@ get_sem_metric_trace <- function(fit_obj) {
 # Lightweight wiring audit to ensure report labels map to the intended objects.
 build_fit_wiring_audit <- function(results_obj) {
   defs <- data.frame(
-    Label = c("A", "B", "C", "D", "E", "F", "G", "H"),
+    Label = c("A", "B", "C", "D", "E", "F", "G", "H", "I", "J"),
     `Result key` = c("fits_named$A", "fits_named$B", "fits_named$C", "fits_named$D",
-                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H"),
-    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
-    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
+                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H",
+                     "fits_named$I", "fits_named$J"),
+    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
+    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -879,8 +1083,13 @@ cn <- c("A_01","alpha_m_01","A_10","alpha_m_10")
 cl <- c("$A_{01}$ (treat$\\to$ctrl)","$\\alpha_{m,01}$",
         "$A_{10}$ (ctrl$\\to$treat)","$\\alpha_{m,10}$")
 cross_tbl <- data.frame(Parameter = cl)
+safe_cross <- function(par, nm) {
+  if (is.null(par)) return(NA_real_)
+  if (is.list(par) && !is.null(par[[nm]])) return(scalar_num_or_na(par[[nm]]))
+  scalar_num_or_na(par[[nm]])
+}
 for (m in param_models) {
-  cross_tbl[[m$id]] <- sapply(cn, function(nm) m$par[[nm]])
+  cross_tbl[[m$id]] <- sapply(cn, function(nm) safe_cross(m$par, nm))
 }
 rownames(cross_tbl) <- NULL
 kable(cross_tbl, digits = 4, escape = FALSE,
@@ -922,70 +1131,88 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "SEM label flips per relabelling iteration for all county SEM fits (raw and smoothed traces)."
+#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration (county SEM fits)."
 #| fig-height: 4
-build_flip_df <- function(avg_flips, max_flips) {
-  if (is.null(avg_flips) || is.null(max_flips)) return(NULL)
-  n <- min(length(avg_flips), length(max_flips))
-  if (n == 0) return(NULL)
-  df <- data.frame(
-    iteration = seq_len(n),
-    average_flips = as.numeric(avg_flips[seq_len(n)]),
-    max_metric_flips = as.numeric(max_flips[seq_len(n)])
-  )
-  # Add smooth trend overlays so directional convergence is easier to inspect.
-  if (n >= 5) {
-    avg_low <- stats::lowess(df$iteration, df$average_flips, f = 0.15, iter = 1)
-    max_low <- stats::lowess(df$iteration, df$max_metric_flips, f = 0.15, iter = 1)
-    df$average_flips_smooth <- stats::approx(avg_low$x, avg_low$y, xout = df$iteration, rule = 2)$y
-    df$max_metric_flips_smooth <- stats::approx(max_low$x, max_low$y, xout = df$iteration, rule = 2)$y
-  } else {
-    df$average_flips_smooth <- df$average_flips
-    df$max_metric_flips_smooth <- df$max_metric_flips
+extract_selected_confusion_trace <- function(sem_obj, model_label) {
+  ad <- sem_obj$fit$adaptive
+  if (is.null(ad) || is.null(ad$class_results) || is.null(ad$all_metrics)) return(NULL)
+  if (length(ad$class_results) < 1 || length(ad$all_metrics) < 1) return(NULL)
+
+  offset <- 0L
+  rows <- list()
+  for (i in seq_along(ad$all_metrics)) {
+    metric_i <- ad$all_metrics[[i]]
+    n_i <- length(metric_i)
+    if (n_i < 1L) next
+    best_j <- which.max(as.numeric(metric_i))
+    class_idx <- offset + best_j
+    if (class_idx > length(ad$class_results)) break
+    cm <- ad$class_results[[class_idx]]
+    if (is.null(cm)) {
+      offset <- offset + n_i
+      next
+    }
+    rows[[length(rows) + 1L]] <- data.frame(
+      iteration = i,
+      Model = model_label,
+      control_as_control = as.numeric(if (!is.null(cm$control_as_control)) cm$control_as_control else 0),
+      control_as_treated = as.numeric(if (!is.null(cm$control_as_treated)) cm$control_as_treated else 0),
+      treated_as_control = as.numeric(if (!is.null(cm$treated_as_control)) cm$treated_as_control else 0),
+      treated_as_treated = as.numeric(if (!is.null(cm$treated_as_treated)) cm$treated_as_treated else 0)
+    )
+    offset <- offset + n_i
   }
-  df
+  if (length(rows) < 1L) return(NULL)
+  do.call(rbind, rows)
 }
 
-plot_flip_df <- function(df, ttl) {
-  if (is.null(df) || nrow(df) == 0) return(NULL)
-  ggplot(df, aes(x = iteration)) +
-    geom_line(aes(y = average_flips, color = "Average flips"), alpha = 0.45) +
-    geom_line(aes(y = max_metric_flips, color = "Max metric flips"), alpha = 0.45) +
-    geom_line(aes(y = average_flips_smooth, color = "Average flips (smoothed)"), linewidth = 1.05) +
-    geom_line(aes(y = max_metric_flips_smooth, color = "Max metric flips (smoothed)"), linewidth = 1.05) +
-    geom_hline(yintercept = 1, linetype = "dashed") +
-    labs(title = ttl, x = "Iteration", y = "Number of flips") +
-    theme_minimal() +
-    scale_color_manual(name = "Metric", values = c(
-      "Average flips" = "#6baed6",
-      "Max metric flips" = "#fb6a4a",
-      "Average flips (smoothed)" = "#08519c",
-      "Max metric flips (smoothed)" = "#a50f15"
-    ))
-}
-
-plots <- list()
+trace_rows <- list()
 sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
   list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
   list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)")
+  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, lab = "J: SEM Univ+KDE")
 )
 for (nm in sem_fit_convergence) {
-  if (!is.null(nm$obj) && !is.null(nm$obj$adaptive)) {
-    df <- build_flip_df(nm$obj$adaptive$average_flips, nm$obj$adaptive$max_metric_flips)
-    p <- plot_flip_df(df, nm$lab)
-    if (!is.null(p)) plots[[length(plots)+1]] <- p
-  }
+  if (is.null(nm$obj) || is.null(nm$obj$adaptive)) next
+  trace_df <- extract_selected_confusion_trace(
+    list(fit = nm$obj),
+    nm$lab
+  )
+  if (!is.null(trace_df) && nrow(trace_df) > 0) {
+    trace_rows[[length(trace_rows) + 1L]] <- trace_df
+  } 
 }
-if (length(plots) >= 2) {
-  ncol_use <- if (length(plots) >= 4) 2 else length(plots)
-  do.call(gridExtra::grid.arrange, c(plots, ncol = ncol_use))
-} else if (length(plots) == 1) {
-  print(plots[[1]])
+
+if (length(trace_rows) > 0) {
+  trace_df <- do.call(rbind, trace_rows)
+  trace_long <- tidyr::pivot_longer(
+    trace_df,
+    cols = c(control_as_control, control_as_treated, treated_as_control, treated_as_treated),
+    names_to = "entry",
+    values_to = "count"
+  )
+  trace_long$entry <- factor(
+    trace_long$entry,
+    levels = c("control_as_control", "control_as_treated", "treated_as_control", "treated_as_treated"),
+    labels = c("Control -> Control", "Control -> Treated", "Treated -> Control", "Treated -> Treated")
+  )
+  ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
+    scale_color_manual(name = "Confusion entry", values = c(
+      "Control -> Control" = "#1f78b4",
+      "Control -> Treated" = "#e31a1c",
+      "Treated -> Control" = "#ff7f00",
+      "Treated -> Treated" = "#33a02c"
+    )) +
+    labs(x = "Iteration", y = "Count") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
 } else {
   plot.new()
-  text(0.5, 0.5, "No SEM flip traces found for county SEM fits (B/D/F/H).")
+  text(0.5, 0.5, "No SEM confusion-matrix trace found for county SEM fits (B/D/F/H/J).")
 }
 ```
 
@@ -998,7 +1225,8 @@ for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)")
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   if (!is.null(tr) && length(tr) > 0) {
@@ -1036,7 +1264,8 @@ if (length(sem_metric_rows) > 0) {
       "B: SEM Biv" = "#6a3d9a",
       "D: SEM Biv+KDE (ctrl-fixed)" = "#e31a1c",
       "F: SEM Biv+KDE (all-free)" = "#1f78b4",
-      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00"
+      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00",
+      "J: SEM Univ+KDE" = "#b8860b"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     facet_wrap(~Model, scales = "free_y") +
@@ -1048,73 +1277,56 @@ if (length(sem_metric_rows) > 0) {
 }
 ```
 
-```{r fig-selected-loglik}
-#| label: fig-selected-loglik
-#| fig-cap: "Decode selected log-likelihood progression across relabelling iterations (when Decode models are present)."
+```{r fig-sem-cumulative-flips}
+#| label: fig-sem-cumulative-flips
+#| fig-cap: "Per-iteration SEM label flips by relabelling iteration for county SEM fits (faceted by model)."
 #| fig-height: 5
-metric_rows <- list()
-if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode) && !is.null(fit_I_obj$decode$trace$objective)) {
-  metric_rows[[length(metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(fit_I_obj$decode$trace$objective),
-    Objective = as.numeric(fit_I_obj$decode$trace$objective),
-    Model = "I: Decode Biv"
+flip_rows <- list()
+for (info in list(
+  list(obj = fit_B_obj, lab = "B: SEM Biv"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
+)) {
+  ad <- if (!is.null(info$obj)) info$obj$fit$adaptive else NULL
+  if (is.null(ad) || is.null(ad$average_flips) || is.null(ad$max_metric_flips)) next
+  n <- min(length(ad$average_flips), length(ad$max_metric_flips))
+  if (n < 1) next
+  tmp <- data.frame(
+    Iteration = seq_len(n),
+    Model = info$lab,
+    AverageFlips = as.numeric(ad$average_flips[seq_len(n)]),
+    AcceptedFlips = as.numeric(ad$max_metric_flips[seq_len(n)])
   )
+  flip_rows[[length(flip_rows) + 1]] <- tmp
 }
-if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode) && !is.null(fit_J_obj$decode$trace$objective)) {
-  metric_rows[[length(metric_rows) + 1]] <- data.frame(
-    Iteration = seq_along(fit_J_obj$decode$trace$objective),
-    Objective = as.numeric(fit_J_obj$decode$trace$objective),
-    Model = "J: Decode Biv+KDE"
+if (length(flip_rows) > 0) {
+  flip_df <- do.call(rbind, flip_rows)
+  flip_df <- flip_df |>
+    tidyr::pivot_longer(
+      cols = c(AverageFlips, AcceptedFlips),
+      names_to = "Metric",
+      values_to = "Flips"
+    )
+  flip_df$Metric <- factor(
+    flip_df$Metric,
+    levels = c("AverageFlips", "AcceptedFlips"),
+    labels = c("Average flips", "Accepted flips")
   )
-}
-if (length(metric_rows) > 0) {
-  metric_df <- do.call(rbind, metric_rows)
-  metric_df <- metric_df[is.finite(metric_df$Objective), , drop = FALSE]
-  metric_last <- metric_df |>
-    dplyr::group_by(.data$Model) |>
-    dplyr::filter(.data$Iteration == max(.data$Iteration, na.rm = TRUE)) |>
-    dplyr::slice_tail(n = 1) |>
-    dplyr::ungroup() |>
-    dplyr::mutate(lbl = sprintf("final = %.2f", .data$Objective))
-  ggplot(metric_df, aes(x = Iteration, y = Objective, colour = Model)) +
-    geom_line(linewidth = 0.8, alpha = 0.9) +
-    geom_text(
-      data = metric_last,
-      aes(x = Inf, y = -Inf, label = lbl),
-      inherit.aes = FALSE,
-      hjust = 1.05, vjust = -0.4, size = 3.2, colour = "black"
-    ) +
+  ggplot(flip_df, aes(x = Iteration, y = Flips, colour = Metric)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
     scale_colour_manual(values = c(
-      "I: Decode Biv" = "#1b9e77",
-      "J: Decode Biv+KDE" = "#b8860b"
+      "Average flips" = "#08519c",
+      "Accepted flips" = "#a50f15"
     )) +
-    labs(x = "Iteration", y = "Selected objective (log-likelihood scale)") +
-    facet_wrap(~Model, scales = "free_y") +
+    labs(x = "Adaptive SEM iteration", y = "Flips per iteration") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "none")
-}
-```
-
-```{r fig-decode-flips}
-#| label: fig-decode-flips
-#| fig-cap: "Decode relabelling totals (county models)."
-decode_counts <- data.frame(
-  Model = c("I: Decode Bivariate", "J: Decode Biv+KDE"),
-  Flips = c(
-    if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode$n_flips)) fit_I_obj$decode$n_flips else NA_real_,
-    if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode$n_flips)) fit_J_obj$decode$n_flips else NA_real_
-  )
-)
-decode_counts <- decode_counts[is.finite(decode_counts$Flips), , drop = FALSE]
-if (nrow(decode_counts) > 0) {
-  ggplot(decode_counts, aes(x = Model, y = Flips, fill = Model)) +
-    geom_col(width = 0.6, alpha = 0.9) +
-    scale_fill_manual(values = c("I: Decode Bivariate" = "#66c2a5",
-                                 "J: Decode Biv+KDE" = "#ffd92f")) +
-    labs(x = NULL, y = "Number of relabelled points") +
-    theme_minimal(base_size = 12) +
-    theme(legend.position = "none",
-          axis.text.x = element_text(angle = 20, hjust = 1))
+    theme(legend.position = "top")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No SEM flip traces found in this results file.")
 }
 ```
 
@@ -1127,30 +1339,11 @@ for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv", method = "SEM"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)", method = "SEM"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)", method = "SEM"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM")
+  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE", method = "SEM")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   tr <- as.numeric(tr)
-  tr <- tr[is.finite(tr)]
-  if (length(tr) > 0) {
-    final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
-      Model = info$lab,
-      Method = info$method,
-      Iterations = length(tr),
-      Final_Objective = tail(tr, 1),
-      stringsAsFactors = FALSE
-    )
-  }
-}
-
-for (info in list(
-  list(obj = fit_I_obj, lab = "I: Decode Biv", method = "Decode"),
-  list(obj = fit_J_obj, lab = "J: Decode Biv+KDE", method = "Decode")
-)) {
-  tr <- NULL
-  if (!is.null(info$obj) && !is.null(info$obj$decode) && !is.null(info$obj$decode$trace$objective)) {
-    tr <- as.numeric(info$obj$decode$trace$objective)
-  }
   tr <- tr[is.finite(tr)]
   if (length(tr) > 0) {
     final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
@@ -1198,8 +1391,12 @@ cm_D <- build_cm(if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, "B")
 cm_F <- build_cm(if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, "D")
 cm_H <- build_cm(if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, "F")
 cm_K <- build_cm(if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, "H")
-cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(fit_I_obj$decode)) fit_I_obj$decode$labelling else NULL)
-cm_J <- build_cm_from_labelling(if (!is.null(fit_J_obj) && !is.null(fit_J_obj$decode)) fit_J_obj$decode$labelling else NULL)
+cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(results$pp_data) && !is.null(results$pp_data$pp_post)) {
+  tmp <- coerce_pp_df(results$pp_data$pp_post)
+  if (!is.null(tmp$location_process)) tmp$inferred_process <- tmp$location_process
+  tmp
+} else NULL)
+cm_J <- build_cm(if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, "J")
 ```
 
 ### Fit B — SEM Bivariate ETAS
@@ -1282,7 +1479,7 @@ if (!is.null(cm_K)) {
 }
 ```
 
-### Fit I — Decode Bivariate ETAS
+### Fit I — Naive Univariate ETAS + KDE
 
 ```{r tbl-cm-G}
 #| label: tbl-cm-G
@@ -1294,7 +1491,7 @@ if (!is.null(cm_G)) {
     cm_display_G[rn, cn] <- paste0(cm_G[rn, cn], "  (", cm_G_pct[rn, cn], "%)")
   }
   kable(cm_display_G,
-        caption = paste0("Fit I: Location vs Decode-inferred label (n = ", n_post_G,
+        caption = paste0("Fit I: Location vs inferred label (naive baseline, n = ", n_post_G,
                          " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
@@ -1302,7 +1499,7 @@ if (!is.null(cm_G)) {
 }
 ```
 
-### Fit J — Decode Bivariate + KDE Background
+### Fit J — SEM Univariate ETAS + KDE
 
 ```{r tbl-cm-H}
 #| label: tbl-cm-H
@@ -1314,7 +1511,7 @@ if (!is.null(cm_J)) {
     cm_display_H[rn, cn] <- paste0(cm_J[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
   }
   kable(cm_display_H,
-        caption = paste0("Fit J: Location vs Decode-inferred label (n = ", n_post_H,
+        caption = paste0("Fit J: Location vs SEM-inferred label (n = ", n_post_H,
                          " post-treatment events)."),
         align = "cc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
@@ -1331,8 +1528,8 @@ for (info in list(list(cm = cm_D, lab = "B: SEM Bivariate"),
                   list(cm = cm_F, lab = "D: SEM Bivariate+KDE (ctrl-fixed)"),
                   list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"),
                   list(cm = cm_K, lab = "H: SEM Bivariate+KDE (struct-fixed)"),
-                  list(cm = cm_G, lab = "I: Decode Bivariate"),
-                  list(cm = cm_J, lab = "J: Decode Biv+KDE"))) {
+                  list(cm = cm_G, lab = "I: Naive Univ+KDE"),
+                  list(cm = cm_J, lab = "J: SEM Univ+KDE"))) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
@@ -1363,7 +1560,7 @@ if (length(sum_rows) > 0) {
 diag_rows <- list()
 for (fit_info in model_defs) {
   if (is.null(fit_info$par)) next
-  m <- etas_trigger_means(fit_info$par, cfg$BETA_GR)
+  m <- etas_trigger_means(fit_info$par, cfg$BETA_GR, cfg$SEM_T_TRUNC_DAYS)
   for (proc in c("Control", "Treated")) {
     diag_rows[[length(diag_rows) + 1]] <- data.frame(
       Model = fit_info$long,
@@ -1372,6 +1569,15 @@ for (fit_info in model_defs) {
       `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
       check.names = FALSE
     )
+    if (is.finite(m$mean_time_trunc) && !is.na(m$mean_time_trunc)) {
+      diag_rows[[length(diag_rows) + 1]] <- data.frame(
+        Model = fit_info$long,
+        Process = paste0(proc, " (t<=t_trunc)"),
+        `Mean trigger time (days)` = round(m$mean_time_trunc, 3),
+        `Mean trigger distance (km)` = if (is.finite(m$mean_distance)) round(m$mean_distance, 3) else Inf,
+        check.names = FALSE
+      )
+    }
   }
 }
 if (length(diag_rows) > 0) {
@@ -1379,6 +1585,7 @@ if (length(diag_rows) > 0) {
   kable(diag_df, align = "llcc",
         caption = paste0(
           "Model-implied ETAS triggering means across all available fits. ",
+          "Rows marked '(t<=t_trunc)' report temporal means under the SEM truncation window. ",
           "Infinite values indicate heavy-tail regimes where the corresponding mean does not exist ",
           "(time: p <= 2, space: q <= 1.5)."
         )) |>
@@ -1426,35 +1633,67 @@ biv_rows <- list(
   list(lab = "G: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL, louis = NULL),
   list(lab = "H: SEM Biv+KDE (struct-fixed)",   ate = if (!is.null(fit_H_obj)) fit_H_obj$ate else NULL, louis = if (!is.null(fit_H_obj)) fit_H_obj$louis else NULL))
 if (!is.null(fit_I_obj) && !is.null(fit_I_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Decode Bivariate", ate = fit_I_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Naive Univ+KDE", ate = fit_I_obj$ate, louis = NULL)
 }
 if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: Decode Biv+KDE", ate = fit_J_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: SEM Univ+KDE", ate = fit_J_obj$ate, louis = NULL)
 }
 
 boot_obj <- results$bootstrap_ate
-boot_E_df <- NULL
-boot_F_df <- NULL
-if (!is.null(boot_obj) &&
-    !is.null(boot_obj$fit_E) &&
-    !is.null(boot_obj$fit_E$replicate_summary) &&
-    nrow(boot_obj$fit_E$replicate_summary) > 0) {
-  boot_E_df <- boot_obj$fit_E$replicate_summary
+boot_primary_ids <- c("E", "F")
+if (!is.null(boot_obj) && !is.null(boot_obj$config) && !is.null(boot_obj$config$targets)) {
+  tgt <- unique(toupper(trimws(as.character(boot_obj$config$targets))))
+  if (length(tgt) >= 2 && all(c("E", "F") %in% tgt)) {
+    boot_primary_ids <- c("E", "F")
+  } else if (length(tgt) >= 2 && all(c("C", "D") %in% tgt)) {
+    boot_primary_ids <- c("C", "D")
+  }
 }
-if (!is.null(boot_obj) &&
-    !is.null(boot_obj$fit_F) &&
-    !is.null(boot_obj$fit_F$replicate_summary) &&
-    nrow(boot_obj$fit_F$replicate_summary) > 0) {
-  boot_F_df <- boot_obj$fit_F$replicate_summary
+model_label_by_id <- function(id) {
+  switch(
+    toupper(id),
+    "C" = "C: Naive Biv+KDE (ctrl-fixed)",
+    "D" = "D: SEM Biv+KDE (ctrl-fixed)",
+    "E" = "E: Naive Biv+KDE (all-free)",
+    "F" = "F: SEM Biv+KDE (all-free)",
+    paste0(id, ": model")
+  )
 }
+get_boot_df <- function(id) {
+  if (is.null(boot_obj)) return(NULL)
+  key <- paste0("fit_", toupper(id))
+  if (!is.null(boot_obj[[key]]) &&
+      !is.null(boot_obj[[key]]$replicate_summary) &&
+      nrow(boot_obj[[key]]$replicate_summary) > 0) {
+    return(boot_obj[[key]]$replicate_summary)
+  }
+  # Cross-alias fallback between legacy C/D and newer E/F naming.
+  alias <- switch(toupper(id), "C" = "fit_E", "D" = "fit_F", "E" = "fit_C", "F" = "fit_D", NA_character_)
+  if (is.character(alias) && !is.na(alias) &&
+      !is.null(boot_obj[[alias]]) &&
+      !is.null(boot_obj[[alias]]$replicate_summary) &&
+      nrow(boot_obj[[alias]]$replicate_summary) > 0) {
+    return(boot_obj[[alias]]$replicate_summary)
+  }
+  NULL
+}
+boot_naive_id <- boot_primary_ids[[1]]
+boot_sem_id <- boot_primary_ids[[2]]
+boot_naive_df <- get_boot_df(boot_naive_id)
+boot_sem_df <- get_boot_df(boot_sem_id)
+boot_naive_label <- model_label_by_id(boot_naive_id)
+boot_sem_label <- model_label_by_id(boot_sem_id)
+boot_pair_label <- paste0(boot_naive_id, "/", boot_sem_id)
 
 get_boot_summary <- function(model_label) {
   vals <- NULL
-  if (model_label == "E: Naive Biv+KDE (all-free)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (model_label == "F: SEM Biv+KDE (all-free)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
-  # Backward compatibility with older report labeling.
-  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(boot_E_df)) vals <- boot_E_df$ate_total_mean
-  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(boot_F_df)) vals <- boot_F_df$ate_total_mean
+  if (model_label == boot_naive_label && !is.null(boot_naive_df)) vals <- boot_naive_df$ate_total_mean
+  if (model_label == boot_sem_label && !is.null(boot_sem_df)) vals <- boot_sem_df$ate_total_mean
+  # Compatibility fallback if table labels differ from selected pair labels.
+  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("C"))) vals <- get_boot_df("C")$ate_total_mean
+  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("D"))) vals <- get_boot_df("D")$ate_total_mean
+  if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("E"))) vals <- get_boot_df("E")$ate_total_mean
+  if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("F"))) vals <- get_boot_df("F")$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- vals[is.finite(vals)]
   if (length(vals) < 2) return(NULL)
@@ -1462,7 +1701,72 @@ get_boot_summary <- function(model_label) {
     sd = stats::sd(vals, na.rm = TRUE),
     lo = as.numeric(stats::quantile(vals, probs = 0.025, na.rm = TRUE)),
     hi = as.numeric(stats::quantile(vals, probs = 0.975, na.rm = TRUE)),
-    n = length(vals)
+    n = length(vals),
+    vals = vals
+  )
+}
+
+boot_ci_efron_bc <- function(boot_vals, theta_hat, conf = 0.95) {
+  x <- suppressWarnings(as.numeric(boot_vals))
+  x <- x[is.finite(x)]
+  theta_hat <- suppressWarnings(as.numeric(theta_hat))
+  if (length(x) < 5L || !is.finite(theta_hat) || is.na(theta_hat)) {
+    return(NULL)
+  }
+  alpha <- (1 - conf) / 2
+  q_pct <- stats::quantile(x, probs = c(alpha, 1 - alpha), na.rm = TRUE, names = FALSE)
+  p_less <- mean(x < theta_hat, na.rm = TRUE)
+  # Guard against p=0 or p=1 leading to infinite z0.
+  eps <- 1 / (length(x) + 1)
+  p_less <- min(max(p_less, eps), 1 - eps)
+  z0 <- stats::qnorm(p_less)
+  z_lo <- stats::qnorm(alpha)
+  z_hi <- stats::qnorm(1 - alpha)
+  a_lo <- stats::pnorm(2 * z0 + z_lo)
+  a_hi <- stats::pnorm(2 * z0 + z_hi)
+  a_lo <- min(max(a_lo, eps), 1 - eps)
+  a_hi <- min(max(a_hi, eps), 1 - eps)
+  if (a_lo > a_hi) {
+    tmp <- a_lo; a_lo <- a_hi; a_hi <- tmp
+  }
+  # If BC collapses to a numerically degenerate interval, use percentile fallback.
+  if (!is.finite(a_lo) || !is.finite(a_hi) || is.na(a_lo) || is.na(a_hi) ||
+      (a_hi - a_lo) < (1 / length(x))) {
+    return(list(
+      lo = as.numeric(q_pct[[1]]),
+      hi = as.numeric(q_pct[[2]]),
+      z0 = z0,
+      p_less = p_less,
+      alpha_lo = alpha,
+      alpha_hi = 1 - alpha,
+      method = "percentile_fallback"
+    ))
+  }
+  lo <- as.numeric(stats::quantile(x, probs = a_lo, na.rm = TRUE, names = FALSE))
+  hi <- as.numeric(stats::quantile(x, probs = a_hi, na.rm = TRUE, names = FALSE))
+  list(lo = lo, hi = hi, z0 = z0, p_less = p_less, alpha_lo = a_lo, alpha_hi = a_hi, method = "bc")
+}
+
+boot_ci_quantile_length <- function(boot_vals, theta_hat, conf = 0.95, center_stat = c("median", "mean")) {
+  center_stat <- match.arg(center_stat)
+  x <- suppressWarnings(as.numeric(boot_vals))
+  x <- x[is.finite(x)]
+  theta_hat <- suppressWarnings(as.numeric(theta_hat))
+  if (length(x) < 5L || !is.finite(theta_hat) || is.na(theta_hat)) return(NULL)
+  alpha <- (1 - conf) / 2
+  q_lo <- as.numeric(stats::quantile(x, probs = alpha, na.rm = TRUE, names = FALSE))
+  q_hi <- as.numeric(stats::quantile(x, probs = 1 - alpha, na.rm = TRUE, names = FALSE))
+  center <- if (identical(center_stat, "median")) stats::median(x, na.rm = TRUE) else mean(x, na.rm = TRUE)
+  if (!is.finite(q_lo) || !is.finite(q_hi) || !is.finite(center)) return(NULL)
+  left_len <- center - q_lo
+  right_len <- q_hi - center
+  if (!is.finite(left_len) || !is.finite(right_len)) return(NULL)
+  list(
+    lo = theta_hat - left_len,
+    hi = theta_hat + right_len,
+    q_lo = q_lo,
+    q_hi = q_hi,
+    center = center
   )
 }
 
@@ -1529,47 +1833,120 @@ ate_rows <- lapply(biv_rows, function(r) {
     } else { NA_real_ },
     `Saved = control - actual` = round(saved_diff_mean, 0),
     `SD(saved)` = round(sim_sd_total, 0),
-    `Spillover` = round(ifelse(!is.null(r$ate$total_spillover), r$ate$total_spillover, r$ate$ATE_spillover * n_cty), 0),
     check.names = FALSE
   )
   if (using_pre_bootstrap) return(base_row)
-  boot_sum <- get_boot_summary(r$lab)
+  # Bootstrap uncertainty is only reported for the primary all-free pair (E/F).
+  boot_models_for_table <- c("E: Naive Biv+KDE (all-free)", "F: SEM Biv+KDE (all-free)")
+  boot_sum <- if (r$lab %in% boot_models_for_table) get_boot_summary(r$lab) else NULL
   boot_sd <- if (!is.null(boot_sum)) round(boot_sum$sd, 0) else NA
-  boot_ci <- if (!is.null(boot_sum)) {
-    sprintf("[%d, %d]", round(boot_sum$lo, 0), round(boot_sum$hi, 0))
+  boot_ci_q_len <- if (!is.null(boot_sum) && is.finite(saved_diff_mean)) {
+    ci <- boot_ci_quantile_length(boot_sum$vals, saved_diff_mean, conf = 0.95, center_stat = "median")
+    if (!is.null(ci) && is.finite(ci$lo) && is.finite(ci$hi)) {
+      sprintf("[%d, %d]", round(ci$lo, 0), round(ci$hi, 0))
+    } else {
+      "NA"
+    }
   } else {
     "NA"
   }
-  base_row$`Bootstrap SD` <- boot_sd
-  base_row$`Bootstrap 95% CI` <- boot_ci
+  base_row$`Bootstrap SD (ATE)` <- boot_sd
+  base_row$`95% quantile-length CI` <- boot_ci_q_len
   base_row
 })
 ate_rows <- Filter(Negate(is.null), ate_rows)
 ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
+  core_cols <- c(
+    "Model",
+    "Observed N(actual regime)",
+    "E[N(control everywhere)]",
+    "E[N(actual treatment regime)]",
+    "SD(control everywhere)",
+    "SD(actual treatment regime)",
+    "E[N(treated everywhere)]",
+    "Saved = control - actual",
+    "SD(saved)"
+  )
+  if (using_pre_bootstrap) {
+    ate_biv <- ate_biv[, core_cols, drop = FALSE]
+  } else {
+    full_cols <- c(core_cols, "Bootstrap SD (ATE)", "95% quantile-length CI")
+    ate_biv <- ate_biv[, full_cols, drop = FALSE]
+  }
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
           c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
             "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)", paste0("Spillover / ", ate_days, "d"))
+            "SD(saved)")
         } else {
           c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
             "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
             paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)", "Bootstrap SD", "Bootstrap 95% CI",
-            paste0("Spillover / ", ate_days, "d"))
+            "SD(saved)", "Bootstrap SD (ATE)", "95% quantile-length CI")
         },
         caption = if (using_pre_bootstrap) {
           paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
         } else {
-          paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)].")
+          paste0(
+            "All-or-nothing expected counts over ", ate_days,
+            " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)]. ",
+            "Bootstrap SD is estimated from parametric bootstrap replicates; ",
+            "the reported 95% interval uses bootstrap quantile lengths (2.5%/97.5%) ",
+            "recentered around the model's estimated ATE."
+          )
         },
-        align = if (using_pre_bootstrap) "lccccccccc" else "lcccccccccccc") |>
+        align = if (using_pre_bootstrap) "lcccccccc" else "lcccccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
               if (!is.null(results$checkpoint) && !is.null(results$checkpoint$stage)) results$checkpoint$stage else "unknown"))
+}
+```
+
+### Full E/F Parameter Estimates
+
+```{r tbl-ef-params-all}
+#| label: tbl-ef-params-all
+to_named_num <- function(x) {
+  if (is.null(x)) return(setNames(numeric(0), character(0)))
+  if (is.list(x)) x <- unlist(x, use.names = TRUE)
+  v <- suppressWarnings(as.numeric(x))
+  nms <- names(x)
+  if (is.null(nms)) nms <- rep("", length(v))
+  names(v) <- nms
+  v
+}
+
+ef_param_order <- c(
+  "mu_0", "mu_1",
+  "A_00", "alpha_m_00",
+  "A_11", "alpha_m_11",
+  "A_01", "alpha_m_01",
+  "A_10", "alpha_m_10",
+  "c", "p", "D", "gamma", "q"
+)
+E_vec <- to_named_num(if (!is.null(fit_E_obj)) fit_E_obj$params else NULL)
+F_vec <- to_named_num(if (!is.null(fit_F_obj)) fit_F_obj$params else NULL)
+
+if (length(E_vec) > 0 || length(F_vec) > 0) {
+  ef_tbl <- data.frame(
+    Parameter = ef_param_order,
+    `E: Naive Biv+KDE (all-free)` = as.numeric(E_vec[ef_param_order]),
+    `F: SEM Biv+KDE (all-free)` = as.numeric(F_vec[ef_param_order]),
+    check.names = FALSE
+  )
+  ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_scaled_num(v, digits = 5), character(1))
+  ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_scaled_num(v, digits = 5), character(1))
+  kable(
+    ef_tbl,
+    caption = "All fitted bivariate ETAS parameters for Models E and F.",
+    align = "lcc"
+  ) |>
+    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
+} else {
+  cat("E/F parameter table unavailable in this results checkpoint.")
 }
 ```
 
@@ -1621,6 +1998,75 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
     theme_minimal(base_size = 13) +
     theme(legend.position = "top",
           plot.title = element_text(hjust = 0.5, face = "bold"))
+}
+```
+
+```{r fig-ate-bootstrap-cd}
+#| label: fig-ate-bootstrap-cd
+#| fig-cap: "Bias-corrected bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to observed ATE)."
+#| fig-height: 4
+if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
+    nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
+    "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {
+  get_fit_obj_by_id <- function(id) {
+    switch(
+      toupper(id),
+      "C" = fit_C_obj,
+      "D" = fit_D_obj,
+      "E" = fit_E_obj,
+      "F" = fit_F_obj,
+      NULL
+    )
+  }
+  obs_ate_mean <- function(id) {
+    fo <- get_fit_obj_by_id(id)
+    if (is.null(fo) || is.null(fo$ate)) return(NA_real_)
+    vals <- get_total_effect_sim(fo$ate, n_tiles = n_cty)
+    vals <- suppressWarnings(as.numeric(vals))
+    vals <- vals[is.finite(vals)]
+    if (length(vals) < 1L) return(NA_real_)
+    mean(vals, na.rm = TRUE)
+  }
+  recenter_boot <- function(boot_vals, target_mean) {
+    bv <- suppressWarnings(as.numeric(boot_vals))
+    if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
+    bmean <- mean(bv, na.rm = TRUE)
+    if (!is.finite(bmean) || is.na(bmean)) return(bv)
+    bv + (target_mean - bmean)
+  }
+
+  naive_obs_mean <- obs_ate_mean(boot_naive_id)
+  sem_obs_mean <- obs_ate_mean(boot_sem_id)
+  naive_bc_vals <- recenter_boot(boot_naive_df$ate_total_mean, naive_obs_mean)
+  sem_bc_vals <- recenter_boot(boot_sem_df$ate_total_mean, sem_obs_mean)
+
+  boot_cd <- rbind(
+    data.frame(Model = boot_naive_label, TotalATE = naive_bc_vals),
+    data.frame(Model = boot_sem_label, TotalATE = sem_bc_vals)
+  )
+  boot_cd <- boot_cd[is.finite(boot_cd$TotalATE), , drop = FALSE]
+  if (nrow(boot_cd) > 0) {
+    boot_means <- aggregate(TotalATE ~ Model, boot_cd, mean)
+    ggplot(boot_cd, aes(x = TotalATE, fill = Model)) +
+      geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_vline(data = boot_means, aes(xintercept = TotalATE, colour = Model),
+                 linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
+      scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(boot_naive_label, boot_sem_label))) +
+      scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(boot_naive_label, boot_sem_label))) +
+      labs(x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
+           y = "Bootstrap replicate count",
+           title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")")) +
+      theme_minimal(base_size = 13) +
+      theme(legend.position = "top",
+            plot.title = element_text(hjust = 0.5, face = "bold"))
+  } else {
+    plot.new()
+    text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s replicate means are present but non-finite.", boot_pair_label))
+  }
+} else {
+  plot.new()
+  text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s results are unavailable in this results checkpoint.", boot_pair_label))
 }
 ```
 
@@ -2003,7 +2449,7 @@ effect_lines <- c(
   }
 )
 if (!is.na(total_J_1yr)) {
-  effect_lines <- c(effect_lines, paste0("- **Fit J (Decode+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
+  effect_lines <- c(effect_lines, paste0("- **Fit J (SEM univariate+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
 }
 cat(paste(effect_lines, collapse = "\n"), "\n")
 ```
@@ -2036,7 +2482,7 @@ grid_str <- if (length(grid_vals) > 0L) {
 cdf <- data.frame(
   Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
               "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
-              "SEM change factor","Decode enabled","Decode iterations","Fitting window (days)",
+              "SEM change factor","SEM max relabel step frac","SEM forced refit flip frac","Fitting window (days)",
               "ATE simulation window (days)","Simulation replicates",
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
               "Test mode"),
@@ -2044,8 +2490,8 @@ cdf <- data.frame(
             paste0(scalar_chr(cfg$n_counties), " / ", scalar_chr(cfg$n_treated)),
             scalar_chr(cfg$SEM_N_ITER), scalar_chr(cfg$SEM_INNER_ITER), sem_inner_props, scalar_chr(cfg$SEM_N_LABELLINGS),
             scalar_chr(cfg$SEM_CHANGE_FACTOR),
-            scalar_chr(cfg$RUN_DECODE %||% decode_enabled),
-            scalar_chr(cfg$DECODE_ITER),
+            scalar_chr(cfg$SEM_MAX_RELABEL_STEP_FRAC),
+            scalar_chr(cfg$SEM_FORCE_PARAM_UPDATE_FLIP_FRAC),
             if (!is.null(cfg$windowT_post)) paste(unlist(cfg$windowT_post, use.names = FALSE), collapse=" \u2013 ") else "N/A",
             ate_win, scalar_chr(cfg$ATE_N_SIMS),
             fmt_scaled_num(cfg$spatial_scale_D),
