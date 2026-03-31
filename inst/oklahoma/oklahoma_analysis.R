@@ -1133,8 +1133,15 @@ run_sem_fit <- function(pp_data_in,
                         sem_optim_method_in = SEM_OPTIM_METHOD,
                         sem_selection_temperature_in = SEM_SELECTION_TEMPERATURE,
                         verbose_in = DF_VERBOSE,
-                        label = "SEM") {
+                        label = "SEM",
+                        sem_rng_label_in = NULL) {
   t0 <- proc.time()[["elapsed"]]
+  sem_rng_label <- if (!is.null(sem_rng_label_in)) {
+    rl <- as.character(sem_rng_label_in)[1L]
+    if (nzchar(rl)) rl else label
+  } else {
+    label
+  }
   sem_verbose_effective <- isTRUE(verbose_in)
   sem_log_file <- NULL
   if (SEM_WORKER_LOGS) {
@@ -1149,12 +1156,12 @@ run_sem_fit <- function(pp_data_in,
   if (!is.null(sem_log_file)) {
     cat(sprintf("  [%s] worker sem log: %s\n", label, sem_log_file))
   }
-  sem_seed_base <- derive_run_seed(OK_GLOBAL_SEED, label = paste0("sem:", label))
+  sem_seed_base <- derive_run_seed(OK_GLOBAL_SEED, label = paste0("sem:", sem_rng_label))
   sem_seed_step <- 0L
   next_sem_seed <- function() {
     if (!is.finite(sem_seed_base) || is.na(sem_seed_base)) return(invisible(NULL))
     sem_seed_step <<- sem_seed_step + 1L
-    set.seed(derive_run_seed(sem_seed_base, label = label, offset = sem_seed_step))
+    set.seed(derive_run_seed(sem_seed_base, label = sem_rng_label, offset = sem_seed_step))
   }
   run_one_sem <- function(pp_data_sem, init_params_sem, fixed_params_sem, sem_label) {
     next_sem_seed()
@@ -1411,6 +1418,9 @@ kde_fit_label <- function(fit_type, variant_id) {
   letter <- KDE_FIT_LETTERS[[variant_id]][[fit_type]]
   sprintf("Fit %s [%s]", letter, variant_id)
 }
+# KDE bandwidth SEM (all-free F) uses this RNG key so stochastic SEM matches main Fit F
+# when sigma and data match (i.e. digglex2 vs main county KDE).
+OK_BW_SEM_RNG_LABEL <- kde_fit_label("F", "all_free")
 cat(sprintf(
   "  KDE county fit variants to run: %s\n",
   paste(kde_variant_ids, collapse = ", ")
@@ -2032,9 +2042,11 @@ run_kde_bandwidth_fit <- function(spec) {
       init_params_in = biv_init_local,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
-      sem_inner_iter_in = SENS_SEM_INNER_ITER,
+      # Match main Fit F (not SENS_SEM_INNER_ITER) so digglex2 reproduces F when sigma matches.
+      sem_inner_iter_in = SEM_INNER_ITER,
       verbose_in = FALSE,
-      label = sprintf("BW %s Fit D", bw_label)
+      label = sprintf("BW %s Fit D", bw_label),
+      sem_rng_label_in = OK_BW_SEM_RNG_LABEL
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit D error: %s\n", bw_label, e$message))
