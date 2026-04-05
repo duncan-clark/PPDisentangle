@@ -2456,6 +2456,76 @@ if (!is.null(bws) && length(bws) > 0) {
 }
 ```
 
+## Fit Variability (Repeated E/F Refits)
+
+This section summarizes repeat refits of county all-free E/F models (typically one job per core)
+to quantify run-to-run variability from stochastic SEM updates and Monte Carlo ATE simulation.
+
+```{r tbl-fit-variability-summary}
+#| label: tbl-fit-variability-summary
+fv <- results$fit_variability
+if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
+  fv_df <- as.data.frame(fv$replicate_summary)
+  fv_df <- fv_df[fv_df$success %in% TRUE, , drop = FALSE]
+  if (nrow(fv_df) > 0) {
+    sum_df <- fv_df |>
+      group_by(.data$model) |>
+      summarise(
+        Reps = dplyr::n(),
+        `Raw total saved mean` = round(mean(.data$raw_total_saved, na.rm = TRUE), 1),
+        `Raw total saved SD` = round(sd(.data$raw_total_saved, na.rm = TRUE), 1),
+        `MC total saved mean` = round(mean(.data$mc_total_saved_mean, na.rm = TRUE), 1),
+        `MC total saved SD (across reps)` = round(sd(.data$mc_total_saved_mean, na.rm = TRUE), 1),
+        `Mean within-rep MC SD` = round(mean(.data$mc_total_saved_sd, na.rm = TRUE), 1),
+        `Mean relabelled points` = round(mean(.data$n_relabel, na.rm = TRUE), 1),
+        .groups = "drop"
+      )
+    kable(
+      sum_df,
+      align = "lccccccc",
+      caption = "Repeated-fit variability summary for county all-free E/F models."
+    ) |>
+      kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE, font_size = 9)
+  }
+}
+```
+
+```{r fig-fit-variability-raw}
+#| label: fig-fit-variability-raw
+#| fig-cap: "Histogram of raw repeated-fit total-saved estimates (analytic)."
+if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
+  fv_df <- as.data.frame(fv$replicate_summary)
+  fv_df <- fv_df[fv_df$success %in% TRUE & is.finite(fv_df$raw_total_saved), , drop = FALSE]
+  if (nrow(fv_df) > 0) {
+    ggplot(fv_df, aes(x = .data$raw_total_saved, fill = .data$model)) +
+      geom_histogram(bins = 20, alpha = 0.7, position = "identity") +
+      facet_wrap(~model, scales = "free_y", ncol = 1) +
+      geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8) +
+      labs(x = "Raw total saved (analytic)", y = "Count", fill = "Model") +
+      theme_minimal(base_size = 11) +
+      theme(legend.position = "none")
+  }
+}
+```
+
+```{r fig-fit-variability-mc}
+#| label: fig-fit-variability-mc
+#| fig-cap: "Histogram of Monte Carlo total-saved means from repeated fits."
+if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
+  fv_df <- as.data.frame(fv$replicate_summary)
+  fv_df <- fv_df[fv_df$success %in% TRUE & is.finite(fv_df$mc_total_saved_mean), , drop = FALSE]
+  if (nrow(fv_df) > 0) {
+    ggplot(fv_df, aes(x = .data$mc_total_saved_mean, fill = .data$model)) +
+      geom_histogram(bins = 20, alpha = 0.7, position = "identity") +
+      facet_wrap(~model, scales = "free_y", ncol = 1) +
+      geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8) +
+      labs(x = "Monte Carlo total saved (mean across sims)", y = "Count", fill = "Model") +
+      theme_minimal(base_size = 11) +
+      theme(legend.position = "none")
+  }
+}
+```
+
 # Interpretation
 
 ```{r summaries, include=FALSE}

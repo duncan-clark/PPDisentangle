@@ -189,6 +189,13 @@ if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
 SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
+RUN_FIT_VARIABILITY <- tolower(Sys.getenv("OK_RUN_FIT_VARIABILITY", "false")) %in% c("1", "true", "yes", "y")
+FIT_VARIABILITY_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_FIT_VARIABILITY_REPS", "")))
+if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIABILITY_REPS < 1L) {
+  FIT_VARIABILITY_REPS <- NA_integer_
+}
+FIT_VARIABILITY_CORES_RAW <- Sys.getenv("OK_FIT_VARIABILITY_CORES", "")
+FIT_VARIABILITY_PATCH_FILE <- trimws(Sys.getenv("OK_FIT_VARIABILITY_PATCH_FILE", ""))
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
@@ -298,6 +305,16 @@ ATE_SIM_CORES_DEFAULT <- 1L
 ATE_SIM_CORES <- suppressWarnings(as.integer(ifelse(nzchar(ATE_SIM_CORES_RAW), ATE_SIM_CORES_RAW, as.character(ATE_SIM_CORES_DEFAULT))))
 if (!is.finite(ATE_SIM_CORES) || is.na(ATE_SIM_CORES) || ATE_SIM_CORES < 1L) ATE_SIM_CORES <- 1L
 ATE_SIM_CORES <- max(1L, min(ATE_SIM_CORES, N_CORES))
+FIT_VARIABILITY_CORES <- suppressWarnings(as.integer(ifelse(
+  nzchar(FIT_VARIABILITY_CORES_RAW), FIT_VARIABILITY_CORES_RAW, as.character(N_CORES)
+)))
+if (!is.finite(FIT_VARIABILITY_CORES) || is.na(FIT_VARIABILITY_CORES) || FIT_VARIABILITY_CORES < 1L) {
+  FIT_VARIABILITY_CORES <- N_CORES
+}
+FIT_VARIABILITY_CORES <- max(1L, min(FIT_VARIABILITY_CORES, N_CORES))
+if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIABILITY_REPS < 1L) {
+  FIT_VARIABILITY_REPS <- FIT_VARIABILITY_CORES
+}
 PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
   "OK_PARALLEL_BACKEND",
   if (MEMORY_SAFE) "psock" else "fork"
@@ -513,6 +530,8 @@ cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
 cat(sprintf("Targets (shared): sensitivity=%s | bootstrap=%s\n",
             paste(SENS_TARGETS, collapse = ","),
             paste(BOOT_TARGETS, collapse = ",")))
+cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d\n",
+            RUN_FIT_VARIABILITY, FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
 sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
   as.character(signif(SEM_T_TRUNC_DAYS, 4))
@@ -2327,6 +2346,7 @@ sensitivity_jobs <- c(
   lapply(kde_bandwidth_specs, function(spec) list(type = "bandwidth", id = spec$label, payload = spec)),
   lapply(all_partitions, function(part_info) list(type = "partition", id = part_info$label, payload = part_info))
 )
+kde_bandwidth_labels <- vapply(kde_bandwidth_specs, `[[`, character(1), "label")
 cat(sprintf("  Sensitivity jobs: %d bandwidth + %d partition = %d total\n",
             length(kde_bandwidth_specs), length(all_partitions), length(sensitivity_jobs)))
 
@@ -2372,12 +2392,12 @@ run_sensitivity_dispatch <- function() {
     detail = sprintf("jobs=%d", length(sensitivity_jobs))
   )
 
-  kde_bandwidth_fits_local <- lapply(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), function(lbl) {
+  kde_bandwidth_fits_local <- lapply(kde_bandwidth_labels, function(lbl) {
     idx <- which(vapply(sens_out, function(z) identical(z$type, "bandwidth") && identical(z$id, lbl), logical(1)))
     if (length(idx) == 0) return(NULL)
     sens_out[[idx[1]]]$out
   })
-  names(kde_bandwidth_fits_local) <- vapply(kde_bandwidth_specs, `[[`, character(1), "label")
+  names(kde_bandwidth_fits_local) <- kde_bandwidth_labels
 
   partition_results_local <- lapply(sapply(all_partitions, `[[`, "label"), function(lbl) {
     idx <- which(vapply(sens_out, function(z) identical(z$type, "partition") && identical(z$id, lbl), logical(1)))
@@ -2860,8 +2880,241 @@ if (exists("t_ate_J", inherits = FALSE)) {
   add_timing_row("ate_J", ate_J_elapsed, if (!is.null(ate_J)) "ok" else "failed")
 }
 
+# ============================================================================
+# 6a. Fit variability (repeat county all-free E/F fits)
+# ============================================================================
+fit_variability <- NULL
+fit_variability_elapsed <- NA_real_
+if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
+  t_fitvar <- proc.time()[["elapsed"]]
+  cat(sprintf("\n--- Step 6a: Fit variability (E/F repeats; reps=%d, cores=%d) ---\n",
+              FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
+
+  fitvar_ate_stats <- function(ate_obj, n_tiles = partition$n) {
+    out <- list(
+      raw_total_saved = NA_real_,
+      mc_total_saved_mean = NA_real_,
+      mc_total_saved_sd = NA_real_,
+      eta_ctrl = NA_real_,
+      eta_treat = NA_real_
+    )
+    if (is.null(ate_obj)) return(out)
+    if (!is.null(ate_obj$analytic)) {
+      out$eta_ctrl <- suppressWarnings(as.numeric(ate_obj$analytic$eta_ctrl))
+      out$eta_treat <- suppressWarnings(as.numeric(ate_obj$analytic$eta_treat))
+      if (is.finite(out$eta_ctrl) && is.finite(out$eta_treat)) {
+        out$raw_total_saved <- as.numeric(n_tiles) * (out$eta_ctrl - out$eta_treat)
+      }
+    }
+    sim_total <- suppressWarnings(as.numeric(ate_obj$all_nothing_sim$total_saved))
+    sim_total <- sim_total[is.finite(sim_total)]
+    if (length(sim_total) > 0L) {
+      out$mc_total_saved_mean <- mean(sim_total, na.rm = TRUE)
+      out$mc_total_saved_sd <- if (length(sim_total) > 1L) stats::sd(sim_total, na.rm = TRUE) else 0
+    }
+    out
+  }
+
+  run_fitvar_rep <- function(rep_id) {
+    t0_rep <- proc.time()[["elapsed"]]
+    cat(sprintf("    [fitvar:%d] start pid=%d mem=%s\n",
+                as.integer(rep_id), Sys.getpid(), mem_snapshot()))
+    out <- list(rep = as.integer(rep_id))
+
+    fitE_var <- tryCatch(
+      fit_etas_bivariate(
+        params_init = biv_init_E, realiz = pp_all_bg,
+        windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
+        control_state_space = control_ss, treated_state_space = treated_ss,
+        background_rate_var = "W",
+        treated_background_zero_before = 0,
+        maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+        t_trunc = SEM_T_TRUNC_DAYS
+      ),
+      error = function(e) NULL
+    )
+    E_params_var <- if (!is.null(fitE_var) && !is.null(fitE_var$par)) fitE_var$par else biv_init_E
+    E_marg_var <- extract_marginals(E_params_var)
+    ate_E_var <- tryCatch(
+      ate_estim_fast(
+        E_marg_var$ctrl, E_marg_var$treat, pp_post_bg,
+        label = sprintf("FitVar E #%d", rep_id),
+        phase = "fit_variability",
+        n_tiles_used = partition$n,
+        treated_idx_used = treated_idx,
+        quiet = TRUE
+      ),
+      error = function(e) NULL
+    )
+
+    semF_var <- tryCatch(
+      run_sem_fit(
+        pp_data_in = pp_all_bg,
+        partition_in = partition,
+        partition_processes_in = partition_processes,
+        state_spaces_in = state_spaces,
+        init_params_in = biv_init_F,
+        fixed_params_in = SENSITIVITY_FIXED_PARAMS,
+        background_rate_var_in = "W",
+        sem_inner_iter_in = SEM_INNER_ITER,
+        verbose_in = FALSE,
+        label = sprintf("FitVar F #%d", rep_id)
+      ),
+      error = function(e) NULL
+    )
+    F_params_var <- if (!is.null(semF_var) && !is.null(semF_var$etas_bivariate_params)) semF_var$etas_bivariate_params else biv_init_F
+    pp_post_sem_var <- if (!is.null(semF_var) && !is.null(semF_var$adaptive$adaptive_labelling)) {
+      tmp <- semF_var$adaptive$adaptive_labelling
+      tmp[tmp$t >= 0, , drop = FALSE]
+    } else {
+      pp_post_bg
+    }
+    n_relabel_var <- if (!is.null(semF_var) && !is.null(semF_var$adaptive$adaptive_labelling)) {
+      lp <- semF_var$adaptive$adaptive_labelling
+      lp <- lp[lp$t >= 0, , drop = FALSE]
+      sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+    } else { 0L }
+    F_marg_var <- extract_marginals(F_params_var)
+    ate_F_var <- tryCatch(
+      ate_estim_fast(
+        F_marg_var$ctrl, F_marg_var$treat, pp_post_sem_var,
+        label = sprintf("FitVar F #%d", rep_id),
+        phase = "fit_variability",
+        n_tiles_used = partition$n,
+        treated_idx_used = treated_idx,
+        quiet = TRUE
+      ),
+      error = function(e) NULL
+    )
+
+    elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
+    out$E <- list(
+      ok = !is.null(fitE_var),
+      params = E_params_var,
+      ate = ate_E_var,
+      ate_stats = fitvar_ate_stats(ate_E_var),
+      loglik = if (!is.null(fitE_var) && !is.null(fitE_var$value)) as.numeric(fitE_var$value) else NA_real_
+    )
+    out$F <- list(
+      ok = !is.null(semF_var),
+      params = F_params_var,
+      ate = ate_F_var,
+      ate_stats = fitvar_ate_stats(ate_F_var),
+      n_relabel = as.integer(n_relabel_var)
+    )
+    out$elapsed_sec <- elapsed_rep
+    cat(sprintf("    [fitvar:%d] done in %.1fs E_ok=%s F_ok=%s relabel=%d mem=%s\n",
+                as.integer(rep_id), elapsed_rep, out$E$ok, out$F$ok,
+                as.integer(out$F$n_relabel), mem_snapshot()))
+    out
+  }
+
+  fitvar_jobs <- as.list(seq_len(FIT_VARIABILITY_REPS))
+  fitvar_out <- if (FIT_VARIABILITY_CORES > 1L && length(fitvar_jobs) > 1L) {
+    run_parallel(
+      fitvar_jobs, run_fitvar_rep,
+      cores = min(FIT_VARIABILITY_CORES, length(fitvar_jobs)),
+      label = "fit-variability"
+    )
+  } else {
+    lapply(fitvar_jobs, run_fitvar_rep)
+  }
+
+  fitvar_rows <- list()
+  for (z in fitvar_out) {
+    for (model_nm in c("E", "F")) {
+      zi <- z[[model_nm]]
+      if (is.null(zi)) next
+      fitvar_rows[[length(fitvar_rows) + 1L]] <- data.frame(
+        rep = as.integer(z$rep),
+        model = as.character(model_nm),
+        success = isTRUE(zi$ok),
+        elapsed_sec = as.numeric(z$elapsed_sec),
+        loglik = if (!is.null(zi$loglik)) as.numeric(zi$loglik) else NA_real_,
+        n_relabel = if (identical(model_nm, "F")) {
+          if (!is.null(zi$n_relabel)) as.integer(zi$n_relabel) else NA_integer_
+        } else {
+          NA_integer_
+        },
+        raw_total_saved = as.numeric(zi$ate_stats$raw_total_saved),
+        mc_total_saved_mean = as.numeric(zi$ate_stats$mc_total_saved_mean),
+        mc_total_saved_sd = as.numeric(zi$ate_stats$mc_total_saved_sd),
+        eta_ctrl = as.numeric(zi$ate_stats$eta_ctrl),
+        eta_treat = as.numeric(zi$ate_stats$eta_treat),
+        mu_0 = as.numeric(zi$params[["mu_0"]]),
+        mu_1 = as.numeric(zi$params[["mu_1"]]),
+        A_00 = as.numeric(zi$params[["A_00"]]),
+        A_11 = as.numeric(zi$params[["A_11"]]),
+        alpha_m_00 = as.numeric(zi$params[["alpha_m_00"]]),
+        alpha_m_11 = as.numeric(zi$params[["alpha_m_11"]]),
+        c = as.numeric(zi$params[["c"]]),
+        p = as.numeric(zi$params[["p"]]),
+        D = as.numeric(zi$params[["D"]]),
+        gamma = as.numeric(zi$params[["gamma"]]),
+        q = as.numeric(zi$params[["q"]]),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  fitvar_df <- if (length(fitvar_rows) > 0L) do.call(rbind, fitvar_rows) else data.frame()
+  fit_variability <- list(
+    config = list(
+      reps = FIT_VARIABILITY_REPS,
+      cores = FIT_VARIABILITY_CORES,
+      sem_inner_iter = SEM_INNER_ITER,
+      ate_n_sims = ATE_N_SIMS,
+      seed = OK_GLOBAL_SEED
+    ),
+    replicate_summary = fitvar_df,
+    replicates = fitvar_out
+  )
+  fit_variability_elapsed <- proc.time()[["elapsed"]] - t_fitvar
+  add_timing_row(
+    "fit_variability_total",
+    fit_variability_elapsed,
+    "ok",
+    sprintf("reps=%d cores=%d", FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES)
+  )
+  if (nrow(fitvar_df) > 0L) {
+    fitvar_ok <- fitvar_df[fitvar_df$success, , drop = FALSE]
+    if (nrow(fitvar_ok) > 0L) {
+      for (m in c("E", "F")) {
+        mm <- fitvar_ok[fitvar_ok$model == m, , drop = FALSE]
+        if (nrow(mm) < 1L) next
+        cat(sprintf(
+          "  FitVar %s: reps=%d raw_total_saved=%.1f +/- %.1f, mc_total_saved=%.1f +/- %.1f\n",
+          m, nrow(mm),
+          mean(mm$raw_total_saved, na.rm = TRUE), stats::sd(mm$raw_total_saved, na.rm = TRUE),
+          mean(mm$mc_total_saved_mean, na.rm = TRUE), stats::sd(mm$mc_total_saved_mean, na.rm = TRUE)
+        ))
+      }
+    }
+  }
+  if (nzchar(FIT_VARIABILITY_PATCH_FILE)) {
+    patch_file <- normalizePath(FIT_VARIABILITY_PATCH_FILE, winslash = "/", mustWork = FALSE)
+    if (file.exists(patch_file)) {
+      patched <- tryCatch(readRDS(patch_file), error = function(e) NULL)
+      if (!is.null(patched)) {
+        patched$fit_variability <- fit_variability
+        if (is.null(patched$config)) patched$config <- list()
+        patched$config$RUN_FIT_VARIABILITY <- TRUE
+        patched$config$FIT_VARIABILITY_REPS <- FIT_VARIABILITY_REPS
+        patched$config$FIT_VARIABILITY_CORES <- FIT_VARIABILITY_CORES
+        saveRDS(patched, patch_file)
+        cat(sprintf("Patched fit variability into existing results: %s\n", patch_file))
+      } else {
+        cat(sprintf("Fit variability patch skipped: failed to read %s\n", patch_file))
+      }
+    } else {
+      cat(sprintf("Fit variability patch skipped: file does not exist: %s\n", patch_file))
+    }
+  }
+} else {
+  add_timing_row("fit_variability_total", NA_real_, "skipped", "disabled")
+}
+
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
-cat("\n--- Step 6a checkpoint: saving pre-sensitivity results ---\n")
+cat("\n--- Step 6b checkpoint: saving pre-sensitivity results ---\n")
 pre_sens_saved_at <- as.character(Sys.time())
 fits_named_pre_sensitivity <- list(
   A = list(
@@ -2915,6 +3168,7 @@ results_pre_sensitivity <- list(
   fitG = NULL,
   fitH = NULL,
   bootstrap_ate = NULL,
+  fit_variability = fit_variability,
   partition_results = NULL,
   ate_partitions = NULL,
   kde_bandwidth_sensitivity = NULL,
@@ -2973,6 +3227,9 @@ results_pre_sensitivity <- list(
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
+    RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
+    FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
+    FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
@@ -3162,6 +3419,7 @@ results_pre_bootstrap <- list(
   fitG = NULL,
   fitH = NULL,
   bootstrap_ate = NULL,
+  fit_variability = fit_variability,
   partition_results = partition_results,
   ate_partitions = ate_partitions,
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
@@ -3223,6 +3481,9 @@ results_pre_bootstrap <- list(
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
+    RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
+    FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
+    FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
@@ -3774,6 +4035,7 @@ results <- list(
   fitG = NULL,
   fitH = NULL,
   bootstrap_ate = bootstrap_ate,
+  fit_variability = fit_variability,
   partition_results = partition_results,
   ate_partitions = ate_partitions,
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
@@ -3830,6 +4092,9 @@ results <- list(
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
+    RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
+    FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
+    FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
