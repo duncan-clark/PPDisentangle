@@ -2414,9 +2414,12 @@ if (!is.null(bws) && length(bws) > 0) {
       } else if (!is.null(fit_type$ate$ATE_spillover)) {
         fit_type$ate$ATE_spillover * n_cty
       } else { NA_real_ }
+      sigma_km <- suppressWarnings(as.numeric(info$sigma))
+      if (!is.finite(sigma_km)) sigma_km <- NA_real_
       bw_rows[[length(bw_rows) + 1]] <- data.frame(
         BandwidthID = nm,
         Bandwidth = bw_label(nm),
+        `KDE sigma (km)` = round(sigma_km, 3),
         Model = fit_type$model,
         Tiles = n_cty,
         Treated = cfg$n_treated,
@@ -2444,9 +2447,9 @@ if (!is.null(bws) && length(bws) > 0) {
     bw_df$Bandwidth <- factor(as.character(bw_df$Bandwidth),
                               levels = unique(as.character(bw_df$Bandwidth)))
     bw_print <- subset(bw_df, select = -BandwidthID)
-    kable(bw_print, align = "llcccccccccccccccc",
+    kable(bw_print, align = "lrlccccccccccccccc",
           caption = paste0("County inhomogeneous KDE bandwidth sensitivity over ", ate_days,
-                           " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters).")) |>
+                           " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters). KDE sigma is the Gaussian bandwidth applied to the held-out pre-treatment control locations (Diggle CV scale times the row multiplier).")) |>
       kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
                     font_size = 9, latex_options = c("scale_down", "hold_position"))
   }
