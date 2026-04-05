@@ -196,6 +196,8 @@ if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIA
 }
 FIT_VARIABILITY_CORES_RAW <- Sys.getenv("OK_FIT_VARIABILITY_CORES", "")
 FIT_VARIABILITY_PATCH_FILE <- trimws(Sys.getenv("OK_FIT_VARIABILITY_PATCH_FILE", ""))
+FIT_VARIABILITY_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
@@ -314,6 +316,20 @@ if (!is.finite(FIT_VARIABILITY_CORES) || is.na(FIT_VARIABILITY_CORES) || FIT_VAR
 FIT_VARIABILITY_CORES <- max(1L, min(FIT_VARIABILITY_CORES, N_CORES))
 if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIABILITY_REPS < 1L) {
   FIT_VARIABILITY_REPS <- FIT_VARIABILITY_CORES
+}
+if (isTRUE(FIT_VARIABILITY_ONLY)) {
+  RUN_FIT_VARIABILITY <- TRUE
+  if (!nzchar(FIT_VARIABILITY_PATCH_FILE)) {
+    stop("OK_FIT_VARIABILITY_ONLY=1 requires OK_FIT_VARIABILITY_PATCH_FILE (path to existing oklahoma_results*.rds to patch).")
+  }
+  patch_check <- normalizePath(FIT_VARIABILITY_PATCH_FILE, winslash = "/", mustWork = FALSE)
+  if (!file.exists(patch_check)) {
+    stop("OK_FIT_VARIABILITY_ONLY: patch file does not exist: ", patch_check)
+  }
+  chk <- tryCatch(readRDS(patch_check), error = function(e) NULL)
+  if (is.null(chk)) {
+    stop("OK_FIT_VARIABILITY_ONLY: could not readRDS patch file: ", patch_check)
+  }
 }
 PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
   "OK_PARALLEL_BACKEND",
@@ -532,6 +548,10 @@ cat(sprintf("Targets (shared): sensitivity=%s | bootstrap=%s\n",
             paste(BOOT_TARGETS, collapse = ",")))
 cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d\n",
             RUN_FIT_VARIABILITY, FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
+if (isTRUE(FIT_VARIABILITY_ONLY)) {
+  cat(sprintf("Fit variability ONLY mode: will skip main county fits; patch into %s\n",
+              FIT_VARIABILITY_PATCH_FILE))
+}
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
 sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
   as.character(signif(SEM_T_TRUNC_DAYS, 4))
@@ -1449,6 +1469,336 @@ cat(sprintf(
   if (is.null(SENSITIVITY_FIXED_PARAMS) || length(SENSITIVITY_FIXED_PARAMS) < 1) "<none (all-free)>" else paste(names(SENSITIVITY_FIXED_PARAMS), collapse = ", ")
 ))
 
+# Shared ATE machinery (Step 6 main ATEs and Step 6a fit-variability).
+windowT_ate <- c(0, ATE_WINDOW_DAYS)
+extract_marginals <- function(biv_par) {
+  if (is.null(biv_par)) return(NULL)
+  c_val <- biv_par[["c"]]; if (!is.finite(c_val)) c_val <- STRUCT_DEFAULTS$c
+  p_val <- biv_par[["p"]]; if (!is.finite(p_val)) p_val <- STRUCT_DEFAULTS$p
+  D_val <- biv_par[["D"]]; if (!is.finite(D_val)) D_val <- STRUCT_DEFAULTS$D
+  g_val <- biv_par[["gamma"]]; if (!is.finite(g_val)) g_val <- STRUCT_DEFAULTS$gamma
+  q_val <- biv_par[["q"]]; if (!is.finite(q_val)) q_val <- STRUCT_DEFAULTS$q
+  structural <- c(c = c_val, p = p_val, D = D_val, gamma = g_val, q = q_val)
+  ctrl <- as.list(c(mu = biv_par[["mu_0"]], A = biv_par[["A_00"]],
+    alpha_m = biv_par[["alpha_m_00"]], structural))
+  treat <- as.list(c(mu = biv_par[["mu_1"]], A = biv_par[["A_11"]],
+    alpha_m = biv_par[["alpha_m_11"]], structural))
+  list(ctrl = ctrl, treat = treat)
+}
+extract_marginals_indep <- function(indep_par) {
+  if (is.null(indep_par) || is.null(indep_par$control) || is.null(indep_par$treated)) return(NULL)
+  list(ctrl = indep_par$control, treat = indep_par$treated)
+}
+ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
+                           n_tiles_used = partition$n,
+                           treated_idx_used = treated_idx,
+                           filtration_history = NULL,
+                           crn_base_seed = NA_integer_,
+                           phase = "main_fit",
+                           quiet = FALSE) {
+  phase_tag <- tolower(gsub("[^A-Za-z0-9]+", "_", as.character(phase)))
+  if (!nzchar(phase_tag)) phase_tag <- "main_fit"
+  phase_label <- switch(
+    phase_tag,
+    main_fit = "main-fit",
+    sensitivity = "sensitivity",
+    bootstrap = "bootstrap",
+    phase_tag
+  )
+  ate_prefix <- sprintf("[ATE:%s]", phase_label)
+  if (!quiet) cat(sprintf("  %s Computing ATE for %s...\n", ate_prefix, label))
+  tryCatch({
+    safe_q <- function(x, probs) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(rep(NA_real_, length(probs)))
+      as.numeric(stats::quantile(x, probs = probs, na.rm = TRUE, names = FALSE))
+    }
+    summarize_process_stability <- function(par_obj, beta_gr = BETA_GR) {
+      if (is.null(par_obj)) {
+        return(list(mu = NA_real_, A = NA_real_, alpha_m = NA_real_,
+                    beta_gr = beta_gr, beta_minus_alpha = NA_real_,
+                    eta_exact = NA_real_, eta_proxy = NA_real_))
+      }
+      A_val <- suppressWarnings(as.numeric(par_obj$A))
+      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
+      mu_val <- suppressWarnings(as.numeric(par_obj$mu))
+      beta_minus_alpha <- beta_gr - alpha_val
+      eta_exact <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_minus_alpha > 0) {
+        A_val * beta_gr / beta_minus_alpha
+      } else {
+        Inf
+      }
+      eta_proxy <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_gr > 0) {
+        A_val * exp(alpha_val / beta_gr)
+      } else {
+        NA_real_
+      }
+      list(
+        mu = mu_val, A = A_val, alpha_m = alpha_val,
+        beta_gr = beta_gr, beta_minus_alpha = beta_minus_alpha,
+        eta_exact = eta_exact, eta_proxy = eta_proxy
+      )
+    }
+    ate_approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
+      if (is.null(par_obj)) return(NA_real_)
+      A_val <- suppressWarnings(as.numeric(par_obj$A))
+      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
+      if (!is.finite(A_val) || !is.finite(alpha_val)) return(NA_real_)
+      A_val * exp(alpha_val / beta_gr)
+    }
+    ate_event_warn_threshold <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_EVENT_THRESHOLD", "20000")))
+    if (!is.finite(ate_event_warn_threshold) || is.na(ate_event_warn_threshold) || ate_event_warn_threshold <= 0) {
+      ate_event_warn_threshold <- 20000
+    }
+    ate_flagged_frac_warn <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_FRACTION_WARN", "0.05")))
+    if (!is.finite(ate_flagged_frac_warn) || is.na(ate_flagged_frac_warn) ||
+        ate_flagged_frac_warn < 0 || ate_flagged_frac_warn > 1) {
+      ate_flagged_frac_warn <- 0.05
+    }
+    ctrl_br <- ate_approx_branching_ratio(ctrl_pp)
+    treat_br <- ate_approx_branching_ratio(treat_pp)
+    ctrl_diag <- summarize_process_stability(ctrl_pp)
+    treat_diag <- summarize_process_stability(treat_pp)
+    if (!quiet) {
+      cat(sprintf("    %s sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
+                  ate_prefix,
+                  ATE_N_SIMS, max(1L, min(ATE_SIM_CORES, ATE_N_SIMS)),
+                  PARALLEL_BACKEND, ctrl_br, treat_br))
+      cat(sprintf("    %s fitted stability (ctrl): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
+                  ate_prefix, ctrl_diag$mu, ctrl_diag$A, ctrl_diag$alpha_m,
+                  ctrl_diag$beta_minus_alpha, ctrl_diag$eta_exact, ctrl_diag$eta_proxy))
+      cat(sprintf("    %s fitted stability (treat): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
+                  ate_prefix, treat_diag$mu, treat_diag$A, treat_diag$alpha_m,
+                  treat_diag$beta_minus_alpha, treat_diag$eta_exact, treat_diag$eta_proxy))
+    }
+    if ((is.finite(ctrl_br) && ctrl_br > BOOT_BRANCHING_MAX) ||
+        (is.finite(treat_br) && treat_br > BOOT_BRANCHING_MAX)) {
+      cat(sprintf("    [warning:ate-explosive] %s: branching proxy exceeds %.3f (ctrl=%.3f, treat=%.3f)\n",
+                  label, BOOT_BRANCHING_MAX, ctrl_br, treat_br))
+    }
+    if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) {
+      if (is.null(filtration_history)) {
+        pre_history <- pp_pre[, c("x", "y", "t", "mag"), drop = FALSE]
+      } else {
+        pre_history <- as.data.frame(filtration_history)[, c("x", "y", "t", "mag"), drop = FALSE]
+      }
+    } else {
+      pre_history <- pp_pre[0, c("x", "y", "t", "mag"), drop = FALSE]
+    }
+    if (!is.finite(crn_base_seed) || is.na(crn_base_seed)) {
+      if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
+        crn_base_seed <- as.integer(OK_ATE_CRN_BASE)
+      } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+        crn_base_seed <- as.integer(100000L + 1000L * OK_GLOBAL_SEED)
+      } else {
+        crn_base_seed <- as.integer(100000L)
+      }
+    }
+    ate_label_slug <- gsub("[^A-Za-z0-9]+", "_", label)
+    ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
+    if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
+    ate_parallel_label <- sprintf("ate-sim-%s", tolower(substr(ate_label_slug, 1L, 40L)))
+    run_one_sim <- function(s) {
+      s_int <- suppressWarnings(as.integer(s))
+      if (!is.finite(s_int) || is.na(s_int)) s_int <- 1L
+      if (isTRUE(OK_ATE_USE_CRN)) {
+        seed_s <- as.integer(crn_base_seed + s_int)
+        if (isTRUE(OK_ATE_CRN_PAIR)) {
+          set.seed(seed_s)
+          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+          set.seed(seed_s)
+          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+        } else {
+          set.seed(seed_s)
+          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+          set.seed(as.integer(seed_s + 1000000L))
+          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                            m0 = ETAS_M0, beta_gr = BETA_GR,
+                            filtration = pre_history)
+        }
+      } else {
+        c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+        t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+      }
+      c(c_count = length(c_sim$t), t_count = length(t_sim$t))
+    }
+    sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
+      if (!is.null(ate_cl_reuse)) {
+        run_parallel_on_cluster(
+          ate_cl_reuse,
+          as.list(seq_len(ATE_N_SIMS)),
+          run_one_sim,
+          label = ate_parallel_label
+        )
+      } else {
+        run_parallel(
+          as.list(seq_len(ATE_N_SIMS)), run_one_sim,
+          cores = min(ATE_SIM_CORES, ATE_N_SIMS),
+          label = ate_parallel_label
+        )
+      }
+    } else {
+      lapply(seq_len(ATE_N_SIMS), run_one_sim)
+    }
+    c_counts <- vapply(sim_results, function(z) as.numeric(z[["c_count"]]), numeric(1))
+    t_counts <- vapply(sim_results, function(z) as.numeric(z[["t_count"]]), numeric(1))
+    safe_p95 <- function(x) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(NA_real_)
+      as.numeric(stats::quantile(x, 0.95, na.rm = TRUE, names = FALSE))
+    }
+    safe_max <- function(x) {
+      x <- x[is.finite(x)]
+      if (length(x) < 1L) return(NA_real_)
+      max(x, na.rm = TRUE)
+    }
+    if (!quiet) {
+      cat(sprintf("    %s sim summary (%s): ctrl mean=%.1f p95=%.1f max=%.0f | treat mean=%.1f p95=%.1f max=%.0f\n",
+                  ate_prefix,
+                  label,
+                  mean(c_counts, na.rm = TRUE),
+                  safe_p95(c_counts),
+                  safe_max(c_counts),
+                  mean(t_counts, na.rm = TRUE),
+                  safe_p95(t_counts),
+                  safe_max(t_counts)))
+      ctrl_q <- safe_q(c_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      treat_q <- safe_q(t_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      total_counts <- c_counts + t_counts
+      total_q <- safe_q(total_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
+      cat(sprintf(
+        "    %s sim counts ctrl[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, ctrl_q[1], ctrl_q[2], ctrl_q[3], ctrl_q[4], ctrl_q[5], ctrl_q[6]
+      ))
+      cat(sprintf(
+        "    %s sim counts treat[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, treat_q[1], treat_q[2], treat_q[3], treat_q[4], treat_q[5], treat_q[6]
+      ))
+      cat(sprintf(
+        "    %s sim counts total[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
+        ate_prefix, total_q[1], total_q[2], total_q[3], total_q[4], total_q[5], total_q[6]
+      ))
+    }
+    flagged_mask <- (is.finite(c_counts) & c_counts > ate_event_warn_threshold) |
+      (is.finite(t_counts) & t_counts > ate_event_warn_threshold)
+    flagged_n <- sum(flagged_mask, na.rm = TRUE)
+    if (flagged_n > 0L) {
+      flagged_frac <- flagged_n / max(1L, length(c_counts))
+      cat(sprintf("    [warning:ate-explosive] %s: %d/%d sims exceed %.0f events (frac=%.3f)\n",
+                  label, flagged_n, length(c_counts), ate_event_warn_threshold, flagged_frac))
+      if (flagged_frac >= ate_flagged_frac_warn) {
+        cat(sprintf("    [warning:ate-explosive] %s: high fraction of extreme sims (>= %.3f); inspect params/branching.\n",
+                    label, ate_flagged_frac_warn))
+      }
+    }
+    if (!quiet) {
+      top_n <- min(5L, length(c_counts))
+      if (top_n > 0L) {
+        ord <- order(c_counts + t_counts, decreasing = TRUE, na.last = TRUE)
+        top_idx <- ord[seq_len(top_n)]
+        top_desc <- paste(vapply(top_idx, function(ii) {
+          sprintf("#%d:c=%d,t=%d,total=%d", ii, as.integer(c_counts[ii]), as.integer(t_counts[ii]), as.integer(c_counts[ii] + t_counts[ii]))
+        }, character(1)), collapse = " | ")
+        cat(sprintf("    %s top total-count sims: %s\n", ate_prefix, top_desc))
+      }
+    }
+    total_saved <- c_counts - t_counts
+    all_nothing_sim <- data.frame(
+      c_total = c_counts,
+      t_total = t_counts,
+      total_saved = total_saved,
+      total_effect = total_saved,
+      c_mean = c_counts / n_tiles_used,
+      t_mean = t_counts / n_tiles_used,
+      saved_per_tile = total_saved / n_tiles_used,
+      ATE = total_saved / n_tiles_used
+    )
+    n_ctrl_loc <- sum(observed_data$location_process == "control", na.rm = TRUE)
+    n_treat_loc <- sum(observed_data$location_process == "treated", na.rm = TRUE)
+    n_ctrl_tiles <- sum(!treated_idx_used)
+    n_treat_tiles <- sum(treated_idx_used)
+    saved_naive <- NA_real_
+    saved_spillover <- NA_real_
+    total_saved_naive <- NA_real_
+    total_saved_spillover <- NA_real_
+    if (n_ctrl_tiles > 0 && n_treat_tiles > 0) {
+      saved_naive <- n_ctrl_loc / n_ctrl_tiles - n_treat_loc / n_treat_tiles
+      total_saved_naive <- saved_naive * n_tiles_used
+      saved_spillover <- if ("inferred_process" %in% names(observed_data)) {
+        n_ctrl_loc / n_ctrl_tiles -
+          sum(observed_data$inferred_process == "control" &
+              observed_data$location_process == "control", na.rm = TRUE) / n_ctrl_tiles
+      } else { 0 }
+      total_saved_spillover <- saved_spillover * n_tiles_used
+    }
+    analytic <- ATE_analytic_etas(ctrl_pp, treat_pp,
+                                  windowT = windowT_ate, n_tiles = n_tiles_used,
+                                  beta_gr = BETA_GR, m0 = ETAS_M0)
+    analytic_saved <- if (!is.null(analytic)) {
+      c(
+        eta_ctrl_minus_treat = analytic$eta_ctrl - analytic$eta_treat,
+        total_ctrl_minus_treat = (analytic$eta_ctrl - analytic$eta_treat) * n_tiles_used
+      )
+    } else {
+      c(eta_ctrl_minus_treat = NA_real_, total_ctrl_minus_treat = NA_real_)
+    }
+    list(all_nothing_sim = all_nothing_sim,
+         saved_naive = saved_naive, saved_spillover = saved_spillover,
+         total_saved_naive = total_saved_naive, total_saved_spillover = total_saved_spillover,
+         ATE_naive = saved_naive, ATE_spillover = saved_spillover,
+         total_naive = total_saved_naive, total_spillover = total_saved_spillover,
+         n_tiles_used = n_tiles_used,
+         treated_pp = treat_pp, control_pp = ctrl_pp,
+         analytic = analytic,
+         analytic_saved = analytic_saved)
+  }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
+}
+ate_cl_reuse <- NULL
+ensure_ate_psock_pool <- function() {
+  if (!is.null(ate_cl_reuse)) return(invisible(NULL))
+  ate_cl_reuse_cores <- max(1L, min(ATE_SIM_CORES, ATE_N_SIMS))
+  if (PARALLEL_BACKEND == "psock" && N_CORES > 1 && ATE_N_SIMS > 1 && ate_cl_reuse_cores > 1L) {
+    cat(sprintf("  [parallel:ate-sim] initializing reusable PSOCK pool: cores=%d\n", ate_cl_reuse_cores))
+    ate_cl_reuse <<- parallel::makePSOCKcluster(ate_cl_reuse_cores, outfile = "")
+    on.exit({
+      if (!is.null(ate_cl_reuse)) {
+        try(parallel::stopCluster(ate_cl_reuse), silent = TRUE)
+        ate_cl_reuse <<- NULL
+      }
+    }, add = TRUE)
+    if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
+      parallel::clusterExport(ate_cl_reuse, varlist = c("REPO_DIR"), envir = .GlobalEnv)
+    }
+    parallel::clusterEvalQ(ate_cl_reuse, {
+      suppressPackageStartupMessages({
+        library(spatstat)
+        library(sf)
+        library(tigris)
+        library(data.table)
+        library(dplyr)
+        library(ggplot2)
+        library(parallel)
+      })
+      if (exists("REPO_DIR", inherits = TRUE) && requireNamespace("pkgload", quietly = TRUE)) {
+        try(pkgload::load_all(REPO_DIR, quiet = TRUE, export_all = TRUE, helpers = FALSE, attach_testthat = FALSE),
+            silent = TRUE)
+      }
+      NULL
+    })
+  }
+  invisible(NULL)
+}
+
 # ============================================================================
 # 4C. Fit C: Naive bivariate ETAS with KDE background
 # ============================================================================
@@ -1517,7 +1867,7 @@ fit_f <- function(init_params = biv_init_F,
 primary_kde_spec <- kde_variant_specs[[kde_primary_variant_id]]
 
 sem_pilot_tuning <- NULL
-if (RUN_SEM_PILOT) {
+if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
   cat("\n--- SEM pilot tuning (Model D only) ---\n")
   pilot_cf <- parse_numeric_vector_env("OK_SEM_PILOT_CHANGE_FACTORS", c(0.005, 0.01, 0.02), lower = 1e-10)
   pilot_min <- parse_numeric_vector_env("OK_SEM_PILOT_MIN_MULTS", c(0.1, 0.2, 0.4), lower = 1e-10)
@@ -1646,6 +1996,7 @@ if (RUN_SEM_PILOT) {
   }
 }
 
+if (!isTRUE(FIT_VARIABILITY_ONLY)) {
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
 fit_jobs_all <- list(
   list(kind = "A_hom_naive", variant_id = NA_character_),
@@ -2468,28 +2819,7 @@ if (!is.null(pp_post_sem_D) && !is.null(pp_post_sem_F) && nrow(pp_post_sem_D) ==
               100 * same_labels_DF, d_flip, f_flip))
 }
 
-windowT_ate <- c(0, ATE_WINDOW_DAYS)
 cat(sprintf("  ATE window: [0, %d] days\n", ATE_WINDOW_DAYS))
-
-extract_marginals <- function(biv_par) {
-  if (is.null(biv_par)) return(NULL)
-  c_val <- biv_par[["c"]]; if (!is.finite(c_val)) c_val <- STRUCT_DEFAULTS$c
-  p_val <- biv_par[["p"]]; if (!is.finite(p_val)) p_val <- STRUCT_DEFAULTS$p
-  D_val <- biv_par[["D"]]; if (!is.finite(D_val)) D_val <- STRUCT_DEFAULTS$D
-  g_val <- biv_par[["gamma"]]; if (!is.finite(g_val)) g_val <- STRUCT_DEFAULTS$gamma
-  q_val <- biv_par[["q"]]; if (!is.finite(q_val)) q_val <- STRUCT_DEFAULTS$q
-  structural <- c(c = c_val, p = p_val, D = D_val, gamma = g_val, q = q_val)
-  ctrl <- as.list(c(mu = biv_par[["mu_0"]], A = biv_par[["A_00"]],
-    alpha_m = biv_par[["alpha_m_00"]], structural))
-  treat <- as.list(c(mu = biv_par[["mu_1"]], A = biv_par[["A_11"]],
-    alpha_m = biv_par[["alpha_m_11"]], structural))
-  list(ctrl = ctrl, treat = treat)
-}
-
-extract_marginals_indep <- function(indep_par) {
-  if (is.null(indep_par) || is.null(indep_par$control) || is.null(indep_par$treated)) return(NULL)
-  list(ctrl = indep_par$control, treat = indep_par$treated)
-}
 
 B_marginals <- extract_marginals(B_params)
 D_marginals <- extract_marginals(D_params)
@@ -2500,314 +2830,7 @@ H_marginals <- extract_marginals(H_params)
 I_marginals <- extract_marginals_indep(I_params)
 J_marginals <- extract_marginals_indep(J_params)
 
-ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
-                           n_tiles_used = partition$n,
-                           treated_idx_used = treated_idx,
-                           filtration_history = NULL,
-                           crn_base_seed = NA_integer_,
-                           phase = "main_fit",
-                           quiet = FALSE) {
-  phase_tag <- tolower(gsub("[^A-Za-z0-9]+", "_", as.character(phase)))
-  if (!nzchar(phase_tag)) phase_tag <- "main_fit"
-  phase_label <- switch(
-    phase_tag,
-    main_fit = "main-fit",
-    sensitivity = "sensitivity",
-    bootstrap = "bootstrap",
-    phase_tag
-  )
-  ate_prefix <- sprintf("[ATE:%s]", phase_label)
-  if (!quiet) cat(sprintf("  %s Computing ATE for %s...\n", ate_prefix, label))
-  tryCatch({
-    safe_q <- function(x, probs) {
-      x <- x[is.finite(x)]
-      if (length(x) < 1L) return(rep(NA_real_, length(probs)))
-      as.numeric(stats::quantile(x, probs = probs, na.rm = TRUE, names = FALSE))
-    }
-    summarize_process_stability <- function(par_obj, beta_gr = BETA_GR) {
-      if (is.null(par_obj)) {
-        return(list(mu = NA_real_, A = NA_real_, alpha_m = NA_real_,
-                    beta_gr = beta_gr, beta_minus_alpha = NA_real_,
-                    eta_exact = NA_real_, eta_proxy = NA_real_))
-      }
-      A_val <- suppressWarnings(as.numeric(par_obj$A))
-      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
-      mu_val <- suppressWarnings(as.numeric(par_obj$mu))
-      beta_minus_alpha <- beta_gr - alpha_val
-      eta_exact <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_minus_alpha > 0) {
-        A_val * beta_gr / beta_minus_alpha
-      } else {
-        Inf
-      }
-      eta_proxy <- if (is.finite(A_val) && is.finite(alpha_val) && is.finite(beta_gr) && beta_gr > 0) {
-        A_val * exp(alpha_val / beta_gr)
-      } else {
-        NA_real_
-      }
-      list(
-        mu = mu_val, A = A_val, alpha_m = alpha_val,
-        beta_gr = beta_gr, beta_minus_alpha = beta_minus_alpha,
-        eta_exact = eta_exact, eta_proxy = eta_proxy
-      )
-    }
-    ate_approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
-      if (is.null(par_obj)) return(NA_real_)
-      A_val <- suppressWarnings(as.numeric(par_obj$A))
-      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
-      if (!is.finite(A_val) || !is.finite(alpha_val)) return(NA_real_)
-      A_val * exp(alpha_val / beta_gr)
-    }
-    ate_event_warn_threshold <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_EVENT_THRESHOLD", "20000")))
-    if (!is.finite(ate_event_warn_threshold) || is.na(ate_event_warn_threshold) || ate_event_warn_threshold <= 0) {
-      ate_event_warn_threshold <- 20000
-    }
-    ate_flagged_frac_warn <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_FRACTION_WARN", "0.05")))
-    if (!is.finite(ate_flagged_frac_warn) || is.na(ate_flagged_frac_warn) ||
-        ate_flagged_frac_warn < 0 || ate_flagged_frac_warn > 1) {
-      ate_flagged_frac_warn <- 0.05
-    }
-    ctrl_br <- ate_approx_branching_ratio(ctrl_pp)
-    treat_br <- ate_approx_branching_ratio(treat_pp)
-    ctrl_diag <- summarize_process_stability(ctrl_pp)
-    treat_diag <- summarize_process_stability(treat_pp)
-    if (!quiet) {
-      cat(sprintf("    %s sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
-                  ate_prefix,
-                  ATE_N_SIMS, max(1L, min(ATE_SIM_CORES, ATE_N_SIMS)),
-                  PARALLEL_BACKEND, ctrl_br, treat_br))
-      cat(sprintf("    %s fitted stability (ctrl): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
-                  ate_prefix, ctrl_diag$mu, ctrl_diag$A, ctrl_diag$alpha_m,
-                  ctrl_diag$beta_minus_alpha, ctrl_diag$eta_exact, ctrl_diag$eta_proxy))
-      cat(sprintf("    %s fitted stability (treat): mu=%.4g A=%.4g alpha_m=%.4g beta-alpha=%.4g eta_exact=%.3f eta_proxy=%.3f\n",
-                  ate_prefix, treat_diag$mu, treat_diag$A, treat_diag$alpha_m,
-                  treat_diag$beta_minus_alpha, treat_diag$eta_exact, treat_diag$eta_proxy))
-    }
-    if ((is.finite(ctrl_br) && ctrl_br > BOOT_BRANCHING_MAX) ||
-        (is.finite(treat_br) && treat_br > BOOT_BRANCHING_MAX)) {
-      cat(sprintf("    [warning:ate-explosive] %s: branching proxy exceeds %.3f (ctrl=%.3f, treat=%.3f)\n",
-                  label, BOOT_BRANCHING_MAX, ctrl_br, treat_br))
-    }
-    if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) {
-      if (is.null(filtration_history)) {
-        pre_history <- pp_pre[, c("x", "y", "t", "mag"), drop = FALSE]
-      } else {
-        pre_history <- as.data.frame(filtration_history)[, c("x", "y", "t", "mag"), drop = FALSE]
-      }
-    } else {
-      pre_history <- pp_pre[0, c("x", "y", "t", "mag"), drop = FALSE]
-    }
-    if (!is.finite(crn_base_seed) || is.na(crn_base_seed)) {
-      if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
-        crn_base_seed <- as.integer(OK_ATE_CRN_BASE)
-      } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
-        crn_base_seed <- as.integer(100000L + 1000L * OK_GLOBAL_SEED)
-      } else {
-        crn_base_seed <- as.integer(100000L)
-      }
-    }
-    ate_label_slug <- gsub("[^A-Za-z0-9]+", "_", label)
-    ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
-    if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
-    ate_parallel_label <- sprintf("ate-sim-%s", tolower(substr(ate_label_slug, 1L, 40L)))
-    run_one_sim <- function(s) {
-      s_int <- suppressWarnings(as.integer(s))
-      if (!is.finite(s_int) || is.na(s_int)) s_int <- 1L
-      if (isTRUE(OK_ATE_USE_CRN)) {
-        seed_s <- as.integer(crn_base_seed + s_int)
-        if (isTRUE(OK_ATE_CRN_PAIR)) {
-          set.seed(seed_s)
-          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
-          set.seed(seed_s)
-          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
-        } else {
-          set.seed(seed_s)
-          c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
-          set.seed(as.integer(seed_s + 1000000L))
-          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
-        }
-      } else {
-        c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
-                          m0 = ETAS_M0, beta_gr = BETA_GR,
-                          filtration = pre_history)
-        t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                          m0 = ETAS_M0, beta_gr = BETA_GR,
-                          filtration = pre_history)
-      }
-      c(c_count = length(c_sim$t), t_count = length(t_sim$t))
-    }
-    sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
-      if (!is.null(ate_cl_reuse)) {
-        run_parallel_on_cluster(
-          ate_cl_reuse,
-          as.list(seq_len(ATE_N_SIMS)),
-          run_one_sim,
-          label = ate_parallel_label
-        )
-      } else {
-        run_parallel(
-          as.list(seq_len(ATE_N_SIMS)), run_one_sim,
-          cores = min(ATE_SIM_CORES, ATE_N_SIMS),
-          label = ate_parallel_label
-        )
-      }
-    } else {
-      lapply(seq_len(ATE_N_SIMS), run_one_sim)
-    }
-    c_counts <- vapply(sim_results, function(z) as.numeric(z[["c_count"]]), numeric(1))
-    t_counts <- vapply(sim_results, function(z) as.numeric(z[["t_count"]]), numeric(1))
-    safe_p95 <- function(x) {
-      x <- x[is.finite(x)]
-      if (length(x) < 1L) return(NA_real_)
-      as.numeric(stats::quantile(x, 0.95, na.rm = TRUE, names = FALSE))
-    }
-    safe_max <- function(x) {
-      x <- x[is.finite(x)]
-      if (length(x) < 1L) return(NA_real_)
-      max(x, na.rm = TRUE)
-    }
-    if (!quiet) {
-      cat(sprintf("    %s sim summary (%s): ctrl mean=%.1f p95=%.1f max=%.0f | treat mean=%.1f p95=%.1f max=%.0f\n",
-                  ate_prefix,
-                  label,
-                  mean(c_counts, na.rm = TRUE),
-                  safe_p95(c_counts),
-                  safe_max(c_counts),
-                  mean(t_counts, na.rm = TRUE),
-                  safe_p95(t_counts),
-                  safe_max(t_counts)))
-      ctrl_q <- safe_q(c_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
-      treat_q <- safe_q(t_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
-      total_counts <- c_counts + t_counts
-      total_q <- safe_q(total_counts, c(0, 0.5, 0.9, 0.95, 0.99, 1))
-      cat(sprintf(
-        "    %s sim counts ctrl[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
-        ate_prefix, ctrl_q[1], ctrl_q[2], ctrl_q[3], ctrl_q[4], ctrl_q[5], ctrl_q[6]
-      ))
-      cat(sprintf(
-        "    %s sim counts treat[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
-        ate_prefix, treat_q[1], treat_q[2], treat_q[3], treat_q[4], treat_q[5], treat_q[6]
-      ))
-      cat(sprintf(
-        "    %s sim counts total[min,med,p90,p95,p99,max]=[%.0f, %.0f, %.0f, %.0f, %.0f, %.0f]\n",
-        ate_prefix, total_q[1], total_q[2], total_q[3], total_q[4], total_q[5], total_q[6]
-      ))
-    }
-    flagged_mask <- (is.finite(c_counts) & c_counts > ate_event_warn_threshold) |
-      (is.finite(t_counts) & t_counts > ate_event_warn_threshold)
-    flagged_n <- sum(flagged_mask, na.rm = TRUE)
-    if (flagged_n > 0L) {
-      flagged_frac <- flagged_n / max(1L, length(c_counts))
-      cat(sprintf("    [warning:ate-explosive] %s: %d/%d sims exceed %.0f events (frac=%.3f)\n",
-                  label, flagged_n, length(c_counts), ate_event_warn_threshold, flagged_frac))
-      if (flagged_frac >= ate_flagged_frac_warn) {
-        cat(sprintf("    [warning:ate-explosive] %s: high fraction of extreme sims (>= %.3f); inspect params/branching.\n",
-                    label, ate_flagged_frac_warn))
-      }
-    }
-    if (!quiet) {
-      top_n <- min(5L, length(c_counts))
-      if (top_n > 0L) {
-        ord <- order(c_counts + t_counts, decreasing = TRUE, na.last = TRUE)
-        top_idx <- ord[seq_len(top_n)]
-        top_desc <- paste(vapply(top_idx, function(ii) {
-          sprintf("#%d:c=%d,t=%d,total=%d", ii, as.integer(c_counts[ii]), as.integer(t_counts[ii]), as.integer(c_counts[ii] + t_counts[ii]))
-        }, character(1)), collapse = " | ")
-        cat(sprintf("    %s top total-count sims: %s\n", ate_prefix, top_desc))
-      }
-    }
-    # Estimand of interest: earthquakes saved by treatment regime versus control-everywhere.
-    total_saved <- c_counts - t_counts
-    all_nothing_sim <- data.frame(
-      c_total = c_counts,
-      t_total = t_counts,
-      total_saved = total_saved,
-      total_effect = total_saved,
-      c_mean = c_counts / n_tiles_used,
-      t_mean = t_counts / n_tiles_used,
-      saved_per_tile = total_saved / n_tiles_used,
-      ATE = total_saved / n_tiles_used
-    )
-    n_ctrl_loc <- sum(observed_data$location_process == "control", na.rm = TRUE)
-    n_treat_loc <- sum(observed_data$location_process == "treated", na.rm = TRUE)
-    n_ctrl_tiles <- sum(!treated_idx_used)
-    n_treat_tiles <- sum(treated_idx_used)
-    saved_naive <- NA_real_
-    saved_spillover <- NA_real_
-    total_saved_naive <- NA_real_
-    total_saved_spillover <- NA_real_
-    if (n_ctrl_tiles > 0 && n_treat_tiles > 0) {
-      saved_naive <- n_ctrl_loc / n_ctrl_tiles - n_treat_loc / n_treat_tiles
-      total_saved_naive <- saved_naive * n_tiles_used
-      saved_spillover <- if ("inferred_process" %in% names(observed_data)) {
-        n_ctrl_loc / n_ctrl_tiles -
-          sum(observed_data$inferred_process == "control" &
-              observed_data$location_process == "control", na.rm = TRUE) / n_ctrl_tiles
-      } else { 0 }
-      total_saved_spillover <- saved_spillover * n_tiles_used
-    }
-    analytic <- ATE_analytic_etas(ctrl_pp, treat_pp,
-                                  windowT = windowT_ate, n_tiles = n_tiles_used,
-                                  beta_gr = BETA_GR, m0 = ETAS_M0)
-    analytic_saved <- if (!is.null(analytic)) {
-      c(
-        eta_ctrl_minus_treat = analytic$eta_ctrl - analytic$eta_treat,
-        total_ctrl_minus_treat = (analytic$eta_ctrl - analytic$eta_treat) * n_tiles_used
-      )
-    } else {
-      c(eta_ctrl_minus_treat = NA_real_, total_ctrl_minus_treat = NA_real_)
-    }
-    list(all_nothing_sim = all_nothing_sim,
-         saved_naive = saved_naive, saved_spillover = saved_spillover,
-         total_saved_naive = total_saved_naive, total_saved_spillover = total_saved_spillover,
-         ATE_naive = saved_naive, ATE_spillover = saved_spillover,
-         total_naive = total_saved_naive, total_spillover = total_saved_spillover,
-         n_tiles_used = n_tiles_used,
-         treated_pp = treat_pp, control_pp = ctrl_pp,
-         analytic = analytic,
-         analytic_saved = analytic_saved)
-  }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
-}
-
-ate_cl_reuse <- NULL
-ate_cl_reuse_cores <- max(1L, min(ATE_SIM_CORES, ATE_N_SIMS))
-if (PARALLEL_BACKEND == "psock" && N_CORES > 1 && ATE_N_SIMS > 1 && ate_cl_reuse_cores > 1L) {
-  cat(sprintf("  [parallel:ate-sim] initializing reusable PSOCK pool: cores=%d\n", ate_cl_reuse_cores))
-  ate_cl_reuse <- parallel::makePSOCKcluster(ate_cl_reuse_cores, outfile = "")
-  on.exit({
-    if (!is.null(ate_cl_reuse)) {
-      try(parallel::stopCluster(ate_cl_reuse), silent = TRUE)
-      ate_cl_reuse <<- NULL
-    }
-  }, add = TRUE)
-  if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
-    parallel::clusterExport(ate_cl_reuse, varlist = c("REPO_DIR"), envir = .GlobalEnv)
-  }
-  parallel::clusterEvalQ(ate_cl_reuse, {
-    suppressPackageStartupMessages({
-      library(spatstat)
-      library(sf)
-      library(tigris)
-      library(data.table)
-      library(dplyr)
-      library(ggplot2)
-      library(parallel)
-    })
-    if (exists("REPO_DIR", inherits = TRUE) && requireNamespace("pkgload", quietly = TRUE)) {
-      try(pkgload::load_all(REPO_DIR, quiet = TRUE, export_all = TRUE, helpers = FALSE, attach_testthat = FALSE),
-          silent = TRUE)
-    }
-    NULL
-  })
-}
-
+ensure_ate_psock_pool()
 t_ate_B <- proc.time()[["elapsed"]]
 ate_B <- ate_estim_fast(B_marginals$ctrl, B_marginals$treat, pp_post,
                         "Fit A (naive bivariate)")
@@ -2880,6 +2903,10 @@ if (exists("t_ate_J", inherits = FALSE)) {
   add_timing_row("ate_J", ate_J_elapsed, if (!is.null(ate_J)) "ok" else "failed")
 }
 
+} else {
+  cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, I/J, partition sensitivities, main ATEs) ---\n")
+}
+
 # ============================================================================
 # 6a. Fit variability (repeat county all-free E/F fits)
 # ============================================================================
@@ -2889,6 +2916,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
   t_fitvar <- proc.time()[["elapsed"]]
   cat(sprintf("\n--- Step 6a: Fit variability (E/F repeats; reps=%d, cores=%d) ---\n",
               FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
+  ensure_ate_psock_pool()
 
   fitvar_ate_stats <- function(ate_obj, n_tiles = partition$n) {
     out <- list(
@@ -3092,6 +3120,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
   }
   if (nzchar(FIT_VARIABILITY_PATCH_FILE)) {
     patch_file <- normalizePath(FIT_VARIABILITY_PATCH_FILE, winslash = "/", mustWork = FALSE)
+    patch_ok <- FALSE
     if (file.exists(patch_file)) {
       patched <- tryCatch(readRDS(patch_file), error = function(e) NULL)
       if (!is.null(patched)) {
@@ -3100,7 +3129,9 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         patched$config$RUN_FIT_VARIABILITY <- TRUE
         patched$config$FIT_VARIABILITY_REPS <- FIT_VARIABILITY_REPS
         patched$config$FIT_VARIABILITY_CORES <- FIT_VARIABILITY_CORES
+        patched$config$FIT_VARIABILITY_ONLY <- isTRUE(FIT_VARIABILITY_ONLY)
         saveRDS(patched, patch_file)
+        patch_ok <- TRUE
         cat(sprintf("Patched fit variability into existing results: %s\n", patch_file))
       } else {
         cat(sprintf("Fit variability patch skipped: failed to read %s\n", patch_file))
@@ -3108,9 +3139,17 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     } else {
       cat(sprintf("Fit variability patch skipped: file does not exist: %s\n", patch_file))
     }
+    if (isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(patch_ok)) {
+      stop("FIT_VARIABILITY_ONLY: failed to merge fit_variability into ", patch_file)
+    }
   }
 } else {
   add_timing_row("fit_variability_total", NA_real_, "skipped", "disabled")
+}
+
+if (isTRUE(FIT_VARIABILITY_ONLY)) {
+  cat("\n=== FIT_VARIABILITY_ONLY: finished; exiting before Step 6b checkpoint / sensitivity / bootstrap ===\n")
+  quit(save = "no", status = 0)
 }
 
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
@@ -3212,6 +3251,9 @@ results_pre_sensitivity <- list(
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
+    SEM_OUTER_MAXIT_BIV = SEM_OUTER_MAXIT_BIV,
+    SEM_WARMSTART_FIXED = SEM_WARMSTART_FIXED,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
@@ -3466,6 +3508,9 @@ results_pre_bootstrap <- list(
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
+    SEM_OUTER_MAXIT_BIV = SEM_OUTER_MAXIT_BIV,
+    SEM_WARMSTART_FIXED = SEM_WARMSTART_FIXED,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
@@ -4077,6 +4122,9 @@ results <- list(
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
+    SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
+    SEM_OUTER_MAXIT_BIV = SEM_OUTER_MAXIT_BIV,
+    SEM_WARMSTART_FIXED = SEM_WARMSTART_FIXED,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
