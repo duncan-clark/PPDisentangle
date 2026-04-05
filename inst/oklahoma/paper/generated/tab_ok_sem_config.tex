@@ -2,18 +2,18 @@
 \begin{table}[t]
 \centering
 \small
-\caption{\label{tab:ok_sem_config}Stochastic SEM configuration for the Oklahoma \emph{SEM KDE fit}. Values are taken from the archived run \texttt{oklahoma\_results\_job5226010.rds}.}
+\caption{\label{tab:ok_sem_config}Stochastic SEM configuration for the Oklahoma \emph{SEM KDE fit}. Values are taken from the archived run \texttt{for\_paper.rds}.}
 \begin{tabular}{@{}l@{\quad}l@{}}
 \toprule
 Setting & Value\\
 \midrule
-SEM outer rounds ($N_{\mathrm{iter}}$) & 10\\
-Inner iterations (per outer round) & 1000\\
+SEM outer rounds ($N_{\mathrm{iter}}$) & 1\\
+Inner iterations (per outer round) & 2000\\
 Inner proposals (per inner iteration) & 20\\
 Retained labellings (per outer round) & 20\\
-Outer optim cap (adaptive SEM, uni.~path) & 220\\
-Outer optim cap (bivariate ETAS path) & 1000\\
-Warm-start fixed full-parameter step & no\\
+Outer optim cap (adaptive SEM, uni.~path) & ---\\
+Outer optim cap (bivariate ETAS path) & ---\\
+Warm-start fixed full-parameter step & ---\\
 Relabelling selection method & sample\_weighted\\
 Relabelling selection temperature & 0.08\\
 Proposal change factor & 0.01\\

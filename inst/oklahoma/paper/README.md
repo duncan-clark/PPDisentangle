@@ -1,13 +1,12 @@
-# Oklahoma paper assets (LaTeX + R)
+# Oklahoma paper assets (builder + generated outputs)
 
-This folder separates **writing** from **computed outputs**:
+Prose for the manuscript lives in your main document (e.g. Overleaf). This folder holds the **R driver** and **regenerated artefacts** only:
 
-| File | Role |
+| Path | Role |
 |------|------|
-| `oklahoma_application_section.tex` | Main-text LaTeX section (`sec:application`). |
-| `oklahoma_application_appendix.tex` | Supplement listing HTML-report material not in the main section. |
-| `oklahoma_paper_assets.R` | Builds all Oklahoma figures and `\input`-able table `.tex` fragments. |
-| `generated/` | Populated by the R script (tables, CSV summary, manifest). Do not edit by hand. |
+| `oklahoma_paper_assets.R` | Builds Oklahoma figures (PDFs) and `\input`-able table `.tex` fragments. |
+| `generated/` | Tables, CSV summary, manifest RDS — **do not edit by hand**. |
+| `generated/figures/` | PDFs from the same run (partition, point patterns, SEM traces, bootstrap plots, …). |
 
 ## Build
 
@@ -20,18 +19,20 @@ Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
 Options:
 
 ```text
---input       Path to oklahoma_results*.rds (default: output/oklahoma/oklahoma_results_job5226010.rds)
---plots-dir   PDF output directory (default: plots/oklahoma)
+--input       Path to results `.rds` (default: first existing of
+              output/oklahoma/for_paper.rds, inst/oklahoma/paper/for_paper.rds)
+--plots-dir   PDF output directory (default: inst/oklahoma/paper/generated/figures)
 --tex-dir     Generated LaTeX directory (default: inst/oklahoma/paper/generated)
 --data-dir    Oklahoma CSV bundle (default: inst/oklahoma/oklahoma_induced_seismicity_data_regional20150318)
 ```
 
 Or in R: `setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")`.
 
-## LaTeX layout
+## LaTeX / Overleaf
 
-- Figures are written under `plots/oklahoma/` (e.g. `ATE_diff.pdf`, `cumulative_count.pdf`, plus ECDF / running-mean / simulation histogram PDFs).
-- `oklahoma_application_section.tex` uses paths relative to the repo root as the LaTeX working directory. If your main document lives elsewhere, set `\graphicspath` or change the `\includegraphics` and `\input` paths.
+- Default figure output: `generated/figures/` (alongside `generated/*.tex`).
+- Point `\includegraphics` and `\input` at copies of those paths in your project, or set `\graphicspath` if the layout differs.
+- Legacy: `--plots-dir plots/oklahoma` if you prefer the old location.
 
 The preamble of your main document should include `\usepackage{booktabs}` for the generated tables.
 

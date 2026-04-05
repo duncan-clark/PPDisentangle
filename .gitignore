@@ -26,6 +26,9 @@ inst/gambia/output/
 # Local run logs & sim outputs (A)
 output/run_logs/
 
+# Oklahoma: optional local results copy for paper assets (large)
+inst/oklahoma/paper/for_paper.rds
+
 # Oklahoma: rendered report + local pipeline output (D)
 inst/oklahoma/oklahoma_report.html
 inst/oklahoma/oklahoma_report.pdf
