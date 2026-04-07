@@ -32,7 +32,7 @@ Or in R: `setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")
 
 - Default figure output: `generated/figures/` (alongside `generated/*.tex`).
 - Point `\includegraphics` and `\input` at copies of those paths in your project, or set `\graphicspath` if the layout differs.
-- Legacy: `--plots-dir plots/oklahoma` if you prefer the old location.
+- Optional: `--plots-dir` to write PDFs elsewhere (e.g. a local `figures/` mirror).
 
 The preamble of your main document should include `\usepackage{booktabs}` for the generated tables.
 

@@ -16,7 +16,7 @@
 #   inst/oklahoma/paper/generated/*.tex:
 #     tab_ok_counts, tab_ok_sem_config, tab_ok_confusion_F, tab_ok_ef_params
 #     tab_ok_bootstrap_summary — only if bootstrap present
-#   Override PDF location: --plots-dir plots/oklahoma (legacy)
+#   Override PDF location: --plots-dir <path>
 #
 # Optional packages: jsonlite (cumulative plot), tigris (county maps; same as oklahoma_report.qmd).
 suppressPackageStartupMessages({
@@ -177,6 +177,22 @@ write_tex_ok_counts <- function(path) {
   message("Wrote ", path)
 }
 
+# Figures included at column width in paper.tex are scaled down for legibility (13 pt ggplot default as reference).
+theme_ok_boot_hist <- theme_minimal(base_size = 13 * 1.5) +
+  theme(
+    legend.position = "top",
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+theme_paper_shrunk <- theme_minimal(base_size = 13 * 1.8) +
+  theme(
+    legend.position = "top",
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+
 # ---- Bootstrap (bias-corrected replicates, same as oklahoma_publication_ef.R) ----
 if (have_boot) {
 boot_E <- as.data.frame(boot_obj$fit_E$replicate_summary)
@@ -255,12 +271,12 @@ p_boot_hist <- ggplot(boot_df, aes(x = .data$ate_total_mean, fill = .data$model)
     "SEM Bivariate ETAS with KDE" = "#3182bd"
   )) +
   labs(
-    x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ " days)"),
+    x = "bootstrap replicate total saved / 100 day",
     y = "Count",
     fill = "Model"
   ) +
-  xlim(-500, 700) +
-  theme_pub
+  xlim(-400, 700) +
+  theme_ok_boot_hist
 
 p_boot_ecdf <- ggplot(boot_df, aes(x = .data$ate_total_mean, colour = .data$model)) +
   stat_ecdf(linewidth = 1.0) +
@@ -270,7 +286,7 @@ p_boot_ecdf <- ggplot(boot_df, aes(x = .data$ate_total_mean, colour = .data$mode
     "SEM Bivariate ETAS with KDE" = "#3182bd"
   )) +
   labs(
-    x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ " days)"),
+    x = "bootstrap replicate total saved / 100 day",
     y = "Cumulative proportion",
     colour = "Model"
   ) +
@@ -340,11 +356,11 @@ if (file.exists(ev_csv) && requireNamespace("jsonlite", quietly = TRUE)) {
       label = paste0("OCC directive\n(", t_star_lbl, ")"),
       color = "red",
       hjust = 0,
-      size = 3.5
+      size = 3.5 * 1.8
     ) +
     labs(x = "Days since treatment (t*)", y = "Cumulative events") +
-    theme_minimal(base_size = 13) +
-    theme(plot.title = element_blank(), plot.subtitle = element_blank())
+    theme_paper_shrunk +
+    theme(legend.position = "none")
   ggsave(file.path(plots_dir, "cumulative_count.pdf"), p_cum, width = 8.8, height = 5.2)
   message("Wrote cumulative_count.pdf")
 } else {

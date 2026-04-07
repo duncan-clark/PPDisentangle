@@ -212,45 +212,85 @@ build_multiplier_legend_info <- function(summary_obj, target_multipliers, out_di
     sprintf("%sx (~%.0f points)", info$mult_chr, info$avg_post_points),
     sprintf("%sx", info$mult_chr)
   )
+  # Shorter than legend_label but keeps ~N (post-treatment points).
+  info$legend_label_compact <- ifelse(
+    is.finite(info$avg_post_points),
+    sprintf("%s×, ~%.0f", info$mult_chr, info$avg_post_points),
+    sprintf("%s×", info$mult_chr)
+  )
   info
 }
 
-build_publication_plot <- function(df, legend_info, y_col, y_quantiles = DEFAULT_Y_QUANTILES) {
-  df <- df %>% left_join(legend_info[, c("time_multiplier", "legend_label")], by = "time_multiplier")
-  df$legend_label <- factor(
-    df$legend_label,
-    levels = legend_info$legend_label[order(legend_info$time_multiplier)]
-  )
+build_publication_plot <- function(
+    df,
+    legend_info,
+    y_col,
+    y_quantiles = DEFAULT_Y_QUANTILES,
+    coord_ylim = NULL,
+    font_scale = 1,
+    legend_fill_col = "legend_label",
+    fill_title = "Post treatment window",
+    true_dtaite_label_y = NULL,
+    true_dtaite_label_x = 3.8,
+    true_dtaite_label_hjust = 1,
+    true_dtaite_label_vjust = -0.5) {
+  join_cols <- c("time_multiplier", legend_fill_col)
+  df <- df %>% left_join(legend_info[, join_cols, drop = FALSE], by = "time_multiplier")
+  ord <- order(legend_info$time_multiplier)
+  lvl <- legend_info[[legend_fill_col]][ord]
+  df$legend_fill <- factor(df[[legend_fill_col]], levels = lvl)
 
   true_ate <- mean(df$true_ate_per_post_time, na.rm = TRUE)
   y_vals <- df[[y_col]]
-  y_q <- as.numeric(stats::quantile(y_vals, probs = y_quantiles, na.rm = TRUE))
-  y_pad <- max(0.02, 0.08 * diff(y_q))
-  y_lims <- c(y_q[[1]] - y_pad, y_q[[2]] + y_pad)
+  if (is.null(coord_ylim)) {
+    y_q <- as.numeric(stats::quantile(y_vals, probs = y_quantiles, na.rm = TRUE))
+    y_pad <- max(0.02, 0.08 * diff(y_q))
+    y_lims <- c(y_q[[1]] - y_pad, y_q[[2]] + y_pad)
+  } else {
+    y_lims <- coord_ylim
+  }
+
+  bs <- 18.2 * font_scale
+  ax_txt <- 15.4 * font_scale
+  ann_size <- 5.88 * font_scale
+  out_sz <- 0.98 * font_scale
+  ann_y <- if (!is.null(true_dtaite_label_y)) {
+    true_dtaite_label_y
+  } else if (is.null(coord_ylim)) {
+    true_ate + 0.01
+  } else {
+    y_lims[[2]] - 0.12 * diff(y_lims)
+  }
 
   ggplot(
     df,
-    aes(x = .data$method, y = .data[[y_col]], fill = .data$legend_label)
+    aes(x = .data$method, y = .data[[y_col]], fill = .data$legend_fill)
   ) +
     geom_boxplot(
       position = position_dodge2(width = 0.8, preserve = "single"),
-      outlier.alpha = 0.5, outlier.size = 0.98
+      outlier.alpha = 0.5, outlier.size = out_sz
     ) +
     geom_hline(yintercept = true_ate, linetype = "dashed", linewidth = 1.25, colour = "black") +
     annotate(
-      "text", x = 3.8, y = true_ate +0.01, label = "True DTAITE",
-      hjust = 1, vjust = -0.5, size = 5.88, fontface = "bold"
+      "text",
+      x = true_dtaite_label_x,
+      y = ann_y,
+      label = "True DTAITE",
+      hjust = true_dtaite_label_hjust,
+      vjust = true_dtaite_label_vjust,
+      size = ann_size,
+      fontface = "bold"
     ) +
     coord_cartesian(ylim = y_lims) +
-    labs(x = NULL, y = "All-Nothing DTAITE", fill = "Post treatment window") +
-    theme_minimal(base_size = 18.2) +
+    labs(x = NULL, y = "All-Nothing DTAITE", fill = fill_title) +
+    theme_minimal(base_size = bs) +
     theme(
       plot.title = element_blank(),
       axis.title.x = element_blank(),
-      axis.text = element_text(size = 15.4),
-      axis.title.y = element_text(size = 18.2),
-      legend.title = element_text(size = 18.2),
-      legend.text = element_text(size = 15.4),
+      axis.text = element_text(size = ax_txt),
+      axis.title.y = element_text(size = bs),
+      legend.title = element_text(size = bs),
+      legend.text = element_text(size = ax_txt),
       legend.position = "right"
     )
 }
@@ -439,7 +479,20 @@ run_publication_plot <- function(
     out_dir = search_dir
   )
   message("Read summary: ", rds_path)
-  p_true <- build_publication_plot(df, legend_info, y_col = "all_nothing_true_control_per_post_time", y_quantiles = y_quantiles)
+  p_true <- build_publication_plot(
+    df,
+    legend_info,
+    y_col = "all_nothing_true_control_per_post_time",
+    y_quantiles = y_quantiles,
+    coord_ylim = c(-0.35, -0.05),
+    font_scale = 2,
+    legend_fill_col = "legend_label_compact",
+    fill_title = "Post window",
+    true_dtaite_label_y = -0.35,
+    true_dtaite_label_x = 2,
+    true_dtaite_label_hjust = 0.5,
+    true_dtaite_label_vjust = -0.5
+  )
   p_est <- build_publication_plot(df_est, legend_info, y_col = "all_nothing_theory_per_post_time", y_quantiles = y_quantiles)
 
   use_custom <- !is.null(output_prefix) && nzchar(output_prefix)
