@@ -15,10 +15,12 @@ adaptive_SEM(
   hawkes_params_treated,
   N_labellings,
   N_iter,
+  reset = FALSE,
   verbose = TRUE,
   adaptive_control = list(param_update_cadence = 20, proposal_update_cadence = 1,
     state_spaces = NULL, iter = 100, n_props = 10, change_factor = 0.1, verbose = FALSE,
     update_starting_data = TRUE, include_starting_data = FALSE),
+  model_type = "hawkes",
   ...
 )
 }
@@ -42,6 +44,8 @@ adaptive_SEM(
 \item{N_labellings}{Number of labeling proposals per outer iteration}
 
 \item{N_iter}{Number of outer EM iterations}
+
+\item{reset}{Logical; if TRUE, the outer loop counter resets to 0 whenever the adaptive step is triggered by weight concentration.}
 
 \item{verbose}{Print progress}
 

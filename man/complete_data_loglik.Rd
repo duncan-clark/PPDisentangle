@@ -11,7 +11,8 @@ complete_data_loglik(
   statespace,
   partition,
   partition_processes,
-  background_rate_var = NULL
+  background_rate_var = NULL,
+  ...
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ optionally W (background covariate)}
 \item{partition_processes}{Character vector of process names per tile}
 
 \item{background_rate_var}{Column name for inhomogeneous background (or NULL)}
+
+\item{...}{Additional arguments passed to loglik_hawk_fast (e.g. t_trunc)}
 }
 \value{
 Scalar log-likelihood value

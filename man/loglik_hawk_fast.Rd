@@ -12,6 +12,9 @@ loglik_hawk_fast(
   zero_background_region = NULL,
   background_rate_var = "W",
   precomp = NULL,
+  alpha_max = NULL,
+  beta_min = NULL,
+  t_trunc = NULL,
   ...
 )
 }
@@ -31,11 +34,19 @@ loglik_hawk_fast(
 \item{precomp}{Optional list from \code{precompute_loglik_args} to skip
 redundant area/inside.owin calculations when called in a tight loop.}
 
+\item{alpha_max}{Upper bound on alpha. If NULL (default), computed from
+windowS so the minimum triggering standard deviation is 1\\% of the
+window's characteristic length.}
+
+\item{beta_min}{Lower bound on beta (upper bound on mean trigger time).
+If NULL (default), set to \code{1 / (windowT[2] - windowT[1])} so that
+the mean triggering time cannot exceed the observation window.}
+
 \item{...}{Additional arguments}
 }
 \value{
 Scalar log-likelihood value
 }
 \description{
-Fast log-likelihood for a spatio-temporal Hawkes process (C++ accelerated)
+The integral term uses the time-dependent form (Option B): \eqn{\mu T + K \sum_i (1 - \exp(-\beta(T - t_i)))}, which is exact for the exponential temporal kernel. The spatial kernel is assumed to integrate to 1 over the full plane (no finite-window correction). This differs from \code{loglik_hawk(..., density_approx = TRUE)}, which uses \eqn{\mu T + K n}.
 }

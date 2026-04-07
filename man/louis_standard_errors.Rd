@@ -12,7 +12,8 @@ louis_standard_errors(
   partition_processes,
   background_rate_var = NULL,
   alpha = 0.05,
-  verbose = TRUE
+  verbose = TRUE,
+  ...
 )
 }
 \arguments{

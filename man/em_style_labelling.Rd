@@ -18,14 +18,26 @@ em_style_labelling(
   proposal_update_cadence = 1,
   update_starting_data = TRUE,
   include_starting_data = TRUE,
+  include_starting_first_n = 50,
+  max_relabel_step_frac = 1,
+  force_param_update_flip_frac = 1,
   optim_method = "max",
+  selection_temperature = 0.15,
+  change_factor_min_mult = 0.2,
+  change_factor_max_mult = 2,
   state_spaces = NULL,
   metric_name = "post_likelihood",
   iter = 100,
   n_props = 100,
   change_factor = 0.1,
+  stagnation_trigger_every = 10,
   MCMC_style = FALSE,
+  proposal_method = "simulation",
+  fixed_params = NULL,
   verbose = FALSE,
+  model_type = "hawkes",
+  temporal_weight = 0,
+  temporal_scale_days = NULL,
   ...
 )
 }
@@ -56,7 +68,26 @@ em_style_labelling(
 
 \item{include_starting_data}{Logical; include current data in proposals}
 
-\item{optim_method}{One of "max", "mean", "truncated_mean"}
+\item{include_starting_first_n}{Integer; force-include starting data as a
+candidate proposal for the first N inner iterations.}
+
+\item{max_relabel_step_frac}{Maximum fraction of post-treatment points that
+can change labels in a single inner iteration.}
+
+\item{force_param_update_flip_frac}{Cumulative accepted-flip fraction
+threshold that forces a parameter update once reached.}
+
+\item{optim_method}{One of "max", "sample_weighted", "mean", "truncated_mean"}
+
+\item{selection_temperature}{Positive temperature for likelihood-weighted
+sampling when \code{optim_method = "sample_weighted"}. Lower values are
+more concentrated near the maximum-likelihood proposal.}
+
+\item{change_factor_min_mult}{Lower bound multiplier for adaptive
+\code{change_factor} relative to the initial value.}
+
+\item{change_factor_max_mult}{Upper bound multiplier for adaptive
+\code{change_factor} relative to the initial value.}
 
 \item{state_spaces}{Optional precomputed state spaces}
 
@@ -67,6 +98,9 @@ em_style_labelling(
 \item{n_props}{Number of proposals per iteration}
 
 \item{change_factor}{Scaling factor for relabeling}
+
+\item{stagnation_trigger_every}{Trigger exploration every N consecutive
+no-flip iterations.}
 
 \item{MCMC_style}{Use MCMC acceptance/rejection}
 

@@ -11,6 +11,7 @@ sim_hawkes_fast(
   background_realization = NULL,
   filtration = NULL,
   covariate_lookup = NULL,
+  t_trunc = NULL,
   ...
 )
 }

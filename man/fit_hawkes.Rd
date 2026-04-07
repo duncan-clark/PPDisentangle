@@ -13,6 +13,14 @@ fit_hawkes(
   maxit,
   poisson_flag = FALSE,
   zero_background_region = NULL,
+  use_fast = TRUE,
+  method = "Nelder-Mead",
+  lower = NULL,
+  upper = NULL,
+  alpha_max = NULL,
+  beta_min = NULL,
+  fixed_params = NULL,
+  t_trunc = NULL,
   ...
 )
 }
@@ -33,10 +41,31 @@ fit_hawkes(
 
 \item{zero_background_region}{Optional owin where background is zero}
 
-\item{...}{Additional arguments passed to loglik_hawk}
+\item{use_fast}{Logical; use C++ accelerated likelihood}
+
+\item{method}{Optimization method (default "Nelder-Mead")}
+
+\item{lower}{Optional lower bounds for L-BFGS-B}
+
+\item{upper}{Optional upper bounds for L-BFGS-B}
+
+\item{alpha_max}{Upper bound on alpha passed to loglik_hawk_fast.
+NULL (default) derives a bound from the window dimensions.}
+
+\item{beta_min}{Lower bound on beta passed to loglik_hawk_fast.
+NULL (default) sets 1/(windowT\link{2}-windowT\link{1}) so mean trigger time
+cannot exceed the observation window.}
+
+\item{fixed_params}{Named list of parameters to hold fixed during
+optimization (profile likelihood). For example,
+\code{fixed_params = list(beta = 0.05)} optimizes only mu, alpha, K
+with beta fixed at 0.05. The fixed values override params_init.}
+
+\item{...}{Additional arguments passed to loglik_hawk or loglik_hawk_fast}
 }
 \value{
-An optim result list with element par
+An optim result list with element par (always length-4 named
+vector including fixed values)
 }
 \description{
 Fit a spatio-temporal Hawkes process via MLE

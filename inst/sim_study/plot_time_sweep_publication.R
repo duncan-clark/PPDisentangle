@@ -1,4 +1,12 @@
 #!/usr/bin/env Rscript
+#
+# Builds publication boxplots + optional parameter tables from the time-sweep summary.
+# Default input: <repo>/output/sim_study/time_sweep_5228509_summary.rds
+# Default outputs (same layout as inst/oklahoma/paper/generated/):
+#   <repo>/inst/sim_study/generated/figures/*.pdf|.png
+#   <repo>/inst/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+# Optional: --output-prefix STEM (STEM.pdf, STEM_estimated_control.pdf, STEM_param_tables.tex)
+#           --figures-dir --tex-dir --rds-search-dir
 
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -9,8 +17,49 @@ suppressPackageStartupMessages({
 # User-facing defaults (interactive-friendly)
 # ---------------------------------------------------------------------
 DEFAULT_TARGET_MULTIPLIERS <- c(0.1, 0.5, 1.0)
-DEFAULT_OUTPUT_PREFIX <- "time_sweep_5228509_core_true_control_pub"
 DEFAULT_Y_QUANTILES <- c(0.02, 0.98)  # for robust y-limits
+# Default summary from time sweep (written under output/sim_study/ by the sweep pipeline)
+DEFAULT_SUMMARY_RDS <- "time_sweep_5228509_summary.rds"
+# Default figure/table basenames under inst/sim_study/generated/ (matches paper.tex)
+DEFAULT_STEM_TRUE_CONTROL <- "results_true_control"
+DEFAULT_STEM_ESTIMATED_CONTROL <- "results_estimated_control"
+DEFAULT_TEX_PARAM_TABLES <- "tab_sim_time_sweep_param_tables.tex"
+
+default_summary_rds <- function(repo_root = NULL) {
+  root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  normalizePath(
+    file.path(root, "output", "sim_study", DEFAULT_SUMMARY_RDS),
+    winslash = "/",
+    mustWork = FALSE
+  )
+}
+
+default_sim_figures_dir <- function(repo_root = NULL) {
+  root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  normalizePath(
+    file.path(root, "inst", "sim_study", "generated", "figures"),
+    winslash = "/",
+    mustWork = FALSE
+  )
+}
+
+default_sim_tex_dir <- function(repo_root = NULL) {
+  root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  normalizePath(
+    file.path(root, "inst", "sim_study", "generated"),
+    winslash = "/",
+    mustWork = FALSE
+  )
+}
+
+default_rds_search_dir <- function(repo_root = NULL) {
+  root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  normalizePath(
+    file.path(root, "output", "sim_study"),
+    winslash = "/",
+    mustWork = FALSE
+  )
+}
 
 # ---------------------------------------------------------------------
 # Small utilities
@@ -27,8 +76,16 @@ get_arg_val <- function(args, flag, default = NULL) {
   args[[idx[[1]] + 1L]]
 }
 
-find_repo_root <- function() {
-  normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+find_repo_root <- function(start_dir = getwd()) {
+  cur <- normalizePath(start_dir, winslash = "/", mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, ".git"))) return(cur)
+    parent <- dirname(cur)
+    if (identical(parent, cur)) {
+      return(normalizePath(start_dir, winslash = "/", mustWork = FALSE))
+    }
+    cur <- parent
+  }
 }
 
 validate_summary_structure <- function(summary_obj) {
@@ -152,7 +209,7 @@ build_multiplier_legend_info <- function(summary_obj, target_multipliers, out_di
   info$mult_chr <- formatC(info$time_multiplier, format = "f", digits = 1)
   info$legend_label <- ifelse(
     is.finite(info$avg_post_points),
-    sprintf("%sx (approx points %.0f)", info$mult_chr, info$avg_post_points),
+    sprintf("%sx (~%.0f points)", info$mult_chr, info$avg_post_points),
     sprintf("%sx", info$mult_chr)
   )
   info
@@ -177,19 +234,23 @@ build_publication_plot <- function(df, legend_info, y_col, y_quantiles = DEFAULT
   ) +
     geom_boxplot(
       position = position_dodge2(width = 0.8, preserve = "single"),
-      outlier.alpha = 0.5, outlier.size = 0.7
+      outlier.alpha = 0.5, outlier.size = 0.98
     ) +
-    geom_hline(yintercept = true_ate, linetype = "dashed", linewidth = 0.9, colour = "black") +
+    geom_hline(yintercept = true_ate, linetype = "dashed", linewidth = 1.25, colour = "black") +
     annotate(
       "text", x = 3.8, y = true_ate +0.01, label = "True DTAITE",
-      hjust = 1, vjust = -0.5, size = 4.2, fontface = "bold"
+      hjust = 1, vjust = -0.5, size = 5.88, fontface = "bold"
     ) +
     coord_cartesian(ylim = y_lims) +
-    labs(x = "Method", y = "All-Nothing DTAITE", fill = "Post treatment window") +
-    theme_minimal(base_size = 13) +
+    labs(x = NULL, y = "All-Nothing DTAITE", fill = "Post treatment window") +
+    theme_minimal(base_size = 18.2) +
     theme(
       plot.title = element_blank(),
-      axis.text.x = element_text(size = 11),
+      axis.title.x = element_blank(),
+      axis.text = element_text(size = 15.4),
+      axis.title.y = element_text(size = 18.2),
+      legend.title = element_text(size = 18.2),
+      legend.text = element_text(size = 15.4),
       legend.position = "right"
     )
 }
@@ -345,17 +406,29 @@ write_param_tables_tex <- function(summary_obj, target_multipliers, tex_file) {
 # Main entry point (call this interactively)
 # ---------------------------------------------------------------------
 run_publication_plot <- function(
-    input_rds,
-    output_prefix = DEFAULT_OUTPUT_PREFIX,
+    input_rds = NULL,
+    output_prefix = NULL,
     target_multipliers = DEFAULT_TARGET_MULTIPLIERS,
     y_quantiles = DEFAULT_Y_QUANTILES,
-    output_dir = NULL) {
+    figures_dir = NULL,
+    tex_dir = NULL,
+    rds_search_dir = NULL) {
   repo_root <- find_repo_root()
-  out_dir <- if (is.null(output_dir)) file.path(repo_root, "output", "sim_study") else output_dir
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  rds_path <- if (is.null(input_rds) || !nzchar(input_rds)) {
+    default_summary_rds(repo_root)
+  } else {
+    normalizePath(input_rds, winslash = "/", mustWork = FALSE)
+  }
+  fig_dir <- if (is.null(figures_dir)) default_sim_figures_dir(repo_root) else normalizePath(figures_dir, winslash = "/", mustWork = FALSE)
+  tx_dir <- if (is.null(tex_dir)) default_sim_tex_dir(repo_root) else normalizePath(tex_dir, winslash = "/", mustWork = FALSE)
+  search_dir <- if (is.null(rds_search_dir)) default_rds_search_dir(repo_root) else normalizePath(rds_search_dir, winslash = "/", mustWork = FALSE)
+  dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(tx_dir, recursive = TRUE, showWarnings = FALSE)
 
-  if (!file.exists(input_rds)) stop("Input RDS not found: ", input_rds)
-  summary_obj <- readRDS(input_rds)
+  if (!file.exists(rds_path)) {
+    stop("Input RDS not found: ", rds_path, call. = FALSE)
+  }
+  summary_obj <- readRDS(rds_path)
   validate_summary_structure(summary_obj)
 
   df <- prepare_core_true_control_df(summary_obj, target_multipliers = target_multipliers)
@@ -363,20 +436,26 @@ run_publication_plot <- function(
   legend_info <- build_multiplier_legend_info(
     summary_obj = summary_obj,
     target_multipliers = target_multipliers,
-    out_dir = out_dir
+    out_dir = search_dir
   )
+  message("Read summary: ", rds_path)
   p_true <- build_publication_plot(df, legend_info, y_col = "all_nothing_true_control_per_post_time", y_quantiles = y_quantiles)
   p_est <- build_publication_plot(df_est, legend_info, y_col = "all_nothing_theory_per_post_time", y_quantiles = y_quantiles)
 
-  png_file_true <- file.path(out_dir, paste0(output_prefix, ".png"))
-  pdf_file_true <- file.path(out_dir, paste0(output_prefix, ".pdf"))
-  png_file_est <- file.path(out_dir, paste0(output_prefix, "_estimated_control.png"))
-  pdf_file_est <- file.path(out_dir, paste0(output_prefix, "_estimated_control.pdf"))
-  tex_file <- file.path(out_dir, paste0(output_prefix, "_param_tables.tex"))
-  ggsave(png_file_true, p_true, width = 9.0, height = 5.4, dpi = 320)
-  ggsave(pdf_file_true, p_true, width = 9.0, height = 5.4)
-  ggsave(png_file_est, p_est, width = 9.0, height = 5.4, dpi = 320)
-  ggsave(pdf_file_est, p_est, width = 9.0, height = 5.4)
+  use_custom <- !is.null(output_prefix) && nzchar(output_prefix)
+  stem_true <- if (use_custom) output_prefix else DEFAULT_STEM_TRUE_CONTROL
+  stem_est <- if (use_custom) paste0(output_prefix, "_estimated_control") else DEFAULT_STEM_ESTIMATED_CONTROL
+  tex_base <- if (use_custom) paste0(output_prefix, "_param_tables.tex") else DEFAULT_TEX_PARAM_TABLES
+
+  png_file_true <- file.path(fig_dir, paste0(stem_true, ".png"))
+  pdf_file_true <- file.path(fig_dir, paste0(stem_true, ".pdf"))
+  png_file_est <- file.path(fig_dir, paste0(stem_est, ".png"))
+  pdf_file_est <- file.path(fig_dir, paste0(stem_est, ".pdf"))
+  tex_file <- file.path(tx_dir, tex_base)
+  ggsave(png_file_true, p_true, width = 12.6, height = 7.56, dpi = 320)
+  ggsave(pdf_file_true, p_true, width = 12.6, height = 7.56)
+  ggsave(png_file_est, p_est, width = 12.6, height = 7.56, dpi = 320)
+  ggsave(pdf_file_est, p_est, width = 12.6, height = 7.56)
   write_param_tables_tex(summary_obj, target_multipliers = target_multipliers, tex_file = tex_file)
 
   message("Wrote: ", png_file_true)
@@ -399,20 +478,28 @@ run_publication_plot <- function(
 }
 
 run_param_tables_only <- function(
-    input_rds,
+    input_rds = NULL,
     target_multipliers = DEFAULT_TARGET_MULTIPLIERS,
-    output_prefix = DEFAULT_OUTPUT_PREFIX,
-    output_dir = NULL,
+    output_prefix = NULL,
+    tex_dir = NULL,
     print_console = TRUE) {
   repo_root <- find_repo_root()
-  out_dir <- if (is.null(output_dir)) file.path(repo_root, "output", "sim_study") else output_dir
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  rds_path <- if (is.null(input_rds) || !nzchar(input_rds)) {
+    default_summary_rds(repo_root)
+  } else {
+    normalizePath(input_rds, winslash = "/", mustWork = FALSE)
+  }
+  tx_dir <- if (is.null(tex_dir)) default_sim_tex_dir(repo_root) else normalizePath(tex_dir, winslash = "/", mustWork = FALSE)
+  dir.create(tx_dir, recursive = TRUE, showWarnings = FALSE)
 
-  if (!file.exists(input_rds)) stop("Input RDS not found: ", input_rds)
-  summary_obj <- readRDS(input_rds)
+  if (!file.exists(rds_path)) stop("Input RDS not found: ", rds_path, call. = FALSE)
+  message("Read summary: ", rds_path)
+  summary_obj <- readRDS(rds_path)
   validate_summary_structure(summary_obj)
 
-  tex_file <- file.path(out_dir, paste0(output_prefix, "_param_tables.tex"))
+  use_custom <- !is.null(output_prefix) && nzchar(output_prefix)
+  tex_base <- if (use_custom) paste0(output_prefix, "_param_tables.tex") else DEFAULT_TEX_PARAM_TABLES
+  tex_file <- file.path(tx_dir, tex_base)
   write_param_tables_tex(summary_obj, target_multipliers = target_multipliers, tex_file = tex_file)
   if (isTRUE(print_console)) {
     print_param_tables_tex(summary_obj, target_multipliers = target_multipliers)
@@ -427,15 +514,39 @@ run_param_tables_only <- function(
 if (!interactive()) {
   args <- commandArgs(trailingOnly = TRUE)
   repo_root <- find_repo_root()
-  default_in <- file.path(repo_root, "output", "sim_study", "time_sweep_5228509_summary.rds")
+  default_in <- default_summary_rds(repo_root)
   input_rds <- get_arg_val(args, "--input", default_in)
-  output_prefix <- get_arg_val(args, "--output-prefix", DEFAULT_OUTPUT_PREFIX)
+  op_raw <- get_arg_val(args, "--output-prefix", "")
+  output_prefix <- if (nzchar(op_raw)) op_raw else NULL
+  fig_dir_arg <- get_arg_val(args, "--figures-dir", "")
+  tex_dir_arg <- get_arg_val(args, "--tex-dir", "")
+  rds_search_arg <- get_arg_val(args, "--rds-search-dir", "")
+  figures_dir <- if (nzchar(fig_dir_arg)) fig_dir_arg else NULL
+  tex_dir <- if (nzchar(tex_dir_arg)) tex_dir_arg else NULL
+  rds_search_dir <- if (nzchar(rds_search_arg)) rds_search_arg else NULL
   mode <- tolower(get_arg_val(args, "--mode", "both"))
   if (mode == "plot") {
-    run_publication_plot(input_rds = input_rds, output_prefix = output_prefix)
+    run_publication_plot(
+      input_rds = input_rds,
+      output_prefix = output_prefix,
+      figures_dir = figures_dir,
+      tex_dir = tex_dir,
+      rds_search_dir = rds_search_dir
+    )
   } else if (mode == "tables") {
-    run_param_tables_only(input_rds = input_rds, output_prefix = output_prefix, print_console = TRUE)
+    run_param_tables_only(
+      input_rds = input_rds,
+      output_prefix = output_prefix,
+      tex_dir = tex_dir,
+      print_console = TRUE
+    )
   } else {
-    run_publication_plot(input_rds = input_rds, output_prefix = output_prefix)
+    run_publication_plot(
+      input_rds = input_rds,
+      output_prefix = output_prefix,
+      figures_dir = figures_dir,
+      tex_dir = tex_dir,
+      rds_search_dir = rds_search_dir
+    )
   }
 }

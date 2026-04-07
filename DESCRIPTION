@@ -38,6 +38,7 @@ LinkingTo:
     Rcpp
 Suggests:
     testthat (>= 3.0.0),
+    tigris,
     R.utils,
     pbapply,
     raster,

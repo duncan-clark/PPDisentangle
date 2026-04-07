@@ -13,6 +13,7 @@ generate_inhomogeneous_hawkes(
   state_spaces = NULL,
   filtration = NULL,
   space_triggering = FALSE,
+  t_trunc = NULL,
   ...
 )
 }
