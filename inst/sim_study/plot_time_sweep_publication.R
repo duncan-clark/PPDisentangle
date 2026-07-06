@@ -2,9 +2,9 @@
 #
 # Builds publication boxplots + optional parameter tables from the time-sweep summary.
 # Default input: <repo>/output/sim_study/time_sweep_5228509_summary.rds
-# Default outputs (same layout as inst/oklahoma/paper/generated/):
-#   <repo>/inst/sim_study/generated/figures/*.pdf|.png
-#   <repo>/inst/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+# Default outputs:
+#   <repo>/artifacts/sim_study/generated/figures/*.pdf|.png
+#   <repo>/artifacts/sim_study/generated/tab_sim_time_sweep_param_tables.tex
 # Optional: --output-prefix STEM (STEM.pdf, STEM_estimated_control.pdf, STEM_param_tables.tex)
 #           --figures-dir --tex-dir --rds-search-dir
 
@@ -20,7 +20,7 @@ DEFAULT_TARGET_MULTIPLIERS <- c(0.1, 0.5, 1.0)
 DEFAULT_Y_QUANTILES <- c(0.02, 0.98)  # for robust y-limits
 # Default summary from time sweep (written under output/sim_study/ by the sweep pipeline)
 DEFAULT_SUMMARY_RDS <- "time_sweep_5228509_summary.rds"
-# Default figure/table basenames under inst/sim_study/generated/ (matches paper.tex)
+# Default figure/table basenames under artifacts/sim_study/generated/.
 DEFAULT_STEM_TRUE_CONTROL <- "results_true_control"
 DEFAULT_STEM_ESTIMATED_CONTROL <- "results_estimated_control"
 DEFAULT_TEX_PARAM_TABLES <- "tab_sim_time_sweep_param_tables.tex"
@@ -37,7 +37,7 @@ default_summary_rds <- function(repo_root = NULL) {
 default_sim_figures_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
   normalizePath(
-    file.path(root, "inst", "sim_study", "generated", "figures"),
+    file.path(root, "artifacts", "sim_study", "generated", "figures"),
     winslash = "/",
     mustWork = FALSE
   )
@@ -46,7 +46,7 @@ default_sim_figures_dir <- function(repo_root = NULL) {
 default_sim_tex_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
   normalizePath(
-    file.path(root, "inst", "sim_study", "generated"),
+    file.path(root, "artifacts", "sim_study", "generated"),
     winslash = "/",
     mustWork = FALSE
   )

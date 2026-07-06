@@ -25,6 +25,28 @@ output/sim_study/
   <JOB_ID>_slurm.err     # SLURM stderr
 ```
 
+Large local or cluster run outputs are ignored by git. Historical local/HPC
+results should stay in `output/sim_study/` or `cluster_output/`, not in the
+package source tree.
+
+## Publication artifacts
+
+The publication plotting helper reads a time-sweep summary from
+`output/sim_study/` and writes versioned paper artifacts to
+`artifacts/sim_study/generated/`:
+
+```bash
+Rscript inst/sim_study/plot_time_sweep_publication.R
+```
+
+Default outputs:
+
+```text
+artifacts/sim_study/generated/figures/results_true_control.{pdf,png}
+artifacts/sim_study/generated/figures/results_estimated_control.{pdf,png}
+artifacts/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+```
+
 ## OOM during ATE estimation
 
 1. **Sequential ATE** (lower memory, slower):

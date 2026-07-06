@@ -7,13 +7,13 @@
 #
 # Or in R: setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")
 #
-# Writes (default: figures next to table fragments under generated/):
-#   inst/oklahoma/paper/generated/figures/*.pdf:
+# Writes (default: figures next to table fragments under artifacts/):
+#   artifacts/oklahoma/paper/generated/figures/*.pdf:
 #     ATE_diff, ok_bootstrap_*, ok_sim_* — require bootstrap_ate in RDS
 #     cumulative_count — events CSV + jsonlite
 #     ok_partition_county, ok_point_patterns — sf + tigris + AOI geojson under --data-dir
 #     ok_sem_f_confusion_trace, ok_sem_f_metric_trace, ok_sem_f_flips — fits_named$F$fit$adaptive
-#   inst/oklahoma/paper/generated/*.tex:
+#   artifacts/oklahoma/paper/generated/*.tex:
 #     tab_ok_counts, tab_ok_sem_config, tab_ok_confusion_F, tab_ok_ef_params
 #     tab_ok_bootstrap_summary — only if bootstrap present
 #   Override PDF location: --plots-dir <path>
@@ -65,13 +65,13 @@ plots_dir <- normalizePath(
   get_arg_val(
     args,
     "--plots-dir",
-    file.path(repo_root, "inst", "oklahoma", "paper", "generated", "figures")
+    file.path(repo_root, "artifacts", "oklahoma", "paper", "generated", "figures")
   ),
   winslash = "/",
   mustWork = FALSE
 )
 tex_dir <- normalizePath(
-  get_arg_val(args, "--tex-dir", file.path(repo_root, "inst", "oklahoma", "paper", "generated")),
+  get_arg_val(args, "--tex-dir", file.path(repo_root, "artifacts", "oklahoma", "paper", "generated")),
   winslash = "/",
   mustWork = FALSE
 )
@@ -961,7 +961,13 @@ if (have_boot) {
   message("Skipped tab_ok_bootstrap_summary.tex and ef_bootstrap_summary.csv (no bootstrap in RDS).")
 }
 
-fig_rel <- function(nm) paste0("inst/oklahoma/paper/generated/figures/", nm)
+repo_rel <- function(path) {
+  path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  root <- paste0(normalizePath(repo_root, winslash = "/", mustWork = TRUE), "/")
+  if (startsWith(path, root)) substring(path, nchar(root) + 1L) else path
+}
+
+fig_rel <- function(nm) repo_rel(file.path(plots_dir, nm))
 gen_plots <- c(
   fig_rel("cumulative_count.pdf"),
   fig_rel("ok_partition_county.pdf"),
@@ -980,13 +986,13 @@ if (isTRUE(have_boot)) {
   )
 }
 gen_tex <- c(
-  "inst/oklahoma/paper/generated/tab_ok_counts.tex",
-  "inst/oklahoma/paper/generated/tab_ok_sem_config.tex",
-  "inst/oklahoma/paper/generated/tab_ok_confusion_F.tex",
-  "inst/oklahoma/paper/generated/tab_ok_ef_params.tex"
+  repo_rel(file.path(tex_dir, "tab_ok_counts.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_sem_config.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_confusion_F.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_ef_params.tex"))
 )
 if (isTRUE(have_boot)) {
-  gen_tex <- c(gen_tex, "inst/oklahoma/paper/generated/tab_ok_bootstrap_summary.tex")
+  gen_tex <- c(gen_tex, repo_rel(file.path(tex_dir, "tab_ok_bootstrap_summary.tex")))
 }
 
 meta_out <- list(

@@ -98,7 +98,8 @@ estimation. The free parameters are:
 | `Oklahoma_data_and_viz.R` | Downloads USGS earthquake catalog and OCC AOI geometry, builds regional grid, saves CSVs and GeoJSON |
 | `oklahoma_analysis.R` | Main analysis: county tessellation, four-way fits, ATE simulation, plots, results |
 | `oklahoma_report.qmd` | Quarto report (HTML + PDF) |
-| `etas_consistency_study.R` | Simulation study verifying `fit_etas` recovers known ETAS parameters |
+| `paper/oklahoma_paper_assets.R` | Builds publication figures and LaTeX table fragments from saved analysis results |
+| `../sim_study/consistency_study.R` | Simulation study verifying point-process parameter recovery |
 
 ## Usage
 
@@ -136,16 +137,29 @@ Primary artifacts:
 - `output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
 - `output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
 
+Publication-ready paper figures and tables are versioned outside the package
+source tree under `artifacts/oklahoma/paper/generated/`. Regenerate them from
+the repository root with:
+
+```bash
+Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
+```
+
 ## Data
 
 The prepared data lives in
-`oklahoma_induced_seismicity_data_regional20150318/`:
+`oklahoma_induced_seismicity_data_regional20150318/`. This is a small
+versioned input snapshot for reproducibility; rerun `Oklahoma_data_and_viz.R`
+to refresh it from USGS/OCC sources.
 
 | File | Contents |
 |------|----------|
 | `events_all.csv` | All earthquakes (pre + post) with projected coords |
 | `events_pre.csv` | Pre-treatment events |
 | `events_post.csv` | Post-treatment events |
+| `events_raw_usgs.csv` | Raw downloaded USGS events before analysis filtering |
+| `cells.csv`, `grid_cells.gpkg` | Regional grid outputs from the data-prep script |
+| `analysis_window.gpkg`, `aoi.gpkg` | Analysis and AOI geometries |
 | `metadata.json` | Design parameters and counts |
 | `occ_aoi_layer_2.geojson` | OCC AOI boundary |
 

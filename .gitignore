@@ -1,10 +1,14 @@
 src/*.o
 src/*.so
 src/*.dll
+src/*.dylib
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
+*.Rcheck/
+*.tar.gz
+..Rcheck/
 
 # macOS
 .DS_Store
@@ -15,13 +19,12 @@ Rplots.pdf
 
 # Sim study generated files
 cluster_output/
+cluster_output/**
 inst/sim_study/worker_log.txt
 inst/sim_study/sim_*_progress.txt
 inst/sim_study/tmp_prof.out
 inst/sim_study/output/
-
-# Gambia study output
-inst/gambia/output/
+inst/sim_study/generated/
 
 # Local run logs & sim outputs (A)
 output/run_logs/
@@ -37,6 +40,7 @@ inst/oklahoma/oklahoma_report_*.pdf
 inst/oklahoma/oklahoma_report.tex
 inst/oklahoma/oklahoma_report_files/
 inst/oklahoma/output/
+inst/oklahoma/paper/generated/
 
 # Repo-root analysis outputs (D)
 output/*.rds
