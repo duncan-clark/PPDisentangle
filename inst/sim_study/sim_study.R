@@ -244,14 +244,6 @@ RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% 
 DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 200L, 1L)
 DECAY_ANNULUS_WIDTH <- env_num("PP_DECAY_ANNULUS_WIDTH", 1, min_value = 1e-8)
 DECAY_FLIP_CELL <- env_int("PP_DECAY_FLIP_CELL", NA_integer_, 1L)
-calibrate_mu_for_target <- function(target_points, base_mu, k_control, k_treated) {
-  if (!is.finite(target_points) || target_points <= 0) return(base_mu)
-  expected_per_mu <- TREATMENT_TIME / (1 - k_control) +
-    TIME_INT * ((1 - TREAT_PROP) / (1 - k_control) + TREAT_PROP / (1 - k_treated))
-  if (!is.finite(expected_per_mu) || expected_per_mu <= 0) return(base_mu)
-  target_points / expected_per_mu
-}
-TRUE_MU <- calibrate_mu_for_target(TARGET_POINTS, BASE_MU, CONTROL_K, TREATED_K) * MU_SCALE
 make_hawkes_params_for_kernel <- function(mu, K, kernel) {
   if (identical(normalize_hawkes_kernel(kernel), "power_law")) {
     list(mu = mu, alpha = HAWKES_ALPHA, c = HAWKES_POWER_C, p = HAWKES_POWER_P,
@@ -261,6 +253,28 @@ make_hawkes_params_for_kernel <- function(mu, K, kernel) {
          kernel = "exponential")
   }
 }
+expected_points_per_mu_analytic <- function(k_control, k_treated) {
+  # Expected total event count per unit mu under the sim-study design:
+  # pre-treatment control Hawkes on Omega, then post-treatment mix on the partition.
+  TREATMENT_TIME / (1 - k_control) +
+    TIME_INT * ((1 - TREAT_PROP) / (1 - k_control) + TREAT_PROP / (1 - k_treated))
+}
+calibrate_mu_for_target <- function(target_points, base_mu, k_control, k_treated, mu_scale = 1) {
+  if (!is.finite(target_points) || target_points <= 0) {
+    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_))
+  }
+  expected_per_mu <- expected_points_per_mu_analytic(k_control, k_treated)
+  if (!is.finite(expected_per_mu) || expected_per_mu <= 0) {
+    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_))
+  }
+  list(
+    mu = (target_points / expected_per_mu) * mu_scale,
+    expected_points_per_mu = expected_per_mu
+  )
+}
+mu_calibration <- calibrate_mu_for_target(TARGET_POINTS, BASE_MU, CONTROL_K, TREATED_K, MU_SCALE)
+TRUE_MU <- mu_calibration$mu
+EXPECTED_POINTS_PER_MU <- mu_calibration$expected_points_per_mu
 
 # ------------------------------------------------------------------
 # Logging
@@ -388,6 +402,7 @@ log_msg("Scenario=", SCENARIO_ID,
         " | base_mu=", BASE_MU,
         " | mu_scale=", MU_SCALE,
         " | target_points=", ifelse(is.finite(TARGET_POINTS), TARGET_POINTS, NA),
+        " | expected_points_per_mu=", signif(EXPECTED_POINTS_PER_MU, 6),
         " | true_mu=", signif(TRUE_MU, 6))
 log_msg("Output (canonical): ", SAVE_DIR)
 
@@ -2556,6 +2571,8 @@ sim_study_results <- list(
     SIM_KERNEL = SIM_KERNEL,
     FIT_KERNEL = FIT_KERNEL,
     TARGET_POINTS = TARGET_POINTS,
+    EXPECTED_POINTS_PER_MU = EXPECTED_POINTS_PER_MU,
+    TRUE_MU = TRUE_MU,
     BASE_MU = BASE_MU,
     HAWKES_ALPHA = HAWKES_ALPHA,
     HAWKES_BETA = HAWKES_BETA,
