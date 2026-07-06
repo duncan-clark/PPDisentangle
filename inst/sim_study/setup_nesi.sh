@@ -9,6 +9,7 @@
 set -euo pipefail
 
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$PKG_ROOT/inst/include/output_root.sh"
 echo "=== PPDisentangle NeSI Setup ==="
 echo "Package root: $PKG_ROOT"
 echo ""
@@ -54,7 +55,7 @@ cat("PPDisentangle loaded successfully.\n")
 cat("Functions available:", length(ls("package:PPDisentangle")), "\n")
 '
 
-mkdir -p "$PKG_ROOT/output/sim_study"
+mkdir -p "$(pp_disentangle_output_path sim_study)"
 
 echo ""
 echo "=== Setup complete ==="
@@ -64,4 +65,4 @@ echo "  1. Test:   bash inst/sim_study/run_nesi.sh --test --sims 2"
 echo "  2. Run:    bash inst/sim_study/run_nesi.sh --sims 50"
 echo ""
 echo "Monitor:  squeue -u \$USER"
-echo "Output:   output/sim_study/<JOB_ID>.rds  output/sim_study/<JOB_ID>.log"
+echo "Output:   PPDisentangle-output/sim_study/<JOB_ID>.rds  PPDisentangle-output/sim_study/<JOB_ID>.log"

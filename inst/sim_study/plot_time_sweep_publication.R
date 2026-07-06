@@ -1,10 +1,10 @@
 #!/usr/bin/env Rscript
 #
 # Builds publication boxplots + optional parameter tables from the time-sweep summary.
-# Default input: <repo>/output/sim_study/time_sweep_5228509_summary.rds
+# Default input: ../PPDisentangle-output/sim_study/time_sweep_5228509_summary.rds
 # Default outputs:
-#   <repo>/artifacts/sim_study/generated/figures/*.pdf|.png
-#   <repo>/artifacts/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+#   ../PPDisentangle-output/sim_study/generated/figures/*.pdf|.png
+#   ../PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
 # Optional: --output-prefix STEM (STEM.pdf, STEM_estimated_control.pdf, STEM_param_tables.tex)
 #           --figures-dir --tex-dir --rds-search-dir
 
@@ -18,17 +18,24 @@ suppressPackageStartupMessages({
 # ---------------------------------------------------------------------
 DEFAULT_TARGET_MULTIPLIERS <- c(0.1, 0.5, 1.0)
 DEFAULT_Y_QUANTILES <- c(0.02, 0.98)  # for robust y-limits
-# Default summary from time sweep (written under output/sim_study/ by the sweep pipeline)
+# Default summary from time sweep (written under PPDisentangle-output/sim_study/ by the sweep pipeline)
 DEFAULT_SUMMARY_RDS <- "time_sweep_5228509_summary.rds"
-# Default figure/table basenames under artifacts/sim_study/generated/.
+# Default figure/table basenames under PPDisentangle-output/sim_study/generated/.
 DEFAULT_STEM_TRUE_CONTROL <- "results_true_control"
 DEFAULT_STEM_ESTIMATED_CONTROL <- "results_estimated_control"
 DEFAULT_TEX_PARAM_TABLES <- "tab_sim_time_sweep_param_tables.tex"
 
+source_paths <- function(repo_root) {
+  if (!exists("pp_output_path", mode = "function")) {
+    source(file.path(repo_root, "R", "paths.R"), local = FALSE)
+  }
+}
+
 default_summary_rds <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  source_paths(root)
   normalizePath(
-    file.path(root, "output", "sim_study", DEFAULT_SUMMARY_RDS),
+    pp_output_path("sim_study", DEFAULT_SUMMARY_RDS, repo_root = root),
     winslash = "/",
     mustWork = FALSE
   )
@@ -36,8 +43,9 @@ default_summary_rds <- function(repo_root = NULL) {
 
 default_sim_figures_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  source_paths(root)
   normalizePath(
-    file.path(root, "artifacts", "sim_study", "generated", "figures"),
+    pp_output_path("sim_study", "generated", "figures", repo_root = root),
     winslash = "/",
     mustWork = FALSE
   )
@@ -45,8 +53,9 @@ default_sim_figures_dir <- function(repo_root = NULL) {
 
 default_sim_tex_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  source_paths(root)
   normalizePath(
-    file.path(root, "artifacts", "sim_study", "generated"),
+    pp_output_path("sim_study", "generated", repo_root = root),
     winslash = "/",
     mustWork = FALSE
   )
@@ -54,8 +63,9 @@ default_sim_tex_dir <- function(repo_root = NULL) {
 
 default_rds_search_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
+  source_paths(root)
   normalizePath(
-    file.path(root, "output", "sim_study"),
+    pp_output_path("sim_study", repo_root = root),
     winslash = "/",
     mustWork = FALSE
   )

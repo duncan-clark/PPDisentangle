@@ -56,7 +56,7 @@ SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
 candidate_out_dirs <- unique(c(
-  file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma")
+  PPDisentangle::pp_output_path("oklahoma", repo_root = find_repo_root(SCRIPT_DIR))
 ))
 explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
 if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {

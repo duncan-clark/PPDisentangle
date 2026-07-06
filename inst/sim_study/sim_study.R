@@ -6,7 +6,7 @@
 #   Rscript sim_study.R --small          # local, reduced
 #   sbatch run_nesi.sh --sims 100        # NeSI cluster
 #
-# Output (canonical): output/sim_study/{JOB_ID}.rds  output/sim_study/{JOB_ID}.log
+# Output (canonical): ../PPDisentangle-output/sim_study/{JOB_ID}.rds
 
 prepend_user_lib_paths <- function() {
   user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
@@ -79,7 +79,7 @@ resolve_save_dirs <- function() {
   } else {
     normalizePath(getwd(), winslash = "/", mustWork = FALSE)
   }
-  list(canonical = file.path(repo_dir, "output", "sim_study"))
+  list(canonical = PPDisentangle::pp_output_path("sim_study", repo_root = repo_dir))
 }
 
 OMEGA <- c(0, 100, 0, 100)

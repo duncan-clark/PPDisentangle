@@ -846,7 +846,7 @@ Figure~\ref{fig:all_nothing} reports the all-or-nothing DTAITE (per unit time) e
 
 \begin{figure}
 \centering
-\includegraphics[width=.5\textwidth]{artifacts/sim_study/generated/figures/results_true_control.pdf}
+\includegraphics[width=.5\textwidth]{../PPDisentangle-output/sim_study/generated/figures/results_true_control.pdf}
 \caption{Estimated all-or-nothing DTAITE under oracle and naive labelling and the full SEM procedure. The dashed line marks the true value.}
 \label{fig:all_nothing}
 \end{figure}
@@ -865,14 +865,14 @@ Our estimand of interest is the 100-day DTAITE, comparing the observed regime wi
 
 \begin{minipage}[t]{0.48\linewidth}
     \centering
-    \includegraphics[width=\linewidth]{artifacts/oklahoma/paper/generated/figures/ATE_diff.pdf}
+    \includegraphics[width=\linewidth]{../PPDisentangle-output/oklahoma/paper/generated/figures/ATE_diff.pdf}
     \small
     (a) Bootstrap replicate distribution of all-or-nothing total saved for naive vs.\ SEM. The dashed vertical line marks zero savings.
 \end{minipage}
 \hfill
 \begin{minipage}[t]{0.48\linewidth}
     \centering
-    \includegraphics[width=\linewidth]{artifacts/oklahoma/paper/generated/figures/cumulative_count.pdf}
+    \includegraphics[width=\linewidth]{../PPDisentangle-output/oklahoma/paper/generated/figures/cumulative_count.pdf}
     
     \small
     (b) Cumulative counts of earthquakes in Oklahoma greater than 2.5 in magnitude.
@@ -1015,7 +1015,7 @@ Figure \ref{fig:all_nothing_bad} shows the same DTAITE estimates, but uses contr
 
 \begin{figure}[!ht]
 \centering
-\includegraphics[width=\textwidth]{artifacts/sim_study/generated/figures/results_estimated_control.pdf}
+\includegraphics[width=\textwidth]{../PPDisentangle-output/sim_study/generated/figures/results_estimated_control.pdf}
 \caption{Estimated all-or-nothing DTAITE under oracle and naive labelling and the full SEM procedure. The dashed line marks the true value.}
 \label{fig:all_nothing_bad}
 \end{figure}
@@ -1056,7 +1056,7 @@ On the county partition, $W_k$ is obtained by smoothing the spatial locations of
 \subsection{Stochastic EM configuration}\label{sec:ok_sem_config}
 The SEM KDE fit reads hyperparameters from the archived results object (field \verb|config| in the saved run). Table~\ref{tab:ok_sem_config} lists the values used for the Oklahoma SEM KDE specification in the run that generated the paper tables and figures (regenerate the fragment with \verb|inst/oklahoma/paper/oklahoma_paper_assets.R| after pointing \verb|--input| at your \verb|oklahoma_results_*.rds|). In brief: each outer SEM round performs inner iterations with multiple proposed relabellings; proposals use a multiplicative change-factor with explicit bounds; among retained proposals, the implementation selects a labelling using the recorded rule and temperature unless a pilot study overrides those choices. Optional pilot tuning searches a small grid over relabelling hyperparameters using short inner runs on a homogeneous-background SEM variant before locking settings for the main county run. Worker logs can contain per-fit SEM traces (objective, flip counts, label confusion relative to location labels).
 
-\input{artifacts/oklahoma/paper/generated/tab_ok_sem_config}
+\input{../PPDisentangle-output/oklahoma/paper/generated/tab_ok_sem_config}
 
 \subsection{Estimands, counterfactual simulation, and uncertainty}\label{sec:ok_estimands}
 The policy contrast in Section~\ref{sec:application} is evaluated on a fixed post-$t^\ast$ horizon (100 days in the paper figure; the design file end date defines the stored window). Expected counts under ``control everywhere'' versus the fitted treatment regime use the fitted marginal ETAS parameters and Monte Carlo simulation of the branching structure (common random numbers across paired scenarios where enabled). The supplement gives analytic proxies, simulation means and dispersion, and, when present, bootstrap summaries for the same two specifications. Exploratory control-only ETAS fits at reference times (pre-holdout, $t^\ast$, catalogue end) are diagnostics only and do not replace the bivariate likelihoods above.

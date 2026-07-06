@@ -122,23 +122,23 @@ quarto render oklahoma_report.qmd
 
 Running `oklahoma_analysis.R` now does the following automatically on success:
 
-1. Saves results and plots to `output/oklahoma/`
+1. Saves results and plots to `../PPDisentangle-output/oklahoma/`
 2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
 3. Writes `last_run_sync_stamp.txt` in canonical output to trigger cloud sync tools
 
 Primary artifacts:
 
-- `output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
-- `output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
-- `output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
-- `output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)
-- `output/oklahoma/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
-- `output/oklahoma/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
-- `output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
-- `output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
+- `PPDisentangle-output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
+- `PPDisentangle-output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
+- `PPDisentangle-output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
+- `PPDisentangle-output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)
+- `PPDisentangle-output/oklahoma/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
+- `PPDisentangle-output/oklahoma/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
+- `PPDisentangle-output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
+- `PPDisentangle-output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
 
-Publication-ready paper figures and tables are versioned outside the package
-source tree under `artifacts/oklahoma/paper/generated/`. Regenerate them from
+Publication-ready paper figures and tables are written under
+`PPDisentangle-output/oklahoma/paper/generated/` (outside this repo). Regenerate from
 the repository root with:
 
 ```bash

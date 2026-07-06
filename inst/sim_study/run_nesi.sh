@@ -76,12 +76,13 @@ else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
+source "$PKG_ROOT/inst/include/output_root.sh"
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
     cd "$PKG_ROOT"
     git pull origin main 2>/dev/null || true
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    OUTPUT_DIR="$PKG_ROOT/output/sim_study"
+    OUTPUT_DIR="$(pp_disentangle_output_path sim_study)"
     mkdir -p "$OUTPUT_DIR"
 
     CPUS="$PP_SIMS"
@@ -137,14 +138,14 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         "$SCRIPT_DIR/run_nesi.sh")
 
     echo "Job $JOB_ID submitted"
-    echo "  Results: output/sim_study/$JOB_ID.rds"
-    echo "  Log:     output/sim_study/$JOB_ID.log"
-    echo "  SLURM:   output/sim_study/${JOB_ID}_slurm.out"
+    echo "  Results: PPDisentangle-output/sim_study/$JOB_ID.rds"
+    echo "  Log:     PPDisentangle-output/sim_study/$JOB_ID.log"
+    echo "  SLURM:   PPDisentangle-output/sim_study/${JOB_ID}_slurm.out"
     exit 0
 fi
 
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/output/sim_study"
+mkdir -p "$(pp_disentangle_output_path sim_study)"
 
 if [ -n "${PP_POST_TIME_MULTIPLIERS_B64:-}" ]; then
     decoded_mults="$(printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 --decode 2>/dev/null || printf '%s' "$PP_POST_TIME_MULTIPLIERS_B64" | base64 -d 2>/dev/null || true)"

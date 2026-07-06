@@ -12,8 +12,8 @@ R package: **causal inference for spatiotemporal point processes** using a stoch
 | `tests/testthat/` | Unit and consistency tests for simulation, likelihoods, labelling, ATE, and standard errors. |
 | `inst/oklahoma/` | Oklahoma induced-seismicity application scripts, report source, and small prepared input snapshot. |
 | `inst/sim_study/` | Simulation-study drivers and cluster helpers. |
-| `artifacts/` | Versioned publication artifacts separated from the package source tree. |
-| `output/`, `cluster_output/` | Local analysis/HPC outputs; ignored by git. |
+| `docs/paper/` | Overleaf manuscript snapshot for context (not compiled from this repo). |
+| `../PPDisentangle-output/` | **Local only** — all analysis RDS, logs, and paper assets; see [`inst/OUTPUT.md`](inst/OUTPUT.md). |
 
 ## Oklahoma application
 
@@ -23,9 +23,9 @@ See [`inst/oklahoma/README.md`](inst/oklahoma/README.md).
 
 See [`inst/sim_study/README.md`](inst/sim_study/README.md).
 
-## Artifact policy
+## Output policy
 
-Source code, tests, package documentation, analysis scripts, and the small prepared Oklahoma input snapshot are kept in the package tree. Generated publication figures/tables live under `artifacts/` so they can be versioned without being bundled into package builds. Local run outputs, rendered reports, compiled objects, and R check directories are ignored.
+The repository tracks **source code, tests, analysis scripts, and small prepared inputs** only. Generated results live in a sibling folder `PPDisentangle-output/` (or `PPDISENTANGLE_OUTPUT_ROOT`) so they survive git clones, branch switches, and repo restructures. Archive large result sets on Zenodo separately from the software release; see [`inst/OUTPUT.md`](inst/OUTPUT.md).
 
 ## Installation (development tree)
 

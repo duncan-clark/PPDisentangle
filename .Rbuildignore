@@ -2,11 +2,9 @@
 ^\.Rproj\.user$
 ^LICENSE\.md$
 ^\.gitignore$
-^cluster_output$
-^output$
 ^artifacts$
 ^\.\.Rcheck$
-^paper\.tex$
+^docs$
 ^inst/oklahoma/paper/generated$
 ^inst/sim_study/generated$
 ^inst/oklahoma/oklahoma_report\.html$

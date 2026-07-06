@@ -60,9 +60,9 @@ tryCatch({
 }, error = function(e) {
   stop("Failed to load local PPDisentangle source via pkgload::load_all(): ", e$message)
 })
-# Canonical output path at repo root:
-#   output/oklahoma/
-OUT_DIR  <- file.path(REPO_DIR, "output", "oklahoma")
+# Canonical output path (outside the git repo):
+#   ../PPDisentangle-output/oklahoma/
+OUT_DIR  <- PPDisentangle::pp_output_path("oklahoma", repo_root = REPO_DIR)
 PLOT_DIR <- file.path(OUT_DIR, "plots")
 for (d in unique(c(OUT_DIR, PLOT_DIR))) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE)

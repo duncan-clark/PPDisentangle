@@ -347,6 +347,7 @@ else
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
+source "$PKG_ROOT/inst/include/output_root.sh"
 
 # ----------------------------
 # Submit mode
@@ -355,7 +356,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   cd "$PKG_ROOT"
   git pull origin main 2>/dev/null || true
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  OUTPUT_DIR="$PKG_ROOT/output/oklahoma"
+  OUTPUT_DIR="$(pp_disentangle_output_path oklahoma)"
   mkdir -p "$OUTPUT_DIR"
 
   EXTRA_SBATCH=""
@@ -393,8 +394,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     "$SCRIPT_DIR/run_nesi.sh")
 
   echo "Job $JOB_ID submitted"
-  echo "SLURM out: output/oklahoma/${JOB_ID}_oklahoma_slurm.out"
-  echo "SLURM err: output/oklahoma/${JOB_ID}_oklahoma_slurm.err"
+  echo "SLURM out: PPDisentangle-output/oklahoma/${JOB_ID}_oklahoma_slurm.out"
+  echo "SLURM err: PPDisentangle-output/oklahoma/${JOB_ID}_oklahoma_slurm.err"
   exit 0
 fi
 
@@ -402,7 +403,7 @@ fi
 # Job mode
 # ----------------------------
 cd "$PKG_ROOT"
-mkdir -p "$PKG_ROOT/output/oklahoma"
+mkdir -p "$(pp_disentangle_output_path oklahoma)"
 
 echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"

@@ -2,18 +2,18 @@
 #
 # Usage (from repo root):
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
-#   (defaults to output/oklahoma/for_paper.rds, then inst/oklahoma/paper/for_paper.rds)
+#   (defaults to ../PPDisentangle-output/oklahoma/for_paper.rds, then inst/oklahoma/paper/for_paper.rds)
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R --input /path/to/other.rds
 #
 # Or in R: setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")
 #
-# Writes (default: figures next to table fragments under artifacts/):
-#   artifacts/oklahoma/paper/generated/figures/*.pdf:
+# Writes (default: figures next to table fragments under PPDisentangle-output/):
+#   oklahoma/paper/generated/figures/*.pdf:
 #     ATE_diff, ok_bootstrap_*, ok_sim_* — require bootstrap_ate in RDS
 #     cumulative_count — events CSV + jsonlite
 #     ok_partition_county, ok_point_patterns — sf + tigris + AOI geojson under --data-dir
 #     ok_sem_f_confusion_trace, ok_sem_f_metric_trace, ok_sem_f_flips — fits_named$F$fit$adaptive
-#   artifacts/oklahoma/paper/generated/*.tex:
+#   oklahoma/paper/generated/*.tex:
 #     tab_ok_counts, tab_ok_sem_config, tab_ok_confusion_F, tab_ok_ef_params
 #     tab_ok_bootstrap_summary — only if bootstrap present
 #   Override PDF location: --plots-dir <path>
@@ -44,18 +44,20 @@ get_arg_val <- function(args, flag, default = NULL) {
 
 args <- commandArgs(trailingOnly = TRUE)
 repo_root <- find_repo_root()
+source(file.path(repo_root, "R", "paths.R"), local = FALSE)
 input_arg <- get_arg_val(args, "--input", NULL)
 if (!is.null(input_arg) && nzchar(input_arg)) {
   input_rds <- normalizePath(input_arg, winslash = "/", mustWork = TRUE)
 } else {
   input_candidates <- c(
-    file.path(repo_root, "output", "oklahoma", "for_paper.rds"),
+    pp_output_path("oklahoma", "for_paper.rds", repo_root = repo_root),
     file.path(repo_root, "inst", "oklahoma", "paper", "for_paper.rds")
   )
   input_hit <- input_candidates[file.exists(input_candidates)][1L]
   if (is.na(input_hit)) {
     stop(
-      "No results RDS found. Place for_paper.rds in output/oklahoma/ or inst/oklahoma/paper/, ",
+      "No results RDS found. Place for_paper.rds in ",
+      pp_output_path("oklahoma", repo_root = repo_root), " or inst/oklahoma/paper/, ",
       "or pass --input /path/to/results.rds"
     )
   }
@@ -65,13 +67,13 @@ plots_dir <- normalizePath(
   get_arg_val(
     args,
     "--plots-dir",
-    file.path(repo_root, "artifacts", "oklahoma", "paper", "generated", "figures")
+    pp_output_path("oklahoma", "paper", "generated", "figures", repo_root = repo_root)
   ),
   winslash = "/",
   mustWork = FALSE
 )
 tex_dir <- normalizePath(
-  get_arg_val(args, "--tex-dir", file.path(repo_root, "artifacts", "oklahoma", "paper", "generated")),
+  get_arg_val(args, "--tex-dir", pp_output_path("oklahoma", "paper", "generated", repo_root = repo_root)),
   winslash = "/",
   mustWork = FALSE
 )
