@@ -275,14 +275,14 @@ build_publication_plot <- function(
       "text",
       x = true_dtaite_label_x,
       y = ann_y,
-      label = "True DTAITE",
+      label = "True DAITE",
       hjust = true_dtaite_label_hjust,
       vjust = true_dtaite_label_vjust,
       size = ann_size,
       fontface = "bold"
     ) +
     coord_cartesian(ylim = y_lims) +
-    labs(x = NULL, y = "All-Nothing DTAITE", fill = fill_title) +
+    labs(x = NULL, y = "All-Nothing DAITE", fill = fill_title) +
     theme_minimal(base_size = bs) +
     theme(
       plot.title = element_blank(),
