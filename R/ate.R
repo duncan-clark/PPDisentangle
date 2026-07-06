@@ -53,7 +53,12 @@ tau_i <- function(i, partition, treated_partitions, statespace,
       hawkes_params = list(control = control_pp, treated = treated_pp),
       state_spaces = state_spaces_plus, space_triggering = FALSE
     )
-    plus_total <- plus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+    plus_tiles <- if (!is.null(pp$tile_index)) {
+      as.integer(pp$tile_index)
+    } else {
+      as.integer(tileindex(pp$x, pp$y, partition))
+    }
+    plus_total <- plus_total + sum(plus_tiles == i, na.rm = TRUE)
 
     pp <- generate_inhomogeneous_hawkes(
       Omega = statespace, partition = partition, time_window = windowT,
@@ -61,7 +66,12 @@ tau_i <- function(i, partition, treated_partitions, statespace,
       hawkes_params = list(control = control_pp, treated = treated_pp),
       state_spaces = state_spaces_minus, space_triggering = FALSE
     )
-    minus_total <- minus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+    minus_tiles <- if (!is.null(pp$tile_index)) {
+      as.integer(pp$tile_index)
+    } else {
+      as.integer(tileindex(pp$x, pp$y, partition))
+    }
+    minus_total <- minus_total + sum(minus_tiles == i, na.rm = TRUE)
   }
   return(plus_total / n_sim - minus_total / n_sim)
 }
@@ -113,12 +123,20 @@ fit_hawkes_with_filtration <- function(params_init,
                                        windowS = c(0, 1, 0, 1),
                                        maxit = 1000,
                                        poisson_flag = FALSE,
-                                       zero_background_region = NULL) {
+                                       zero_background_region = NULL,
+                                       kernel = NULL) {
   if (!inherits(windowS, "owin")) windowS <- as.owin(windowS)
-  if (inherits(params_init, "list")) params_init <- unlist(params_init)
-  params_init <- as.numeric(params_init[c("mu", "alpha", "beta", "K")])
-  names(params_init) <- c("mu", "alpha", "beta", "K")
-  params_init[!is.finite(params_init)] <- c(1, 0.01, 1, 0.01)[!is.finite(params_init)]
+  params_init_list <- as_hawkes_params(params_init, kernel)
+  kernel <- params_init_list$kernel
+  par_names <- hawkes_param_names(kernel)
+  params_init <- as.numeric(unlist(params_init_list[par_names]))
+  names(params_init) <- par_names
+  defaults <- if (identical(kernel, "power_law")) {
+    c(mu = 1, alpha = 0.01, c = 1, p = 2, K = 0.01)
+  } else {
+    c(mu = 1, alpha = 0.01, beta = 1, K = 0.01)
+  }
+  params_init[!is.finite(params_init)] <- defaults[!is.finite(params_init)]
 
   realiz <- as.data.frame(realiz)
   if (nrow(realiz) > 0) {
@@ -126,7 +144,12 @@ fit_hawkes_with_filtration <- function(params_init,
     realiz <- realiz[order(realiz$t), , drop = FALSE]
   }
   if (nrow(realiz) < 1L) {
-    return(list(par = list(mu = 0, alpha = 0.01, beta = 1, K = 0), converged = TRUE))
+    empty_par <- as.list(defaults)
+    empty_par$mu <- 0
+    empty_par$K <- 0
+    empty_par$kernel <- kernel
+    if (identical(kernel, "power_law")) empty_par$beta <- empty_par[["c"]]
+    return(list(par = empty_par, converged = TRUE))
   }
 
   if (is.null(filtration)) {
@@ -152,7 +175,12 @@ fit_hawkes_with_filtration <- function(params_init,
   if (isTRUE(poisson_flag)) {
     dt <- windowT[2] - windowT[1]
     mu_hat <- if (dt > 0) nrow(realiz) / dt else 0
-    return(list(par = list(mu = mu_hat, alpha = 1, beta = 1, K = 0), converged = TRUE))
+    pois_par <- as.list(defaults)
+    pois_par$mu <- mu_hat
+    pois_par$K <- 0
+    pois_par$kernel <- kernel
+    if (identical(kernel, "power_law")) pois_par$beta <- pois_par[["c"]]
+    return(list(par = pois_par, converged = TRUE))
   }
 
   W_post <- if ("W" %in% names(realiz)) as.numeric(realiz$W) else rep(1, nrow(realiz))
@@ -179,10 +207,21 @@ fit_hawkes_with_filtration <- function(params_init,
   beta_min <- if (dt > 0) 0.1 / dt else 0
 
   obj_fn <- function(par4) {
-    mu <- par4[1]; alpha <- par4[2]; beta <- par4[3]; K <- par4[4]
-    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(beta) || !is.finite(K)) return(-1e15)
-    if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-1e15)
-    if (alpha > alpha_max || beta < beta_min) return(-1e15)
+    par_list <- as_hawkes_params(par4, kernel)
+    mu <- par_list$mu
+    alpha <- par_list$alpha
+    beta <- par_list$beta
+    K <- par_list$K
+    cc <- par_list[["c"]]
+    p <- par_list$p
+    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-1e15)
+    if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-1e15)
+    if (identical(kernel, "power_law")) {
+      if (!is.finite(cc) || !is.finite(p) || cc <= 0 || p <= 1) return(-1e15)
+    } else {
+      if (!is.finite(beta) || beta <= 0 || beta < beta_min) return(-1e15)
+    }
+    if (alpha > alpha_max) return(-1e15)
     loglik <- hawkes_loglik_inhom_filtration_cpp(
       post_t = post_t_fit,
       post_x = post_x_fit,
@@ -199,7 +238,10 @@ fit_hawkes_with_filtration <- function(params_init,
       t_start = t_start_fit,
       t_end = t_end_fit,
       adjust_factor = adjust_factor_fit,
-      t_trunc = -1
+      t_trunc = -1,
+      kernel_type = hawkes_kernel_type(kernel),
+      cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+      p = if (is.null(p)) 2.0 else as.numeric(p)
     )
     if (!is.finite(loglik)) return(-1e15)
     loglik
@@ -219,8 +261,11 @@ fit_hawkes_with_filtration <- function(params_init,
     return(list(par = as.list(params_init), converged = FALSE))
   }
   pv <- as.numeric(fit$par)
-  names(pv) <- c("mu", "alpha", "beta", "K")
-  list(par = as.list(pv), converged = is.null(fit$convergence) || fit$convergence == 0)
+  names(pv) <- par_names
+  par_out <- as.list(pv)
+  par_out$kernel <- kernel
+  if (identical(kernel, "power_law")) par_out$beta <- par_out[["c"]]
+  list(par = par_out, converged = is.null(fit$convergence) || fit$convergence == 0)
 }
 
 ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_partitions,
@@ -229,7 +274,11 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              maxit = 1000, poisson_flags = list(control = FALSE, treated = FALSE),
                              filtration_data = NULL, explosive_K_threshold = 0.98,
                              control_filtration_aware = TRUE,
-                             treated_params_init = NULL) {
+                             treated_params_init = NULL,
+                             keep_all_nothing_sim = TRUE,
+                             compute_tau = TRUE,
+                             kernel = NULL) {
+  kernel <- normalize_hawkes_kernel(kernel, hawkes_params$control)
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -262,19 +311,26 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
     dt_fit <- windowT[2] - windowT[1]
     if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
 
-    ctrl_init <- list(
-      mu = max(1e-8, nrow(ctrl_realiz) / dt_fit),
-      alpha = 0,
-      beta = dt_fit / 100,
-      K = 0.01
-    )
+    ctrl_init <- if (identical(kernel, "power_law")) {
+      list(mu = max(1e-8, nrow(ctrl_realiz) / dt_fit), alpha = 0.01,
+           c = max(dt_fit / 100, 1e-3), p = 2, K = 0.01, kernel = kernel)
+    } else {
+      list(mu = max(1e-8, nrow(ctrl_realiz) / dt_fit), alpha = 0,
+           beta = dt_fit / 100, K = 0.01, kernel = kernel)
+    }
     if (!is.null(treated_params_init)) {
-      treat_init <- as.list(treated_params_init)
-      treat_init <- treat_init[c("mu", "alpha", "beta", "K")]
+      treat_init <- as_hawkes_params(treated_params_init, kernel)
+      treat_init <- treat_init[hawkes_param_names(kernel)]
       if (is.null(names(treat_init)) || any(is.na(names(treat_init)))) {
-        stop("treated_params_init must be a named list/vector with mu, alpha, beta, K")
+        stop("treated_params_init must be a named list/vector with valid Hawkes parameters")
       }
-      defaults <- c(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0, beta = dt_fit / 100, K = 0.01)
+      defaults <- if (identical(kernel, "power_law")) {
+        c(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0.01,
+          c = max(dt_fit / 100, 1e-3), p = 2, K = 0.01)
+      } else {
+        c(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0,
+          beta = dt_fit / 100, K = 0.01)
+      }
       for (nm in names(defaults)) {
         val <- suppressWarnings(as.numeric(treat_init[[nm]]))
         if (length(val) != 1L || !is.finite(val) || is.na(val)) {
@@ -283,13 +339,17 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
           treat_init[[nm]] <- val
         }
       }
+      treat_init$kernel <- kernel
+      if (identical(kernel, "power_law")) treat_init$beta <- treat_init[["c"]]
     } else {
-      treat_init <- list(
-        mu = max(1e-8, nrow(treat_realiz) / dt_fit),
-        alpha = 0,
-        beta = dt_fit / 100,
-        K = 0.01
-      )
+      treat_init <- if (identical(kernel, "power_law")) {
+        list(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0.01,
+             c = max(dt_fit / 100, 1e-3), p = 2, K = 0.01, kernel = kernel,
+             beta = max(dt_fit / 100, 1e-3))
+      } else {
+        list(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0,
+             beta = dt_fit / 100, K = 0.01, kernel = kernel)
+      }
     }
 
     if (isTRUE(control_filtration_aware)) {
@@ -302,7 +362,8 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         windowS = windowS,
         maxit = maxit,
         poisson_flag = poisson_flags$control,
-        zero_background_region = treated_state_space
+        zero_background_region = treated_state_space,
+        kernel = kernel
       )$par
 
       # Guard against near-critical/near-zero-baseline filtration fits:
@@ -315,7 +376,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                          (fitted_rate < 0.2 * empirical_rate))
       if (isTRUE(degenerate_fit)) {
         legacy <- fit_hawkes(
-          unlist(ctrl_init),
+          ctrl_init,
           realiz = ctrl_realiz,
           zero_background_region = treated_state_space,
           windowT = windowT,
@@ -325,15 +386,15 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
           density_approx = FALSE,
           numeric_integral = FALSE,
           poisson_flag = poisson_flags$control,
-          t_trunc = -1
+          t_trunc = -1,
+          kernel = kernel
         )$par
-        control_pp <- as.list(legacy)
-        names(control_pp) <- c("mu", "alpha", "beta", "K")
+        control_pp <- as_hawkes_params(as.list(legacy), kernel)
       }
     } else {
       # Legacy behavior: control fit uses only post-treatment observed control points.
       control_pp <- fit_hawkes(
-        unlist(ctrl_init),
+        ctrl_init,
         realiz = ctrl_realiz,
         zero_background_region = treated_state_space,
         windowT = windowT,
@@ -343,15 +404,15 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         density_approx = FALSE,
         numeric_integral = FALSE,
         poisson_flag = poisson_flags$control,
-        t_trunc = -1
+        t_trunc = -1,
+        kernel = kernel
       )$par
-      control_pp <- as.list(control_pp)
-      names(control_pp) <- c("mu", "alpha", "beta", "K")
+      control_pp <- as_hawkes_params(as.list(control_pp), kernel)
     }
 
     # Keep treated fitting behavior aligned with the historical (pre-filtration) path.
     treated_pp <- fit_hawkes(
-      unlist(treat_init),
+      treat_init,
       realiz = treat_realiz,
       zero_background_region = control_state_space,
       windowT = windowT,
@@ -361,13 +422,13 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       density_approx = FALSE,
       numeric_integral = FALSE,
       poisson_flag = poisson_flags$treated,
-      t_trunc = -1
+      t_trunc = -1,
+      kernel = kernel
     )$par
-    treated_pp <- as.list(treated_pp)
-    names(treated_pp) <- c("mu", "alpha", "beta", "K")
+    treated_pp <- as_hawkes_params(as.list(treated_pp), kernel)
   } else {
-    control_pp <- hawkes_params$control
-    treated_pp <- hawkes_params$treated
+    control_pp <- as_hawkes_params(hawkes_params$control, kernel)
+    treated_pp <- as_hawkes_params(hawkes_params$treated, kernel)
   }
 
   is_explosive <- function(pp, k_thr) {
@@ -392,27 +453,35 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
   partition_process <- rep("control", partition$n)
   partition_process[treated_idx] <- "treated"
 
-  tau_i_estim <- vapply(seq_len(n_tau_i), function(j) {
-    tau_i(
-      sample(length(partition_process), 1),
-      partition = partition, treated_partitions = treated_partitions,
-      statespace = statespace, windowT = windowT,
-      control_pp = control_pp, treated_pp = treated_pp, n_sim = n_tau_sims
-    )
-  }, numeric(1))
-  tau_1_estim <- mean(tau_i_estim)
-
-  c_counts <- numeric(n_sims)
-  t_counts <- numeric(n_sims)
-  for (s in seq_len(n_sims)) {
-    c_counts[s] <- sim_hawkes(control_pp, windowT, windowS = statespace)$n[1]
-    t_counts[s] <- sim_hawkes(treated_pp, windowT, windowS = statespace)$n[1]
+  if (isTRUE(compute_tau) && n_tau_i > 0L && n_tau_sims > 0L) {
+    tau_i_estim <- vapply(seq_len(n_tau_i), function(j) {
+      tau_i(
+        sample(length(partition_process), 1),
+        partition = partition, treated_partitions = treated_partitions,
+        statespace = statespace, windowT = windowT,
+        control_pp = control_pp, treated_pp = treated_pp, n_sim = n_tau_sims
+      )
+    }, numeric(1))
+    tau_1_estim <- mean(tau_i_estim)
+  } else {
+    tau_1_estim <- NA_real_
   }
-  all_nothing_sim <- data.frame(
-    c_mean = c_counts / partition$n,
-    t_mean = t_counts / partition$n,
-    ATE = (t_counts - c_counts) / partition$n
-  )
+
+  if (isTRUE(keep_all_nothing_sim) && n_sims > 0L) {
+    c_counts <- numeric(n_sims)
+    t_counts <- numeric(n_sims)
+    for (s in seq_len(n_sims)) {
+      c_counts[s] <- sim_hawkes(control_pp, windowT, windowS = statespace)$n[1]
+      t_counts[s] <- sim_hawkes(treated_pp, windowT, windowS = statespace)$n[1]
+    }
+    all_nothing_sim <- data.frame(
+      c_mean = c_counts / partition$n,
+      t_mean = t_counts / partition$n,
+      ATE = (t_counts - c_counts) / partition$n
+    )
+  } else {
+    all_nothing_sim <- NULL
+  }
 
   all_nothing_theory <- data.frame(
     c_mean = control_pp$mu * (windowT[2] - windowT[1]) * (1 / (1 - control_pp$K)) / partition$n,

@@ -4,6 +4,7 @@
 
 - **R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N`, `--test`.
 - **NeSI cluster:** `run_nesi.sh` — submits via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--mode long` (default long profile) or `--mode test` (lightweight path check), and optionally override with `--sims N`.
+- **Laptop → NeSI → laptop:** `inst/nesi/submit.sh`, `fetch.sh`, `wait_and_fetch.sh` — see [`../nesi/README.md`](../nesi/README.md).
 
 ```bash
 cd /path/to/PPDisentangle
@@ -44,6 +45,37 @@ Default outputs:
 PPDisentangle-output/sim_study/generated/figures/results_true_control.{pdf,png}
 PPDisentangle-output/sim_study/generated/figures/results_estimated_control.{pdf,png}
 PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+```
+
+## Robustness suite
+
+The robustness launcher runs grids over K separation, signal-to-noise,
+kernel misspecification, off-support allocation contrasts, label recovery,
+and the forward-simulation decay diagnostic. It writes per-scenario result
+objects plus summary CSV/RDS files and paper-ready figures/LaTeX fragments.
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
+```
+
+Default generated assets:
+
+```text
+PPDisentangle-output/sim_study/generated/robustness/figures/robustness_*.{pdf,png}
+PPDisentangle-output/sim_study/generated/robustness/tex/robustness.tex
+```
+
+Small NeSI inspection run, intended to finish quickly enough to inspect before
+an overnight run:
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness-inspect
+```
+
+Full NeSI robustness run:
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness --mode long --sims 32 --target-points 2500
 ```
 
 ## OOM during ATE estimation

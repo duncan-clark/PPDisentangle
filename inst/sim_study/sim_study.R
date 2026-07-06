@@ -49,6 +49,8 @@ library(dplyr)
 library(data.table)
 library(parallel)
 library(doParallel)
+normalize_hawkes_kernel <- getFromNamespace("normalize_hawkes_kernel", "PPDisentangle")
+as_hawkes_params <- getFromNamespace("as_hawkes_params", "PPDisentangle")
 
 time_start_global <- proc.time()[3]
 
@@ -117,7 +119,7 @@ if (TEST) {
   N_PROPOSALS <- 10
   # Restore pre-bootstrap baseline SEM settings for cluster stability/accuracy.
   SEM_EM_ADAPTIVE_ITER <- 2000
-  SEM_N_ITER <- 100
+  SEM_N_ITER <- 10
   SEM_N_LABELLINGS <- 10
 } else if (SMALL) {
   N_CORES <- min(8L, local_core_default)
@@ -183,6 +185,12 @@ env_num <- function(name, default_value, min_value = NULL) {
   as.numeric(val)
 }
 
+env_chr <- function(name, default_value) {
+  raw <- trimws(Sys.getenv(name, ""))
+  if (!nzchar(raw)) return(as.character(default_value))
+  as.character(raw)
+}
+
 # Optional runtime overrides for quick/full profiles without code edits.
 N_PROPOSALS <- env_int("PP_LABEL_PROPOSALS", N_PROPOSALS, 1L)
 SEM_EM_ADAPTIVE_ITER <- env_int("PP_SEM_INNER_ITER", SEM_EM_ADAPTIVE_ITER, 1L)
@@ -203,6 +211,8 @@ stage_seed <- function(stage_offset, sim_id = 0L, extra = 0L) {
 # SEM/adaptive configuration
 SEM_PARAM_UPDATE_CADENCE <- 10L
 SEM_PROPOSAL_UPDATE_CADENCE <- 1L
+SEM_PARAM_REFIT_CADENCE <- 1L
+SEM_PARAM_REFIT_CADENCE <- env_int("PP_SEM_PARAM_REFIT_CADENCE", SEM_PARAM_REFIT_CADENCE, 1L)
 SEM_N_PROPS <- 20L
 SEM_N_PROPS <- env_int("PP_SEM_N_PROPS", SEM_N_PROPS, 1L)
 SEM_CHANGE_FACTOR <- env_num("PP_SEM_CHANGE_FACTOR", 0.005, min_value = 1e-6)
@@ -214,6 +224,43 @@ SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS", 
 
 TREAT_PROP <- 0.5
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
+
+SCENARIO_ID <- env_chr("PP_SCENARIO_ID", "baseline_hawkes_exp")
+SIM_KERNEL <- normalize_hawkes_kernel(env_chr("PP_SIM_KERNEL", "exponential"))
+FIT_KERNEL <- normalize_hawkes_kernel(env_chr("PP_FIT_KERNEL", SIM_KERNEL))
+CONTROL_K <- env_num("PP_CONTROL_K", 0.8, min_value = 0)
+TREATED_K <- env_num("PP_TREATED_K", 0.2, min_value = 0)
+if (CONTROL_K >= 1 || TREATED_K >= 1) {
+  stop("PP_CONTROL_K and PP_TREATED_K must be in [0, 1).")
+}
+BASE_MU <- env_num("PP_BASE_MU", 8, min_value = 1e-8)
+HAWKES_ALPHA <- env_num("PP_HAWKES_ALPHA", 0.01, min_value = 1e-12)
+HAWKES_BETA <- env_num("PP_HAWKES_BETA", 10, min_value = 1e-12)
+HAWKES_POWER_C <- env_num("PP_HAWKES_POWER_C", 0.1, min_value = 1e-12)
+HAWKES_POWER_P <- env_num("PP_HAWKES_POWER_P", 2, min_value = 1.000001)
+MU_SCALE <- env_num("PP_MU_SCALE", 1, min_value = 1e-8)
+TARGET_POINTS <- env_num("PP_TARGET_POINTS", NA_real_, min_value = 1)
+RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% c("1", "true", "yes", "y")
+DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 200L, 1L)
+DECAY_ANNULUS_WIDTH <- env_num("PP_DECAY_ANNULUS_WIDTH", 1, min_value = 1e-8)
+DECAY_FLIP_CELL <- env_int("PP_DECAY_FLIP_CELL", NA_integer_, 1L)
+calibrate_mu_for_target <- function(target_points, base_mu, k_control, k_treated) {
+  if (!is.finite(target_points) || target_points <= 0) return(base_mu)
+  expected_per_mu <- TREATMENT_TIME / (1 - k_control) +
+    TIME_INT * ((1 - TREAT_PROP) / (1 - k_control) + TREAT_PROP / (1 - k_treated))
+  if (!is.finite(expected_per_mu) || expected_per_mu <= 0) return(base_mu)
+  target_points / expected_per_mu
+}
+TRUE_MU <- calibrate_mu_for_target(TARGET_POINTS, BASE_MU, CONTROL_K, TREATED_K) * MU_SCALE
+make_hawkes_params_for_kernel <- function(mu, K, kernel) {
+  if (identical(normalize_hawkes_kernel(kernel), "power_law")) {
+    list(mu = mu, alpha = HAWKES_ALPHA, c = HAWKES_POWER_C, p = HAWKES_POWER_P,
+         beta = HAWKES_POWER_C, K = K, kernel = "power_law")
+  } else {
+    list(mu = mu, alpha = HAWKES_ALPHA, beta = HAWKES_BETA, K = K,
+         kernel = "exponential")
+  }
+}
 
 # ------------------------------------------------------------------
 # Logging
@@ -280,6 +327,7 @@ ATE_N_SIMS <- env_int("PP_ATE_N_SIMS", ATE_N_SIMS, 1L)
 ATE_N_TAU_SIMS <- env_int("PP_ATE_N_TAU_SIMS", ATE_N_TAU_SIMS, 1L)
 ATE_N_TAU_I <- env_int("PP_ATE_N_TAU_I", ATE_N_TAU_I, 1L)
 ATE_MAXIT <- env_int("PP_ATE_MAXIT", ATE_MAXIT, 1L)
+ATE_COMPUTE_TAU <- tolower(Sys.getenv("PP_ATE_COMPUTE_TAU", "true")) %in% c("1", "true", "yes", "y")
 SIM_FILTRATION_AWARE <- tolower(Sys.getenv("PP_SIM_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y")
 ATE_CONTROL_FILTRATION_AWARE <- SIM_FILTRATION_AWARE &&
   (tolower(Sys.getenv("PP_ATE_CONTROL_FILTRATION_AWARE", "true")) %in% c("1", "true", "yes", "y"))
@@ -306,6 +354,7 @@ log_msg("SEM adaptive inner=", SEM_EM_ADAPTIVE_ITER, " | outer=", SEM_N_ITER, " 
 log_msg("SEM spec: n_props=", SEM_N_PROPS,
         " | param_cadence=", SEM_PARAM_UPDATE_CADENCE,
         " | proposal_cadence=", SEM_PROPOSAL_UPDATE_CADENCE,
+        " | param_refit_cadence=", SEM_PARAM_REFIT_CADENCE,
         " | staleness_trigger_every=", SEM_STALENESS_TRIGGER_EVERY,
         " | change_factor=", SEM_CHANGE_FACTOR,
         " | include_starting=", SEM_INCLUDE_STARTING,
@@ -316,6 +365,7 @@ log_msg("ATE batch size=", ATE_BATCH_SIZE)
 log_msg("ATE config: n_sims=", ATE_N_SIMS,
         " | n_tau_sims=", ATE_N_TAU_SIMS,
         " | n_tau_i=", ATE_N_TAU_I,
+        " | compute_tau=", ATE_COMPUTE_TAU,
         " | maxit=", ATE_MAXIT,
         " | sim_filtration_aware=", SIM_FILTRATION_AWARE,
         " | control_filtration_aware=", ATE_CONTROL_FILTRATION_AWARE)
@@ -330,6 +380,15 @@ if (RUN_SEM_PILOT) {
 }
 log_msg("Base seed=", BASE_SEED)
 log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=", END_TIME)
+log_msg("Scenario=", SCENARIO_ID,
+        " | sim_kernel=", SIM_KERNEL,
+        " | fit_kernel=", FIT_KERNEL,
+        " | control_K=", CONTROL_K,
+        " | treated_K=", TREATED_K,
+        " | base_mu=", BASE_MU,
+        " | mu_scale=", MU_SCALE,
+        " | target_points=", ifelse(is.finite(TARGET_POINTS), TARGET_POINTS, NA),
+        " | true_mu=", signif(TRUE_MU, 6))
 log_msg("Output (canonical): ", SAVE_DIR)
 
 # ------------------------------------------------------------------
@@ -410,12 +469,12 @@ export_globals <- function(cl) {
     "TREATMENT_TIME", "END_TIME",
     "TIME_INT", "state_spaces", "partition_processes",
     "treated_partitions", "treated_state_space",
-    "control_state_space", "hawkes_par_1", "hawkes_par_2",
+    "control_state_space", "hawkes_par_1", "hawkes_par_2", "hawkes_fit_par_1", "hawkes_fit_par_2",
     "N_PROPOSALS", "SEM_EM_ADAPTIVE_ITER", "SEM_N_ITER", "SEM_N_LABELLINGS",
     "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
-    "SEM_N_PROPS", "SEM_CHANGE_FACTOR", "SEM_STALENESS_TRIGGER_EVERY",
+    "SEM_PARAM_REFIT_CADENCE", "SEM_N_PROPS", "SEM_CHANGE_FACTOR", "SEM_STALENESS_TRIGGER_EVERY",
     "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS",
-    "SIM_FILTRATION_AWARE"
+    "SIM_FILTRATION_AWARE", "FIT_KERNEL"
   ), envir = .GlobalEnv)
 }
 
@@ -430,8 +489,10 @@ export_ate_globals <- function(cl) {
 # ------------------------------------------------------------------
 # 1. Define true Hawkes parameters
 # ------------------------------------------------------------------
-hawkes_par_1 <- list(mu = 8, alpha = 0.01, beta = 10, K = 0.8)
-hawkes_par_2 <- list(mu = 8, alpha = 0.01, beta = 10, K = 0.2)
+hawkes_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, SIM_KERNEL)
+hawkes_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, SIM_KERNEL)
+hawkes_fit_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, FIT_KERNEL)
+hawkes_fit_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, FIT_KERNEL)
 
 partition <- quadrats(X = OMEGA, nx = NX, ny = NY)
 
@@ -499,7 +560,8 @@ obs_data <- lapply(1:SIM_SIZE, function(i) {
     x = pre_treat$x, y = pre_treat$y, t = pre_treat$t,
     n = length(pre_treat$t),
     background = pre_treat$background,
-    process = "control", location_process = "control"
+    process = rep("control", length(pre_treat$t)),
+    location_process = rep("control", length(pre_treat$t))
   )
 
   combined <- generate_inhomogeneous_hawkes(
@@ -562,9 +624,10 @@ if (!pilot_only_mode) {
           partition_process = partition_processes,
           statespace = OMEGA, state_spaces = state_spaces,
           windowT = c(TREATMENT_TIME, END_TIME),
-          hawkes_params_control = hawkes_par_1,
+          hawkes_params_control = hawkes_fit_par_1,
           hawkes_params_treated = NULL,
-          change_factor = 1, filtration = pre, proximity_weight = 0
+          change_factor = 1, filtration = pre, proximity_weight = 0,
+          kernel = FIT_KERNEL
         )
         pre$inferred_process <- "control"
         rbind(pre, tmp)
@@ -602,13 +665,14 @@ run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
   set.seed(job$seed)
   dat <- job$data
   # Start treated SEM parameters at true control Hawkes parameters.
-  params_init  <- as.list(hawkes_par_1)
+  params_init  <- as.list(hawkes_fit_par_1)
   local_tuning <- if (is.null(tuning)) {
     list(
       param_update_cadence = SEM_PARAM_UPDATE_CADENCE,
       proposal_update_cadence = SEM_PROPOSAL_UPDATE_CADENCE,
       state_spaces = NULL,
       update_control_params = SEM_UPDATE_CONTROL_PARAMS,
+      param_refit_cadence = SEM_PARAM_REFIT_CADENCE,
       iter = if (is.null(sem_inner_iter_override)) SEM_EM_ADAPTIVE_ITER else sem_inner_iter_override,
       n_props = SEM_N_PROPS,
       change_factor = SEM_CHANGE_FACTOR,
@@ -627,11 +691,12 @@ run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
     statespace = OMEGA,
     time_window = c(TREATMENT_TIME, END_TIME),
     treatment_time = TREATMENT_TIME,
-    hawkes_params_control = hawkes_par_1,
+    hawkes_params_control = hawkes_fit_par_1,
     hawkes_params_treated = params_init,
     N_labellings = SEM_N_LABELLINGS,
     N_iter = SEM_N_ITER, verbose = FALSE,
     hawkes_use_filtration_history = SIM_FILTRATION_AWARE,
+    kernel = FIT_KERNEL,
     adaptive_control = local_tuning
   )
 }
@@ -844,17 +909,72 @@ labellings <- list(
 # ------------------------------------------------------------------
 # 9. Classification accuracy summary
 # ------------------------------------------------------------------
+label_recovery_metrics <- function(labellings_obj, kept_idx = NULL) {
+  lapply(names(labellings_obj), function(nm) {
+    idx <- if (is.null(kept_idx)) seq_along(labellings_obj[[nm]]) else kept_idx(nm)
+    rows <- lapply(idx, function(i) {
+      y <- labellings_obj[[nm]][[i]]
+      keep <- which(y$t > TREATMENT_TIME)
+      if (length(keep) < 1L) return(NULL)
+      truth <- factor(y$process[keep], levels = c("control", "treated"))
+      pred <- factor(y$inferred_process[keep], levels = c("control", "treated"))
+      tab <- table(truth, pred)
+      tn <- unname(tab["control", "control"])
+      fp <- unname(tab["control", "treated"])
+      fn <- unname(tab["treated", "control"])
+      tp <- unname(tab["treated", "treated"])
+      denom <- tn + fp + fn + tp
+      precision <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
+      recall <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_
+      specificity <- if ((tn + fp) > 0) tn / (tn + fp) else NA_real_
+      f1 <- if (is.finite(precision + recall) && (precision + recall) > 0) {
+        2 * precision * recall / (precision + recall)
+      } else {
+        NA_real_
+      }
+      data.frame(
+        method = nm,
+        sim_id = i,
+        n_post = denom,
+        accuracy = if (denom > 0) (tp + tn) / denom else NA_real_,
+        balanced_accuracy = mean(c(recall, specificity), na.rm = TRUE),
+        precision_treated = precision,
+        recall_treated = recall,
+        specificity_control = specificity,
+        f1_treated = f1,
+        true_control_as_control = tn,
+        true_control_as_treated = fp,
+        true_treated_as_control = fn,
+        true_treated_as_treated = tp,
+        stringsAsFactors = FALSE
+      )
+    })
+    do.call(rbind, Filter(Negate(is.null), rows))
+  }) %>%
+    Filter(Negate(is.null), .) %>%
+    do.call(rbind, .)
+}
+
+summarize_label_recovery <- function(label_recovery_df) {
+  if (is.null(label_recovery_df) || nrow(label_recovery_df) < 1L) return(NULL)
+  label_recovery_df %>%
+    group_by(.data$method) %>%
+    summarize(
+      n_kept = n(),
+      mean_accuracy = mean(.data$accuracy, na.rm = TRUE),
+      mean_balanced_accuracy = mean(.data$balanced_accuracy, na.rm = TRUE),
+      mean_precision_treated = mean(.data$precision_treated, na.rm = TRUE),
+      mean_recall_treated = mean(.data$recall_treated, na.rm = TRUE),
+      mean_specificity_control = mean(.data$specificity_control, na.rm = TRUE),
+      mean_f1_treated = mean(.data$f1_treated, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
 log_msg("")
 log_msg("=== Classification Accuracy (pre-fit filter; final reported after high-mu filter) ===")
-class_metrics <- lapply(names(labellings), function(nm) {
-  accs <- sapply(labellings[[nm]], function(y) {
-    keep <- which(y$t > TREATMENT_TIME)
-    if (length(keep) < 2) return(NA_real_)
-    mean(y$inferred_process[keep] == y$process[keep])
-  })
-  data.frame(method = nm, mean_accuracy = mean(accs, na.rm = TRUE))
-})
-class_metrics <- do.call(rbind, class_metrics)
+label_recovery_all_prefilter <- label_recovery_metrics(labellings)
+class_metrics <- summarize_label_recovery(label_recovery_all_prefilter)
 print(class_metrics)
 
 # ------------------------------------------------------------------
@@ -880,14 +1000,9 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
   dt_fit <- END_TIME - TREATMENT_TIME
   if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
   if (nrow(ctrl_realiz) < 2) {
-    return(list(mu = max(1e-8, nrow(ctrl_realiz) / dt_fit), alpha = 0, beta = dt_fit / 10, K = 0.01))
+    return(make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL))
   }
-  ctrl_init <- list(
-    mu = max(1e-8, nrow(ctrl_realiz) / dt_fit),
-    alpha = 0,
-    beta = dt_fit / 100,
-    K = 0.01
-  )
+  ctrl_init <- make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL)
   if (isTRUE(ATE_CONTROL_FILTRATION_AWARE)) {
     fit_ctrl <- fit_hawkes_with_filtration_fn(
       params_init = ctrl_init,
@@ -897,7 +1012,8 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       windowS = OMEGA,
       maxit = ATE_MAXIT,
       poisson_flag = FALSE,
-      zero_background_region = treated_state_space
+      zero_background_region = treated_state_space,
+      kernel = FIT_KERNEL
     )$par
     empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / dt_fit else Inf
     fitted_rate <- as.numeric(fit_ctrl$mu) / max(1e-6, 1 - as.numeric(fit_ctrl$K))
@@ -906,7 +1022,7 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
                        (fitted_rate < 0.2 * empirical_rate))
     if (isTRUE(degenerate_fit)) {
       legacy <- fit_hawkes_fn(
-        unlist(ctrl_init),
+        ctrl_init,
         realiz = ctrl_realiz,
         zero_background_region = treated_state_space,
         windowT = c(TREATMENT_TIME, END_TIME),
@@ -916,14 +1032,14 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
         density_approx = FALSE,
         numeric_integral = FALSE,
         poisson_flag = FALSE,
-        t_trunc = -1
+        t_trunc = -1,
+        kernel = FIT_KERNEL
       )$par
-      fit_ctrl <- as.list(legacy)
-      names(fit_ctrl) <- c("mu", "alpha", "beta", "K")
+      fit_ctrl <- as_hawkes_params(as.list(legacy), FIT_KERNEL)
     }
   } else {
     fit_ctrl <- fit_hawkes_fn(
-      unlist(ctrl_init),
+      ctrl_init,
       realiz = ctrl_realiz,
       zero_background_region = treated_state_space,
       windowT = c(TREATMENT_TIME, END_TIME),
@@ -933,10 +1049,10 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       density_approx = FALSE,
       numeric_integral = FALSE,
       poisson_flag = FALSE,
-      t_trunc = -1
+      t_trunc = -1,
+      kernel = FIT_KERNEL
     )$par
-    fit_ctrl <- as.list(fit_ctrl)
-    names(fit_ctrl) <- c("mu", "alpha", "beta", "K")
+    fit_ctrl <- as_hawkes_params(as.list(fit_ctrl), FIT_KERNEL)
   }
   fit_ctrl
 }
@@ -1044,8 +1160,10 @@ ATE_env$ATE_N_SIMS <- ATE_N_SIMS
 ATE_env$ATE_N_TAU_SIMS <- ATE_N_TAU_SIMS
 ATE_env$ATE_N_TAU_I <- ATE_N_TAU_I
 ATE_env$ATE_MAXIT <- ATE_MAXIT
+ATE_env$ATE_COMPUTE_TAU <- ATE_COMPUTE_TAU
 ATE_env$ATE_CONTROL_FILTRATION_AWARE <- ATE_CONTROL_FILTRATION_AWARE
-ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_par_1
+ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_fit_par_1
+ATE_env$FIT_KERNEL <- FIT_KERNEL
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -1071,14 +1189,16 @@ task_function <- function(task) {
         windowT = c(TREATMENT_TIME, END_TIME), windowS = OMEGA,
         maxit = ATE_MAXIT,
         explosive_K_threshold = 0.98,
-        poisson_flags = list(control = FALSE, treated = FALSE)
+        poisson_flags = list(control = FALSE, treated = FALSE),
+        keep_all_nothing_sim = FALSE,
+        compute_tau = ATE_COMPUTE_TAU,
+        kernel = FIT_KERNEL
       ),
       timeout = MAX_TIME, onTimeout = "error"
     ),
     error = function(e) NULL
   )
   if (!is.null(r) && isTRUE(r$skipped_explosive)) return(NULL)
-  if (!is.null(r)) r$all_nothing_sim <- NULL
   r
 }
 environment(task_function) <- ATE_env
@@ -1267,21 +1387,8 @@ method_kept_idx <- function(labelling_name) {
 
 # Recompute classification metrics using only kept fits so paper summaries
 # match the high-mu filtering used for ATE and parameter outputs.
-class_metrics <- lapply(names(labellings), function(nm) {
-  kept_idx <- method_kept_idx(nm)
-  accs <- sapply(kept_idx, function(i) {
-    y <- labellings[[nm]][[i]]
-    keep <- which(y$t > TREATMENT_TIME)
-    if (length(keep) < 2) return(NA_real_)
-    mean(y$inferred_process[keep] == y$process[keep])
-  })
-  data.frame(
-    method = nm,
-    n_kept = length(kept_idx),
-    mean_accuracy = if (length(accs) > 0) mean(accs, na.rm = TRUE) else NA_real_
-  )
-})
-class_metrics <- do.call(rbind, class_metrics)
+label_recovery_all <- label_recovery_metrics(labellings, kept_idx = method_kept_idx)
+class_metrics <- summarize_label_recovery(label_recovery_all)
 log_msg("")
 log_msg("=== Classification Accuracy (after high-mu filter) ===")
 print(class_metrics)
@@ -1340,14 +1447,18 @@ results_df_true_control_all <- do.call(rbind, lapply(seq_along(results_flat), fu
   if (is.null(r) || is.null(r$treated_pp)) return(NULL)
   treated_pp <- r$treated_pp
   ctrl_true <- hawkes_par_1
-  tau_i_true <- vapply(seq_len(TRUE_CTRL_TAU_I), function(j) {
-    tau_i(
-      sample(partition$n, 1),
-      partition = partition, treated_partitions = treated_partitions,
-      statespace = OMEGA, windowT = c(TREATMENT_TIME, END_TIME),
-      control_pp = ctrl_true, treated_pp = treated_pp, n_sim = TRUE_CTRL_TAU_SIMS
-    )
-  }, numeric(1))
+  tau_i_true <- if (isTRUE(ATE_COMPUTE_TAU)) {
+    vapply(seq_len(TRUE_CTRL_TAU_I), function(j) {
+      tau_i(
+        sample(partition$n, 1),
+        partition = partition, treated_partitions = treated_partitions,
+        statespace = OMEGA, windowT = c(TREATMENT_TIME, END_TIME),
+        control_pp = ctrl_true, treated_pp = treated_pp, n_sim = TRUE_CTRL_TAU_SIMS
+      )
+    }, numeric(1))
+  } else {
+    NA_real_
+  }
   data.frame(
     task_idx = k,
     sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
@@ -1357,7 +1468,7 @@ results_df_true_control_all <- do.call(rbind, lapply(seq_along(results_flat), fu
     all_nothing_true_control =
       (treated_pp$mu * TIME_INT * (1 / (1 - treated_pp$K)) -
          ctrl_true$mu * TIME_INT * (1 / (1 - ctrl_true$K))) / partition$n,
-    tau_1_true_control = mean(tau_i_true),
+    tau_1_true_control = if (all(is.na(tau_i_true))) NA_real_ else mean(tau_i_true, na.rm = TRUE),
     ATE_total = r$ATE_total,
     ATE_treatment = r$ATE_treatment,
     ATE_spillover = r$ATE_spillover,
@@ -1391,6 +1502,377 @@ if (!is.null(summary_df_true_control)) {
   print(summary_df_true_control)
 }
 
+# ------------------------------------------------------------------
+# 11b. Off-support allocation contrasts
+# ------------------------------------------------------------------
+expected_count_per_tile_hawkes <- function(z, control_pp, treated_pp) {
+  z <- as.logical(z)
+  n_treated <- sum(z, na.rm = TRUE)
+  n_control <- length(z) - n_treated
+  control_rate <- as.numeric(control_pp$mu) / max(1e-8, 1 - as.numeric(control_pp$K))
+  treated_rate <- as.numeric(treated_pp$mu) / max(1e-8, 1 - as.numeric(treated_pp$K))
+  TIME_INT * (n_control * control_rate + n_treated * treated_rate) / partition$n
+}
+
+make_support_contrasts <- function() {
+  z_obs <- partition_processes == "treated"
+  set.seed(stage_seed(5L, 0L, 1L))
+  random_flip_idx <- sample(seq_along(z_obs), size = floor(length(z_obs) / 2))
+  z_random_50_flip <- z_obs
+  z_random_50_flip[random_flip_idx] <- !z_random_50_flip[random_flip_idx]
+  global_all_treated <- rep(TRUE, length(z_obs))
+  global_all_control <- rep(FALSE, length(z_obs))
+
+  single_flip_rows <- lapply(seq_along(z_obs), function(j) {
+    z_flip <- z_obs
+    z_flip[j] <- !z_flip[j]
+    data.frame(
+      contrast_id = paste0("single_cell_flip_", j),
+      contrast_family = "single_cell_flip",
+      cell_id = j,
+      hamming_distance_from_zobs = sum(z_flip != z_obs),
+      psi_truth = expected_count_per_tile_hawkes(z_flip, hawkes_par_1, hawkes_par_2) -
+        expected_count_per_tile_hawkes(z_obs, hawkes_par_1, hawkes_par_2),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  rbind(
+    do.call(rbind, single_flip_rows),
+    data.frame(
+      contrast_id = "random_50pct_flip_vs_zobs",
+      contrast_family = "random_50pct_flip",
+      cell_id = NA_integer_,
+      hamming_distance_from_zobs = sum(z_random_50_flip != z_obs),
+      psi_truth = expected_count_per_tile_hawkes(z_random_50_flip, hawkes_par_1, hawkes_par_2) -
+        expected_count_per_tile_hawkes(z_obs, hawkes_par_1, hawkes_par_2),
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      contrast_id = "global_all_treated_vs_all_control",
+      contrast_family = "global_1_0",
+      cell_id = NA_integer_,
+      hamming_distance_from_zobs = NA_integer_,
+      psi_truth = expected_count_per_tile_hawkes(global_all_treated, hawkes_par_1, hawkes_par_2) -
+        expected_count_per_tile_hawkes(global_all_control, hawkes_par_1, hawkes_par_2),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+support_contrast_specs <- make_support_contrasts()
+estimate_support_contrast_for_task <- function(k, spec_row) {
+  r <- results_flat[[k]]
+  task_k <- tasks[[k]]
+  ctrl <- if (!is.null(r) && !is.null(r$control_pp)) r$control_pp else NULL
+  treat <- if (!is.null(r) && !is.null(r$treated_pp)) r$treated_pp else NULL
+  if ((is.null(ctrl) || is.null(treat)) &&
+      !is.null(task_k$hawkes_params)) {
+    ctrl <- task_k$hawkes_params$control
+    treat <- task_k$hawkes_params$treated
+  }
+  if (is.null(ctrl) || is.null(treat)) return(NULL)
+  z_obs <- partition_processes == "treated"
+  z_a <- switch(
+    spec_row$contrast_family,
+    single_cell_flip = {
+      z <- z_obs
+      z[spec_row$cell_id] <- !z[spec_row$cell_id]
+      z
+    },
+    random_50pct_flip = {
+      set.seed(stage_seed(5L, 0L, 1L))
+      idx <- sample(seq_along(z_obs), size = floor(length(z_obs) / 2))
+      z <- z_obs
+      z[idx] <- !z[idx]
+      z
+    },
+    global_1_0 = rep(TRUE, length(z_obs))
+  )
+  z_b <- if (identical(spec_row$contrast_family, "global_1_0")) {
+    rep(FALSE, length(z_obs))
+  } else {
+    z_obs
+  }
+  data.frame(
+    task_idx = k,
+    sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
+    labelling = task_k$labelling_name,
+    contrast_id = spec_row$contrast_id,
+    contrast_family = spec_row$contrast_family,
+    cell_id = spec_row$cell_id,
+    hamming_distance_from_zobs = spec_row$hamming_distance_from_zobs,
+    psi_truth = spec_row$psi_truth,
+    psi_estimate = expected_count_per_tile_hawkes(z_a, ctrl, treat) -
+      expected_count_per_tile_hawkes(z_b, ctrl, treat),
+    stringsAsFactors = FALSE
+  )
+}
+
+support_contrast_df_all <- do.call(rbind, lapply(seq_along(tasks), function(k) {
+  do.call(rbind, lapply(seq_len(nrow(support_contrast_specs)), function(j) {
+    estimate_support_contrast_for_task(k, support_contrast_specs[j, , drop = FALSE])
+  }))
+}))
+support_contrast_df <- if (!is.null(support_contrast_df_all) && nrow(support_contrast_df_all) > 0) {
+  support_contrast_df_all %>%
+    left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
+    filter(!is.na(.data$include_result) & .data$include_result) %>%
+    mutate(abs_error = abs(.data$psi_estimate - .data$psi_truth)) %>%
+    select(-.data$include_result)
+} else {
+  support_contrast_df_all
+}
+support_contrast_summary <- if (!is.null(support_contrast_df) && nrow(support_contrast_df) > 0) {
+  support_contrast_df %>%
+    group_by(.data$labelling, .data$contrast_family) %>%
+    summarize(
+      n = n(),
+      mean_psi_estimate = mean(.data$psi_estimate, na.rm = TRUE),
+      mean_psi_truth = mean(.data$psi_truth, na.rm = TRUE),
+      mean_abs_error = mean(.data$abs_error, na.rm = TRUE),
+      .groups = "drop"
+    )
+} else {
+  NULL
+}
+if (!is.null(support_contrast_summary)) {
+  log_msg("=== Off-support allocation contrasts ===")
+  print(support_contrast_summary)
+}
+
+# ------------------------------------------------------------------
+# 11c. Decay-validation diagnostic (forward simulation only)
+# ------------------------------------------------------------------
+choose_decay_flip_cell <- function(partition, partition_processes, requested_cell = NA_integer_) {
+  if (is.finite(requested_cell) && !is.na(requested_cell) &&
+      requested_cell >= 1L && requested_cell <= partition$n) {
+    return(as.integer(requested_cell))
+  }
+  centers <- do.call(rbind, lapply(seq_len(partition$n), function(i) {
+    wi <- as.owin(partition[i])
+    c(x = mean(wi$xrange), y = mean(wi$yrange))
+  }))
+  omega_center <- c(mean(OMEGA[1:2]), mean(OMEGA[3:4]))
+  d2 <- (centers[, "x"] - omega_center[1])^2 + (centers[, "y"] - omega_center[2])^2
+  treated_cells <- which(partition_processes == "treated")
+  candidates <- if (length(treated_cells) > 0L) treated_cells else seq_len(partition$n)
+  candidates[which.min(d2[candidates])]
+}
+
+point_distance_to_rect <- function(x, y, win) {
+  dx <- pmax(win$xrange[1] - x, 0, x - win$xrange[2])
+  dy <- pmax(win$yrange[1] - y, 0, y - win$yrange[2])
+  sqrt(dx^2 + dy^2)
+}
+
+sample_roots_in_cell <- function(n, cell_win, t_window) {
+  if (n < 1L) {
+    return(data.frame(x = numeric(0), y = numeric(0), t = numeric(0)))
+  }
+  pp <- spatstat.random::runifpoint(n = n, win = cell_win)
+  data.frame(
+    x = pp$x,
+    y = pp$y,
+    t = sort(stats::runif(n, min = t_window[1], max = t_window[2]))
+  )
+}
+
+cell_root_rate <- function(params, cell_area, support_area, t_window) {
+  if (!is.finite(support_area) || support_area <= 0) support_area <- cell_area
+  as.numeric(params$mu) * diff(t_window) * cell_area / support_area
+}
+
+simulate_cell_rooted_catalogue <- function(params, cell_win, cell_area, support_area,
+                                           t_window, omega_win) {
+  n_roots <- stats::rpois(1L, cell_root_rate(params, cell_area, support_area, t_window))
+  roots <- sample_roots_in_cell(n_roots, cell_win, t_window)
+  if (nrow(roots) < 1L) {
+    return(data.frame(x = numeric(0), y = numeric(0), t = numeric(0)))
+  }
+  ev <- sim_hawkes_fast(
+    params = params,
+    windowT = t_window,
+    windowS = omega_win,
+    background_realization = roots
+  )
+  data.frame(x = ev$x, y = ev$y, t = ev$t)
+}
+
+annulus_counts_from_cell <- function(catalogue, cell_win, annulus_width, max_bin) {
+  if (nrow(catalogue) < 1L) {
+    bins <- integer(0)
+  } else {
+    dist <- point_distance_to_rect(catalogue$x, catalogue$y, cell_win)
+    bins <- pmin(max_bin, floor(dist / annulus_width))
+  }
+  tab <- tabulate(bins + 1L, nbins = max_bin + 1L)
+  as.numeric(tab)
+}
+
+make_decay_rate_lines <- function(summary_df, control_pp, treated_pp) {
+  positive <- summary_df[is.finite(summary_df$mean_abs_delta) & summary_df$mean_abs_delta > 0, , drop = FALSE]
+  if (nrow(positive) < 1L) return(NULL)
+  anchor <- positive[1, , drop = FALSE]
+  refs <- data.frame(
+    reference = c("control spatial rate", "treated spatial rate"),
+    alpha = c(as.numeric(control_pp$alpha), as.numeric(treated_pp$alpha)),
+    stringsAsFactors = FALSE
+  )
+  refs <- refs[is.finite(refs$alpha) & refs$alpha > 0, , drop = FALSE]
+  if (nrow(refs) < 1L) return(NULL)
+  refs <- refs[!duplicated(round(refs$alpha, 12)), , drop = FALSE]
+  do.call(rbind, lapply(seq_len(nrow(refs)), function(i) {
+    out <- summary_df
+    out$reference <- refs$reference[i]
+    out$alpha <- refs$alpha[i]
+    out$rate_value <- anchor$mean_abs_delta *
+      exp(-refs$alpha[i] * (out$d_mid^2 - anchor$d_mid^2))
+    out
+  }))
+}
+
+run_decay_validation <- function() {
+  if (!isTRUE(RUN_DECAY_VALIDATION)) return(NULL)
+  if (!identical(normalize_hawkes_kernel(SIM_KERNEL), "exponential") &&
+      !identical(normalize_hawkes_kernel(SIM_KERNEL), "power_law")) {
+    return(NULL)
+  }
+  omega_win <- as.owin(OMEGA)
+  flip_cell <- choose_decay_flip_cell(partition, partition_processes, DECAY_FLIP_CELL)
+  cell_win <- as.owin(partition[flip_cell])
+  cell_area <- spatstat.geom::area(cell_win)
+  original_process <- partition_processes[flip_cell]
+  flipped_process <- if (identical(original_process, "treated")) "control" else "treated"
+
+  z <- partition_processes
+  z_prime <- z
+  z_prime[flip_cell] <- flipped_process
+  support_area <- function(allocation, process_name) {
+    idx <- allocation == process_name
+    if (!any(idx)) return(cell_area)
+    spatstat.geom::area(as.owin(partition[idx]))
+  }
+
+  params_original <- if (identical(original_process, "treated")) hawkes_par_2 else hawkes_par_1
+  params_flipped <- if (identical(flipped_process, "treated")) hawkes_par_2 else hawkes_par_1
+  support_original <- support_area(z, original_process)
+  support_flipped <- support_area(z_prime, flipped_process)
+
+  max_corner_dist <- max(point_distance_to_rect(
+    x = c(OMEGA[1], OMEGA[1], OMEGA[2], OMEGA[2]),
+    y = c(OMEGA[3], OMEGA[4], OMEGA[3], OMEGA[4]),
+    win = cell_win
+  ))
+  max_bin <- max(1L, ceiling(max_corner_dist / DECAY_ANNULUS_WIDTH))
+  annuli <- data.frame(
+    annulus = seq.int(0L, max_bin),
+    d_left = seq.int(0L, max_bin) * DECAY_ANNULUS_WIDTH,
+    d_mid = (seq.int(0L, max_bin) + 0.5) * DECAY_ANNULUS_WIDTH
+  )
+
+  log_msg("Running decay-validation diagnostic: reps=", DECAY_VALIDATION_REPS,
+          " | flip_cell=", flip_cell,
+          " | ", original_process, "->", flipped_process)
+  t0 <- proc.time()[3]
+  rep_rows <- lapply(seq_len(DECAY_VALIDATION_REPS), function(rep_id) {
+    set.seed(stage_seed(13L, rep_id))
+    cat_original <- simulate_cell_rooted_catalogue(
+      params = params_original,
+      cell_win = cell_win,
+      cell_area = cell_area,
+      support_area = support_original,
+      t_window = c(TREATMENT_TIME, END_TIME),
+      omega_win = omega_win
+    )
+    cat_flipped <- simulate_cell_rooted_catalogue(
+      params = params_flipped,
+      cell_win = cell_win,
+      cell_area = cell_area,
+      support_area = support_flipped,
+      t_window = c(TREATMENT_TIME, END_TIME),
+      omega_win = omega_win
+    )
+    count_original <- annulus_counts_from_cell(cat_original, cell_win, DECAY_ANNULUS_WIDTH, max_bin)
+    count_flipped <- annulus_counts_from_cell(cat_flipped, cell_win, DECAY_ANNULUS_WIDTH, max_bin)
+    data.frame(
+      rep = rep_id,
+      annuli,
+      count_original = count_original,
+      count_flipped = count_flipped,
+      abs_delta_n = abs(count_flipped - count_original),
+      stringsAsFactors = FALSE
+    )
+  })
+  decay_df <- do.call(rbind, rep_rows)
+  decay_summary <- decay_df %>%
+    group_by(.data$annulus, .data$d_left, .data$d_mid) %>%
+    summarize(
+      mean_abs_delta = mean(.data$abs_delta_n),
+      sd_abs_delta = stats::sd(.data$abs_delta_n),
+      q10_abs_delta = stats::quantile(.data$abs_delta_n, 0.10, names = FALSE),
+      q90_abs_delta = stats::quantile(.data$abs_delta_n, 0.90, names = FALSE),
+      .groups = "drop"
+    )
+  rate_lines <- make_decay_rate_lines(decay_summary, hawkes_par_1, hawkes_par_2)
+  eps <- min(decay_summary$mean_abs_delta[decay_summary$mean_abs_delta > 0], na.rm = TRUE)
+  if (!is.finite(eps)) eps <- 1e-6
+  eps <- eps / 2
+  decay_summary$mean_abs_delta_plot <- pmax(decay_summary$mean_abs_delta, eps)
+  if (!is.null(rate_lines) && nrow(rate_lines) > 0) {
+    rate_lines$rate_value_plot <- pmax(rate_lines$rate_value, eps)
+  }
+  decay_plot <- ggplot(decay_summary, aes(x = .data$d_mid, y = .data$mean_abs_delta_plot)) +
+    geom_ribbon(aes(ymin = pmax(.data$q10_abs_delta, eps),
+                    ymax = pmax(.data$q90_abs_delta, eps)),
+                alpha = 0.18, fill = "#0072B2") +
+    geom_point(size = 1.5, color = "#0072B2") +
+    geom_line(linewidth = 0.7, color = "#0072B2") +
+    {if (!is.null(rate_lines) && nrow(rate_lines) > 0)
+      geom_line(data = rate_lines,
+                aes(x = .data$d_mid, y = .data$rate_value_plot,
+                    color = .data$reference),
+                linetype = "dashed", linewidth = 0.8, inherit.aes = FALSE)} +
+    scale_y_log10() +
+    labs(
+      title = "Decay validation from a single-cell flip",
+      subtitle = paste0(
+        "Forward simulation only; coupled outside-cell clusters cancel. ",
+        "Dashed lines show slope-only exp(-alpha d^2) references."
+      ),
+      x = "Distance from flipped cell (unit-width annuli)",
+      y = "Mean |Delta N| per annulus",
+      color = "Reference slope"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+
+  log_elapsed("Decay validation", proc.time()[3] - t0)
+  list(
+    specs = list(
+      enabled = TRUE,
+      reps = DECAY_VALIDATION_REPS,
+      annulus_width = DECAY_ANNULUS_WIDTH,
+      flip_cell = flip_cell,
+      original_process = original_process,
+      flipped_process = flipped_process,
+      support_area_original = support_original,
+      support_area_flipped = support_flipped,
+      slope_reference = "exp(-alpha * d^2), anchored to first positive empirical annulus"
+    ),
+    df = decay_df,
+    summary = decay_summary,
+    rate_lines = rate_lines,
+    plot = decay_plot
+  )
+}
+
+decay_validation <- run_decay_validation()
+if (!is.null(decay_validation)) {
+  log_msg("=== Decay-validation annulus summary ===")
+  print(utils::head(decay_validation$summary, 12))
+}
+
 log_msg("")
 log_msg("True all/nothing ATE:", round(all_nothing_ATE, 4))
 log_msg("True one-flip ATE:  ", round(true_tau_1, 4))
@@ -1401,6 +1883,9 @@ log_msg("True one-flip ATE:  ", round(true_tau_1, 4))
 log_msg("")
 log_msg("Building plots ...")
 sim_study_plots <- list()
+if (!is.null(decay_validation) && inherits(decay_validation$plot, "ggplot")) {
+  sim_study_plots$plot_decay_validation <- decay_validation$plot
+}
 boxplot_method_levels <- c("oracle", "naive", "best", "SEM_adaptive", "SEM_full")
 
 subset_core_methods <- function(df, label_col = "labelling") {
@@ -2033,6 +2518,12 @@ sim_study_results <- list(
   fit_status = fit_status_df,
   kept_result_idx = fit_status_df$task_idx[fit_status_df$include_result],
   class_metrics = class_metrics,
+  label_recovery = label_recovery_all,
+  label_recovery_prefilter = label_recovery_all_prefilter,
+  support_contrast_specs = support_contrast_specs,
+  support_contrast_df = support_contrast_df,
+  support_contrast_summary = support_contrast_summary,
+  decay_validation = decay_validation,
   all_nothing_ATE = all_nothing_ATE,
   true_tau_1 = true_tau_1,
   timing_report = timing_report,
@@ -2042,12 +2533,14 @@ sim_study_results <- list(
   config = list(
     SIM_SIZE = SIM_SIZE, N_SIMS = N_SIMS, N_TAU_SIMS = N_TAU_SIMS, N_TAU_I = N_TAU_I,
     ATE_N_SIMS = ATE_N_SIMS, ATE_N_TAU_SIMS = ATE_N_TAU_SIMS, ATE_N_TAU_I = ATE_N_TAU_I, ATE_MAXIT = ATE_MAXIT,
+    ATE_COMPUTE_TAU = ATE_COMPUTE_TAU,
     TRUE_CTRL_TAU_I = TRUE_CTRL_TAU_I, TRUE_CTRL_TAU_SIMS = TRUE_CTRL_TAU_SIMS,
     N_PROPOSALS = N_PROPOSALS,
     SEM_EM_ADAPTIVE_ITER = SEM_EM_ADAPTIVE_ITER,
     SEM_N_ITER = SEM_N_ITER, SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_WORKERS = SEM_WORKERS,
     SEM_N_PROPS = SEM_N_PROPS,
+    SEM_PARAM_REFIT_CADENCE = SEM_PARAM_REFIT_CADENCE,
     SEM_CHANGE_FACTOR = SEM_CHANGE_FACTOR,
     SIM_FILTRATION_AWARE = SIM_FILTRATION_AWARE,
     FILTER_HIGH_MU_FITS = FILTER_HIGH_MU_FITS,
@@ -2059,11 +2552,26 @@ sim_study_results <- list(
     SEM_PILOT_CORES = SEM_PILOT_CORES,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
+    SCENARIO_ID = SCENARIO_ID,
+    SIM_KERNEL = SIM_KERNEL,
+    FIT_KERNEL = FIT_KERNEL,
+    TARGET_POINTS = TARGET_POINTS,
+    BASE_MU = BASE_MU,
+    HAWKES_ALPHA = HAWKES_ALPHA,
+    HAWKES_BETA = HAWKES_BETA,
+    HAWKES_POWER_C = HAWKES_POWER_C,
+    HAWKES_POWER_P = HAWKES_POWER_P,
+    MU_SCALE = MU_SCALE,
+    RUN_DECAY_VALIDATION = RUN_DECAY_VALIDATION,
+    DECAY_VALIDATION_REPS = DECAY_VALIDATION_REPS,
+    DECAY_ANNULUS_WIDTH = DECAY_ANNULUS_WIDTH,
+    DECAY_FLIP_CELL = DECAY_FLIP_CELL,
     OUTPUT_TAG = OUTPUT_TAG,
     RUN_ID = RUN_ID,
     SAVE_LIGHT = SAVE_LIGHT,
     OMEGA = OMEGA, END_TIME = END_TIME, TREATMENT_TIME = TREATMENT_TIME,
-    NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2
+    NX = NX, NY = NY, hawkes_par_1 = hawkes_par_1, hawkes_par_2 = hawkes_par_2,
+    hawkes_fit_par_1 = hawkes_fit_par_1, hawkes_fit_par_2 = hawkes_fit_par_2
   ),
   plots = sim_study_plots
 )

@@ -178,15 +178,19 @@ sim_etas_children_cpp <- function(parent_x, parent_y, parent_t, parent_mag, A, a
     .Call(`_PPDisentangle_sim_etas_children_cpp`, parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool)
 }
 
-hawkes_loglik_inhom_cpp <- function(t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc = -1.0) {
-    .Call(`_PPDisentangle_hawkes_loglik_inhom_cpp`, t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc)
+hawkes_loglik_inhom_cpp <- function(t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc = -1.0, kernel_type = 0L, cc = 1.0, p = 2.0) {
+    .Call(`_PPDisentangle_hawkes_loglik_inhom_cpp`, t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc, kernel_type, cc, p)
 }
 
-hawkes_loglik_inhom_filtration_cpp <- function(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor = 1.0, t_trunc = -1.0) {
-    .Call(`_PPDisentangle_hawkes_loglik_inhom_filtration_cpp`, post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor, t_trunc)
+hawkes_loglik_inhom_filtration_cpp <- function(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor = 1.0, t_trunc = -1.0, kernel_type = 0L, cc = 1.0, p = 2.0) {
+    .Call(`_PPDisentangle_hawkes_loglik_inhom_filtration_cpp`, post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor, t_trunc, kernel_type, cc, p)
 }
 
-sim_hawkes_children_cpp <- function(parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0) {
-    .Call(`_PPDisentangle_sim_hawkes_children_cpp`, parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc)
+sim_hawkes_children_cpp <- function(parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0, kernel_type = 0L, cc = 1.0, p = 2.0) {
+    .Call(`_PPDisentangle_sim_hawkes_children_cpp`, parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, kernel_type, cc, p)
+}
+
+tile_index_rect_cpp <- function(x, y, xgrid, ygrid) {
+    .Call(`_PPDisentangle_tile_index_rect_cpp`, x, y, xgrid, ygrid)
 }
 

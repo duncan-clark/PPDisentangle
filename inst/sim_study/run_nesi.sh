@@ -16,7 +16,14 @@ PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
 PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
 PP_POST_TIME_MULTIPLIERS_B64="${PP_POST_TIME_MULTIPLIERS_B64:-}"
+PP_RUN_ROBUSTNESS="${PP_RUN_ROBUSTNESS:-0}"
+PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-}"
+PP_K_VALUES="${PP_K_VALUES:-}"
+PP_MU_SCALES="${PP_MU_SCALES:-}"
+PP_TARGET_POINTS="${PP_TARGET_POINTS:-}"
 PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
+PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-}"
+PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-}"
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
@@ -24,6 +31,33 @@ while [[ "$#" -gt 0 ]]; do
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
         --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
+        --sem-refit-cadence) PP_SEM_PARAM_REFIT_CADENCE="$2"; shift 2 ;;
+        --ate-compute-tau) PP_ATE_COMPUTE_TAU="$2"; shift 2 ;;
+        --skip-ate-tau) PP_ATE_COMPUTE_TAU="0"; shift ;;
+        --robustness) PP_RUN_ROBUSTNESS=1; shift ;;
+        --robustness-inspect)
+            PP_RUN_ROBUSTNESS=1
+            PP_TEST="--test"
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then PP_SIMS=1; fi
+            PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-k_separation,kernel_mismatch}"
+            PP_K_VALUES="${PP_K_VALUES:-0.3,0.8}"
+            PP_MU_SCALES="${PP_MU_SCALES:-0.5}"
+            PP_TARGET_POINTS="${PP_TARGET_POINTS:-150}"
+            PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-1}"
+            PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-1}"
+            PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-1}"
+            PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-2}"
+            PP_LABEL_PROPOSALS="${PP_LABEL_PROPOSALS:-1}"
+            PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
+            PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-1}"
+            PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
+            PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
+            PP_DECAY_REPS="${PP_DECAY_REPS:-3}"
+            shift ;;
+        --scenario-set) PP_ROBUSTNESS_SCENARIO_SET="$2"; shift 2 ;;
+        --k-values) PP_K_VALUES="$2"; shift 2 ;;
+        --mu-scales) PP_MU_SCALES="$2"; shift 2 ;;
+        --target-points) PP_TARGET_POINTS="$2"; shift 2 ;;
         --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
         --post-time-multipliers) PP_POST_TIME_MULTIPLIERS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
@@ -79,9 +113,11 @@ fi
 source "$PKG_ROOT/inst/include/output_root.sh"
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
-    cd "$PKG_ROOT"
-    git pull origin main 2>/dev/null || true
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cd "$PKG_ROOT"
+  # shellcheck source=../include/git_sync.sh
+  source "$PKG_ROOT/inst/include/git_sync.sh"
+  pp_git_sync_repo "$PKG_ROOT"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     OUTPUT_DIR="$(pp_disentangle_output_path sim_study)"
     mkdir -p "$OUTPUT_DIR"
 
@@ -116,7 +152,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME sem_inner=${PP_SEM_INNER_ITER:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
     # Avoid comma-splitting issues in --export when values themselves contain commas
     # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
@@ -126,7 +162,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_TEST PP_MODE PP_SEM_INNER_ITER PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
+    export PP_SIMS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -164,7 +200,14 @@ echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
+echo "Robustness run: ${PP_RUN_ROBUSTNESS}"
+echo "Robustness scenario set: ${PP_ROBUSTNESS_SCENARIO_SET:-<default>}"
+echo "Robustness K values: ${PP_K_VALUES:-<default>}"
+echo "Robustness mu scales: ${PP_MU_SCALES:-<default>}"
+echo "Target points: ${PP_TARGET_POINTS:-<default>}"
 echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
+echo "SEM param refit cadence override: ${PP_SEM_PARAM_REFIT_CADENCE:-<none>}"
+echo "ATE compute tau override: ${PP_ATE_COMPUTE_TAU:-<none>}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
 echo "Post-time multipliers (sweep): ${PP_POST_TIME_MULTIPLIERS:-<none>}"
 if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
@@ -183,6 +226,15 @@ echo ""
 if [ -n "${PP_SEM_INNER_ITER:-}" ]; then
     export PP_SEM_INNER_ITER
 fi
+if [ -n "${PP_SEM_PARAM_REFIT_CADENCE:-}" ]; then
+    export PP_SEM_PARAM_REFIT_CADENCE
+fi
+if [ -n "${PP_ATE_COMPUTE_TAU:-}" ]; then
+    export PP_ATE_COMPUTE_TAU
+fi
+export PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS
+export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS
+export PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 
@@ -363,7 +415,25 @@ echo "Verifying PPDisentangle is visible in runtime library paths..."
 "$RSCRIPT_BIN" -e 'user_lib <- Sys.getenv("R_LIBS_USER", ""); if (nzchar(user_lib)) { libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]; libs <- libs[nzchar(libs)]; if (length(libs) > 0L) .libPaths(c(libs, .libPaths())) }; cat(".libPaths()=", paste(.libPaths(), collapse=" | "), "\n", sep=""); if (!requireNamespace("PPDisentangle", quietly = TRUE)) stop("PPDisentangle not visible after install."); library(PPDisentangle); cat("PPDisentangle load check OK.\n")'
 echo ""
 
-if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
+if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
+    ROBUSTNESS_ARGS=(--sims "$PP_SIMS")
+    if [ -n "${PP_TEST:-}" ]; then
+        ROBUSTNESS_ARGS+=(--test)
+    fi
+    if [ -n "${PP_ROBUSTNESS_SCENARIO_SET:-}" ]; then
+        ROBUSTNESS_ARGS+=(--scenario-set "$PP_ROBUSTNESS_SCENARIO_SET")
+    fi
+    if [ -n "${PP_K_VALUES:-}" ]; then
+        ROBUSTNESS_ARGS+=(--k-values "$PP_K_VALUES")
+    fi
+    if [ -n "${PP_MU_SCALES:-}" ]; then
+        ROBUSTNESS_ARGS+=(--mu-scales "$PP_MU_SCALES")
+    fi
+    if [ -n "${PP_TARGET_POINTS:-}" ]; then
+        ROBUSTNESS_ARGS+=(--target-points "$PP_TARGET_POINTS")
+    fi
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_robustness.R" "${ROBUSTNESS_ARGS[@]}" 2>&1
+elif [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
     "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_time_sweep.R" \
       --sims "$PP_SIMS" \
       --multipliers "$PP_POST_TIME_MULTIPLIERS" \
