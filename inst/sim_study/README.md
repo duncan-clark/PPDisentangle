@@ -14,6 +14,12 @@ bash inst/sim_study/run_nesi.sh --mode test       # lightweight mode preset
 bash inst/sim_study/run_nesi.sh --mode long       # long-run mode preset
 ```
 
+For robustness runs, `--sims` controls the number of independent replications.
+Use `--cpus` only when you want to request a larger SLURM allocation without
+increasing replications. Extra CPUs help most in ATE/off-support work via
+`--ate-workers`; SEM worker parallelism is naturally capped by the number of
+replications.
+
 ## Output layout
 
 Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs).
@@ -54,6 +60,8 @@ kernel misspecification, off-support allocation contrasts, label recovery,
 and the forward-simulation decay diagnostic. It writes per-scenario result
 objects plus summary CSV/RDS files and paper-ready figures/LaTeX fragments.
 
+**K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with μ calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
+
 ```bash
 Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
 ```
@@ -61,8 +69,27 @@ Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
 Default generated assets:
 
 ```text
-PPDisentangle-output/sim_study/generated/robustness/figures/robustness_*.{pdf,png}
-PPDisentangle-output/sim_study/generated/robustness/tex/robustness.tex
+PPDisentangle-output/sim_study/generated/robustness/figures/
+  robustness_k_separation_label_recovery.{pdf,png}
+  robustness_k_separation_ate_error.{pdf,png}
+  robustness_k_separation_support_contrasts.{pdf,png}
+  robustness_kernel_mismatch_label_recovery.{pdf,png}
+  robustness_kernel_mismatch_ate_error.{pdf,png}
+  robustness_kernel_mismatch_support_contrasts.{pdf,png}
+  robustness_decay_validation.{pdf,png}
+PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
+```
+
+Copy `simulation_robustness_appendix.tex` and `figures/*.pdf` to
+`plots/sim_study/robustness/` on Overleaf, then
+`\input{plots/sim_study/robustness/simulation_robustness_appendix.tex}` inside
+`\section{Additional simulation results}`.
+
+Local PDF preview:
+
+```bash
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness_standalone '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
 Small NeSI inspection run, intended to finish quickly enough to inspect before
@@ -76,6 +103,14 @@ Full NeSI robustness run:
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness --mode long --sims 32 --target-points 2500
+```
+
+Timing probe with 32 replications and a larger CPU allocation:
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness --mode quick \
+  --scenario-set high_count_assignment --target-points 2500 \
+  --sims 32 --cpus 100 --ate-workers 32 --skip-ate-tau
 ```
 
 ## OOM during ATE estimation

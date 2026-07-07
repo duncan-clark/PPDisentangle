@@ -81,7 +81,11 @@ resolve_save_dirs <- function() {
   } else {
     normalizePath(getwd(), winslash = "/", mustWork = FALSE)
   }
-  list(canonical = PPDisentangle::pp_output_path("sim_study", repo_root = repo_dir))
+  list(
+    canonical = PPDisentangle::pp_output_path("sim_study", repo_root = repo_dir),
+    script_dir = script_dir,
+    repo_dir = repo_dir
+  )
 }
 
 OMEGA <- c(0, 100, 0, 100)
@@ -147,6 +151,7 @@ if (TEST) {
 
 save_dirs <- resolve_save_dirs()
 SAVE_DIR <- save_dirs$canonical
+SCRIPT_DIR <- save_dirs$script_dir
 
 if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
   N_SIMS <- N_SIMS_ARG
@@ -156,14 +161,12 @@ if (!is.null(N_SIMS_ARG) && is.finite(N_SIMS_ARG)) {
 if (ON_CLUSTER && !TEST) {
   slurm_cores <- suppressWarnings(as.numeric(Sys.getenv("SLURM_CPUS_PER_TASK", NA_character_)))
   if (is.finite(slurm_cores) && slurm_cores >= 1) {
-    if (!isTRUE(all.equal(SIM_SIZE, slurm_cores)) || !isTRUE(all.equal(N_CORES, slurm_cores))) {
+    if (!isTRUE(all.equal(N_CORES, slurm_cores))) {
       message(sprintf(
-        "[sim_study] Aligning sims/cores to SLURM_CPUS_PER_TASK for efficiency: sims=%s, cores=%s, slurm=%s",
+        "[sim_study] Using SLURM_CPUS_PER_TASK for worker budget: sims=%s, cores=%s, slurm=%s",
         as.character(SIM_SIZE), as.character(N_CORES), as.character(slurm_cores)
       ))
     }
-    SIM_SIZE <- slurm_cores
-    N_SIMS <- slurm_cores
     N_CORES <- slurm_cores
   }
 }
@@ -223,6 +226,7 @@ SEM_UPDATE_STARTING <- tolower(Sys.getenv("PP_SEM_UPDATE_STARTING", "true")) %in
 SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS", "false")) %in% c("1", "true", "yes", "y")
 
 TREAT_PROP <- 0.5
+TREATMENT_ASSIGNMENT <- env_chr("PP_TREATMENT_ASSIGNMENT", "random")
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 
 SCENARIO_ID <- env_chr("PP_SCENARIO_ID", "baseline_hawkes_exp")
@@ -241,7 +245,7 @@ HAWKES_POWER_P <- env_num("PP_HAWKES_POWER_P", 2, min_value = 1.000001)
 MU_SCALE <- env_num("PP_MU_SCALE", 1, min_value = 1e-8)
 TARGET_POINTS <- env_num("PP_TARGET_POINTS", NA_real_, min_value = 1)
 RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% c("1", "true", "yes", "y")
-DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 200L, 1L)
+DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 2000L, 1L)
 DECAY_ANNULUS_WIDTH <- env_num("PP_DECAY_ANNULUS_WIDTH", 1, min_value = 1e-8)
 DECAY_FLIP_CELL <- env_int("PP_DECAY_FLIP_CELL", NA_integer_, 1L)
 make_hawkes_params_for_kernel <- function(mu, K, kernel) {
@@ -332,6 +336,8 @@ ATE_WORKERS <- if (ON_CLUSTER) {
 } else {
   N_CORES
 }
+ATE_WORKERS <- env_int("PP_ATE_WORKERS", ATE_WORKERS, 1L)
+ATE_WORKERS <- min(as.integer(N_CORES), as.integer(ATE_WORKERS))
 ATE_BATCH_SIZE <- max(ATE_WORKERS, 2L * ATE_WORKERS)
 ATE_N_SIMS <- if (TEST) 1L else as.integer(N_SIMS)
 ATE_N_TAU_SIMS <- if (TEST) 1L else as.integer(N_TAU_SIMS)
@@ -359,7 +365,11 @@ SEM_PILOT_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_SIMS", "1
 if (!is.finite(SEM_PILOT_SIMS) || is.na(SEM_PILOT_SIMS) || SEM_PILOT_SIMS < 1L) SEM_PILOT_SIMS <- min(SIM_SIZE, 12L)
 SEM_PILOT_CORES <- suppressWarnings(as.integer(Sys.getenv("PP_SEM_PILOT_CORES", as.character(max(1L, floor(0.8 * N_CORES))))))
 if (!is.finite(SEM_PILOT_CORES) || is.na(SEM_PILOT_CORES) || SEM_PILOT_CORES < 1L) SEM_PILOT_CORES <- max(1L, floor(0.8 * N_CORES))
-SEM_WORKERS_DEFAULT <- if (ON_CLUSTER && TEST) min(8L, as.integer(N_CORES)) else as.integer(N_CORES)
+SEM_WORKERS_DEFAULT <- if (ON_CLUSTER && TEST) {
+  min(8L, as.integer(N_CORES), as.integer(SIM_SIZE))
+} else {
+  min(as.integer(N_CORES), as.integer(SIM_SIZE))
+}
 SEM_WORKERS <- env_int("PP_SEM_WORKERS", SEM_WORKERS_DEFAULT, 1L)
 SEM_WORKERS <- min(as.integer(N_CORES), as.integer(SEM_WORKERS))
 log_msg("=== ", JOB_ID, " | ", MODE, " | ", N_CORES, " cores x ", SIM_SIZE, " sims ===")
@@ -397,6 +407,7 @@ log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=",
 log_msg("Scenario=", SCENARIO_ID,
         " | sim_kernel=", SIM_KERNEL,
         " | fit_kernel=", FIT_KERNEL,
+        " | treatment_assignment=", TREATMENT_ASSIGNMENT,
         " | control_K=", CONTROL_K,
         " | treated_K=", TREATED_K,
         " | base_mu=", BASE_MU,
@@ -514,9 +525,80 @@ partition <- quadrats(X = OMEGA, nx = NX, ny = NY)
 all_nothing_ATE <- (hawkes_par_2$mu * TIME_INT * (1 / (1 - hawkes_par_2$K)) -
                       hawkes_par_1$mu * TIME_INT * (1 / (1 - hawkes_par_1$K))) / partition$n
 
+count_points_by_partition <- function(df, partition) {
+  counts <- numeric(partition$n)
+  if (is.null(df) || nrow(df) < 1L) return(counts)
+  for (ii in seq_len(partition$n)) {
+    wi <- as.owin(partition[ii])
+    counts[[ii]] <- sum(spatstat.geom::inside.owin(df$x, df$y, wi), na.rm = TRUE)
+  }
+  counts
+}
+
+make_partition_processes <- function(mode) {
+  mode <- tolower(trimws(mode))
+  n_treated <- as.integer(round(partition$n * TREAT_PROP))
+  n_treated <- max(1L, min(partition$n - 1L, n_treated))
+  out <- rep("control", partition$n)
+
+  if (mode %in% c("random", "random_50pct", "random_50")) {
+    set.seed(stage_seed(0L, 0L, 42L))
+    out[sample(seq_len(partition$n), n_treated)] <- "treated"
+    return(list(processes = out, counts = rep(NA_real_, partition$n)))
+  }
+
+  if (mode %in% c("lowest_count", "lowest_counts", "lowest_points", "lowest_count_50pct")) {
+    set.seed(stage_seed(0L, 0L, 84L))
+    reference <- sim_hawkes(
+      params = hawkes_par_1,
+      windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
+      optimized = TRUE
+    )
+    reference_df <- data.frame(x = reference$x, y = reference$y)
+    counts <- count_points_by_partition(reference_df, partition)
+    set.seed(stage_seed(0L, 0L, 85L))
+    tie_break <- stats::runif(length(counts))
+    treated_cells <- order(counts, tie_break)[seq_len(n_treated)]
+    out[treated_cells] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  if (mode %in% c("highest_count", "highest_counts", "highest_points", "highest_count_50pct")) {
+    set.seed(stage_seed(0L, 0L, 84L))
+    reference <- sim_hawkes(
+      params = hawkes_par_1,
+      windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
+      optimized = TRUE
+    )
+    reference_df <- data.frame(x = reference$x, y = reference$y)
+    counts <- count_points_by_partition(reference_df, partition)
+    set.seed(stage_seed(0L, 0L, 85L))
+    tie_break <- stats::runif(length(counts))
+    treated_cells <- order(-counts, tie_break)[seq_len(n_treated)]
+    out[treated_cells] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  stop(sprintf("Unknown PP_TREATMENT_ASSIGNMENT value: %s", mode))
+}
+
 partition_processes <- rep("control", partition$n)
-set.seed(stage_seed(0L, 0L, 42L))
-partition_processes[sample(1:(NX * NY), NX * NY * TREAT_PROP)] <- "treated"
+assignment_info <- make_partition_processes(TREATMENT_ASSIGNMENT)
+partition_processes <- assignment_info$processes
+partition_assignment_counts <- assignment_info$counts
+log_msg(
+  "Treatment assignment: mode=", TREATMENT_ASSIGNMENT,
+  " | treated_cells=", sum(partition_processes == "treated"),
+  " | control_cells=", sum(partition_processes == "control")
+)
+if (any(is.finite(partition_assignment_counts))) {
+  treated_counts <- partition_assignment_counts[partition_processes == "treated"]
+  control_counts <- partition_assignment_counts[partition_processes == "control"]
+  log_msg(
+    "Assignment reference counts: treated median=", signif(stats::median(treated_counts), 4),
+    " | control median=", signif(stats::median(control_counts), 4)
+  )
+}
 treated_idx <- partition_processes == "treated"
 control_state_space <- as.owin(partition[!treated_idx])
 treated_state_space <- as.owin(partition[treated_idx])
@@ -1630,10 +1712,26 @@ support_contrast_df_all <- do.call(rbind, lapply(seq_along(tasks), function(k) {
   }))
 }))
 support_contrast_df <- if (!is.null(support_contrast_df_all) && nrow(support_contrast_df_all) > 0) {
+  global_ate_truth_ref <- {
+    hit <- support_contrast_specs$psi_truth[support_contrast_specs$contrast_family == "global_1_0"]
+    if (length(hit) < 1L) NA_real_ else hit[[1L]]
+  }
   support_contrast_df_all %>%
     left_join(fit_status_df %>% select(.data$task_idx, .data$include_result), by = "task_idx") %>%
     filter(!is.na(.data$include_result) & .data$include_result) %>%
-    mutate(abs_error = abs(.data$psi_estimate - .data$psi_truth)) %>%
+    mutate(
+      abs_error = abs(.data$psi_estimate - .data$psi_truth),
+      pct_error = ifelse(
+        is.finite(.data$psi_truth) & abs(.data$psi_truth) > 1e-8,
+        100 * .data$abs_error / abs(.data$psi_truth),
+        ifelse(
+          .data$contrast_family == "single_cell_flip" &
+            is.finite(global_ate_truth_ref) & abs(global_ate_truth_ref) > 1e-8,
+          100 * .data$abs_error / abs(global_ate_truth_ref),
+          NA_real_
+        )
+      )
+    ) %>%
     select(-.data$include_result)
 } else {
   support_contrast_df_all
@@ -1646,6 +1744,7 @@ support_contrast_summary <- if (!is.null(support_contrast_df) && nrow(support_co
       mean_psi_estimate = mean(.data$psi_estimate, na.rm = TRUE),
       mean_psi_truth = mean(.data$psi_truth, na.rm = TRUE),
       mean_abs_error = mean(.data$abs_error, na.rm = TRUE),
+      mean_pct_error = mean(.data$pct_error, na.rm = TRUE),
       .groups = "drop"
     )
 } else {
@@ -1659,184 +1758,32 @@ if (!is.null(support_contrast_summary)) {
 # ------------------------------------------------------------------
 # 11c. Decay-validation diagnostic (forward simulation only)
 # ------------------------------------------------------------------
-choose_decay_flip_cell <- function(partition, partition_processes, requested_cell = NA_integer_) {
-  if (is.finite(requested_cell) && !is.na(requested_cell) &&
-      requested_cell >= 1L && requested_cell <= partition$n) {
-    return(as.integer(requested_cell))
-  }
-  centers <- do.call(rbind, lapply(seq_len(partition$n), function(i) {
-    wi <- as.owin(partition[i])
-    c(x = mean(wi$xrange), y = mean(wi$yrange))
-  }))
-  omega_center <- c(mean(OMEGA[1:2]), mean(OMEGA[3:4]))
-  d2 <- (centers[, "x"] - omega_center[1])^2 + (centers[, "y"] - omega_center[2])^2
-  treated_cells <- which(partition_processes == "treated")
-  candidates <- if (length(treated_cells) > 0L) treated_cells else seq_len(partition$n)
-  candidates[which.min(d2[candidates])]
-}
-
-point_distance_to_rect <- function(x, y, win) {
-  dx <- pmax(win$xrange[1] - x, 0, x - win$xrange[2])
-  dy <- pmax(win$yrange[1] - y, 0, y - win$yrange[2])
-  sqrt(dx^2 + dy^2)
-}
-
-sample_roots_in_cell <- function(n, cell_win, t_window) {
-  if (n < 1L) {
-    return(data.frame(x = numeric(0), y = numeric(0), t = numeric(0)))
-  }
-  pp <- spatstat.random::runifpoint(n = n, win = cell_win)
-  data.frame(
-    x = pp$x,
-    y = pp$y,
-    t = sort(stats::runif(n, min = t_window[1], max = t_window[2]))
-  )
-}
-
-cell_root_rate <- function(params, cell_area, support_area, t_window) {
-  if (!is.finite(support_area) || support_area <= 0) support_area <- cell_area
-  as.numeric(params$mu) * diff(t_window) * cell_area / support_area
-}
-
-simulate_cell_rooted_catalogue <- function(params, cell_win, cell_area, support_area,
-                                           t_window, omega_win) {
-  n_roots <- stats::rpois(1L, cell_root_rate(params, cell_area, support_area, t_window))
-  roots <- sample_roots_in_cell(n_roots, cell_win, t_window)
-  if (nrow(roots) < 1L) {
-    return(data.frame(x = numeric(0), y = numeric(0), t = numeric(0)))
-  }
-  ev <- sim_hawkes_fast(
-    params = params,
-    windowT = t_window,
-    windowS = omega_win,
-    background_realization = roots
-  )
-  data.frame(x = ev$x, y = ev$y, t = ev$t)
-}
-
-annulus_counts_from_cell <- function(catalogue, cell_win, annulus_width, max_bin) {
-  if (nrow(catalogue) < 1L) {
-    bins <- integer(0)
-  } else {
-    dist <- point_distance_to_rect(catalogue$x, catalogue$y, cell_win)
-    bins <- pmin(max_bin, floor(dist / annulus_width))
-  }
-  tab <- tabulate(bins + 1L, nbins = max_bin + 1L)
-  as.numeric(tab)
-}
-
-make_decay_rate_lines <- function(summary_df, control_pp, treated_pp) {
-  positive <- summary_df[is.finite(summary_df$mean_abs_delta) & summary_df$mean_abs_delta > 0, , drop = FALSE]
-  if (nrow(positive) < 1L) return(NULL)
-  anchor <- positive[1, , drop = FALSE]
-  refs <- data.frame(
-    reference = c("control spatial rate", "treated spatial rate"),
-    alpha = c(as.numeric(control_pp$alpha), as.numeric(treated_pp$alpha)),
-    stringsAsFactors = FALSE
-  )
-  refs <- refs[is.finite(refs$alpha) & refs$alpha > 0, , drop = FALSE]
-  if (nrow(refs) < 1L) return(NULL)
-  refs <- refs[!duplicated(round(refs$alpha, 12)), , drop = FALSE]
-  do.call(rbind, lapply(seq_len(nrow(refs)), function(i) {
-    out <- summary_df
-    out$reference <- refs$reference[i]
-    out$alpha <- refs$alpha[i]
-    out$rate_value <- anchor$mean_abs_delta *
-      exp(-refs$alpha[i] * (out$d_mid^2 - anchor$d_mid^2))
-    out
-  }))
-}
+source(file.path(SCRIPT_DIR, "decay_validation_utils.R"), local = FALSE)
 
 run_decay_validation <- function() {
   if (!isTRUE(RUN_DECAY_VALIDATION)) return(NULL)
-  if (!identical(normalize_hawkes_kernel(SIM_KERNEL), "exponential") &&
-      !identical(normalize_hawkes_kernel(SIM_KERNEL), "power_law")) {
-    return(NULL)
-  }
-  omega_win <- as.owin(OMEGA)
-  flip_cell <- choose_decay_flip_cell(partition, partition_processes, DECAY_FLIP_CELL)
-  cell_win <- as.owin(partition[flip_cell])
-  cell_area <- spatstat.geom::area(cell_win)
-  original_process <- partition_processes[flip_cell]
-  flipped_process <- if (identical(original_process, "treated")) "control" else "treated"
-
-  z <- partition_processes
-  z_prime <- z
-  z_prime[flip_cell] <- flipped_process
-  support_area <- function(allocation, process_name) {
-    idx <- allocation == process_name
-    if (!any(idx)) return(cell_area)
-    spatstat.geom::area(as.owin(partition[idx]))
-  }
-
-  params_original <- if (identical(original_process, "treated")) hawkes_par_2 else hawkes_par_1
-  params_flipped <- if (identical(flipped_process, "treated")) hawkes_par_2 else hawkes_par_1
-  support_original <- support_area(z, original_process)
-  support_flipped <- support_area(z_prime, flipped_process)
-
-  max_corner_dist <- max(point_distance_to_rect(
-    x = c(OMEGA[1], OMEGA[1], OMEGA[2], OMEGA[2]),
-    y = c(OMEGA[3], OMEGA[4], OMEGA[3], OMEGA[4]),
-    win = cell_win
-  ))
-  max_bin <- max(1L, ceiling(max_corner_dist / DECAY_ANNULUS_WIDTH))
-  annuli <- data.frame(
-    annulus = seq.int(0L, max_bin),
-    d_left = seq.int(0L, max_bin) * DECAY_ANNULUS_WIDTH,
-    d_mid = (seq.int(0L, max_bin) + 0.5) * DECAY_ANNULUS_WIDTH
+  out <- run_decay_validation_scenario(
+    omega = OMEGA,
+    nx = NX,
+    ny = NY,
+    treatment_time = TREATMENT_TIME,
+    end_time = END_TIME,
+    partition_processes = partition_processes,
+    hawkes_par_1 = hawkes_par_1,
+    hawkes_par_2 = hawkes_par_2,
+    sim_kernel = SIM_KERNEL,
+    decay_reps = DECAY_VALIDATION_REPS,
+    annulus_width = DECAY_ANNULUS_WIDTH,
+    flip_cell = DECAY_FLIP_CELL,
+    stage_seed_fn = stage_seed,
+    log_fn = log_msg
   )
-
-  log_msg("Running decay-validation diagnostic: reps=", DECAY_VALIDATION_REPS,
-          " | flip_cell=", flip_cell,
-          " | ", original_process, "->", flipped_process)
-  t0 <- proc.time()[3]
-  rep_rows <- lapply(seq_len(DECAY_VALIDATION_REPS), function(rep_id) {
-    set.seed(stage_seed(13L, rep_id))
-    cat_original <- simulate_cell_rooted_catalogue(
-      params = params_original,
-      cell_win = cell_win,
-      cell_area = cell_area,
-      support_area = support_original,
-      t_window = c(TREATMENT_TIME, END_TIME),
-      omega_win = omega_win
-    )
-    cat_flipped <- simulate_cell_rooted_catalogue(
-      params = params_flipped,
-      cell_win = cell_win,
-      cell_area = cell_area,
-      support_area = support_flipped,
-      t_window = c(TREATMENT_TIME, END_TIME),
-      omega_win = omega_win
-    )
-    count_original <- annulus_counts_from_cell(cat_original, cell_win, DECAY_ANNULUS_WIDTH, max_bin)
-    count_flipped <- annulus_counts_from_cell(cat_flipped, cell_win, DECAY_ANNULUS_WIDTH, max_bin)
-    data.frame(
-      rep = rep_id,
-      annuli,
-      count_original = count_original,
-      count_flipped = count_flipped,
-      abs_delta_n = abs(count_flipped - count_original),
-      stringsAsFactors = FALSE
-    )
-  })
-  decay_df <- do.call(rbind, rep_rows)
-  decay_summary <- decay_df %>%
-    group_by(.data$annulus, .data$d_left, .data$d_mid) %>%
-    summarize(
-      mean_abs_delta = mean(.data$abs_delta_n),
-      sd_abs_delta = stats::sd(.data$abs_delta_n),
-      q10_abs_delta = stats::quantile(.data$abs_delta_n, 0.10, names = FALSE),
-      q90_abs_delta = stats::quantile(.data$abs_delta_n, 0.90, names = FALSE),
-      .groups = "drop"
-    )
-  rate_lines <- make_decay_rate_lines(decay_summary, hawkes_par_1, hawkes_par_2)
+  if (is.null(out)) return(NULL)
+  decay_summary <- out$summary
+  rate_lines <- out$rate_lines
   eps <- min(decay_summary$mean_abs_delta[decay_summary$mean_abs_delta > 0], na.rm = TRUE)
   if (!is.finite(eps)) eps <- 1e-6
   eps <- eps / 2
-  decay_summary$mean_abs_delta_plot <- pmax(decay_summary$mean_abs_delta, eps)
-  if (!is.null(rate_lines) && nrow(rate_lines) > 0) {
-    rate_lines$rate_value_plot <- pmax(rate_lines$rate_value, eps)
-  }
   decay_plot <- ggplot(decay_summary, aes(x = .data$d_mid, y = .data$mean_abs_delta_plot)) +
     geom_ribbon(aes(ymin = pmax(.data$q10_abs_delta, eps),
                     ymax = pmax(.data$q90_abs_delta, eps)),
@@ -1850,32 +1797,21 @@ run_decay_validation <- function() {
                 linetype = "dashed", linewidth = 0.8, inherit.aes = FALSE)} +
     scale_y_log10() +
     labs(
-      title = "Decay validation from a single-cell flip",
+      title = "Decay validation from a single-point label flip",
       subtitle = paste0(
-        "Forward simulation only; coupled outside-cell clusters cancel. ",
+        "Forward simulation only: one event in a cell is relabelled and offspring are compared. ",
         "Dashed lines show slope-only exp(-alpha d^2) references."
       ),
-      x = "Distance from flipped cell (unit-width annuli)",
+      x = "Distance from flipped event (unit-width annuli)",
       y = "Mean |Delta N| per annulus",
       color = "Reference slope"
     ) +
     theme_minimal() +
     theme(legend.position = "bottom")
 
-  log_elapsed("Decay validation", proc.time()[3] - t0)
   list(
-    specs = list(
-      enabled = TRUE,
-      reps = DECAY_VALIDATION_REPS,
-      annulus_width = DECAY_ANNULUS_WIDTH,
-      flip_cell = flip_cell,
-      original_process = original_process,
-      flipped_process = flipped_process,
-      support_area_original = support_original,
-      support_area_flipped = support_flipped,
-      slope_reference = "exp(-alpha * d^2), anchored to first positive empirical annulus"
-    ),
-    df = decay_df,
+    specs = out$specs,
+    df = out$df,
     summary = decay_summary,
     rate_lines = rate_lines,
     plot = decay_plot
@@ -2568,12 +2504,15 @@ sim_study_results <- list(
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
     SCENARIO_ID = SCENARIO_ID,
+    TREATMENT_ASSIGNMENT = TREATMENT_ASSIGNMENT,
+    partition_assignment_counts = partition_assignment_counts,
     SIM_KERNEL = SIM_KERNEL,
     FIT_KERNEL = FIT_KERNEL,
     TARGET_POINTS = TARGET_POINTS,
     EXPECTED_POINTS_PER_MU = EXPECTED_POINTS_PER_MU,
     TRUE_MU = TRUE_MU,
     BASE_MU = BASE_MU,
+    BASE_SEED = BASE_SEED,
     HAWKES_ALPHA = HAWKES_ALPHA,
     HAWKES_BETA = HAWKES_BETA,
     HAWKES_POWER_C = HAWKES_POWER_C,

@@ -11,6 +11,7 @@ set -euo pipefail
 #   --test      quick test profile
 
 PP_SIMS=32
+PP_CPUS="${PP_CPUS:-}"
 PP_TEST=""
 PP_MODE="${PP_MODE:-}"
 PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
@@ -22,6 +23,8 @@ PP_K_VALUES="${PP_K_VALUES:-}"
 PP_MU_SCALES="${PP_MU_SCALES:-}"
 PP_TARGET_POINTS="${PP_TARGET_POINTS:-}"
 PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
+PP_SEM_WORKERS="${PP_SEM_WORKERS:-}"
+PP_ATE_WORKERS="${PP_ATE_WORKERS:-}"
 PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-}"
 PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-}"
 HAVE_SIMS_ARG=0
@@ -30,6 +33,9 @@ while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --mode) PP_MODE="$2"; shift 2 ;;
         --sims) PP_SIMS="$2"; HAVE_SIMS_ARG=1; shift 2 ;;
+        --cpus) PP_CPUS="$2"; shift 2 ;;
+        --sem-workers) PP_SEM_WORKERS="$2"; shift 2 ;;
+        --ate-workers) PP_ATE_WORKERS="$2"; shift 2 ;;
         --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
         --sem-refit-cadence) PP_SEM_PARAM_REFIT_CADENCE="$2"; shift 2 ;;
         --ate-compute-tau) PP_ATE_COMPUTE_TAU="$2"; shift 2 ;;
@@ -40,7 +46,7 @@ while [[ "$#" -gt 0 ]]; do
             PP_TEST="--test"
             if [ "$HAVE_SIMS_ARG" -eq 0 ]; then PP_SIMS=1; fi
             PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-k_separation,kernel_mismatch}"
-            PP_K_VALUES="${PP_K_VALUES:-0.3,0.8}"
+            PP_K_VALUES="${PP_K_VALUES:-0.1,0.4,0.7}"
             PP_MU_SCALES="${PP_MU_SCALES:-0.5}"
             PP_TARGET_POINTS="${PP_TARGET_POINTS:-150}"
             PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-1}"
@@ -52,7 +58,7 @@ while [[ "$#" -gt 0 ]]; do
             PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-1}"
             PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
             PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
-            PP_DECAY_REPS="${PP_DECAY_REPS:-3}"
+            PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
             PP_SEM_WORKERS="${PP_SEM_WORKERS:-8}"
             shift ;;
         --scenario-set) PP_ROBUSTNESS_SCENARIO_SET="$2"; shift 2 ;;
@@ -122,9 +128,9 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     OUTPUT_DIR="$(pp_disentangle_output_path sim_study)"
     mkdir -p "$OUTPUT_DIR"
 
-    CPUS="$PP_SIMS"
+    CPUS="${PP_CPUS:-$PP_SIMS}"
     if [ "$CPUS" -lt 1 ]; then
-        echo "ERROR: --sims must be >= 1"
+        echo "ERROR: --cpus/--sims must be >= 1"
         exit 1
     fi
 
@@ -156,7 +162,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_workers=${PP_SEM_WORKERS:-<default>} ate_workers=${PP_ATE_WORKERS:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
     # Avoid comma-splitting issues in --export when values themselves contain commas
     # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
@@ -166,7 +172,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
+    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -195,11 +201,6 @@ if [ -n "${PP_POST_TIME_MULTIPLIERS_B64:-}" ]; then
     fi
 fi
 
-if [ -z "$PP_TEST" ] && [ -n "${SLURM_CPUS_PER_TASK:-}" ] && [ "$PP_SIMS" -ne "$SLURM_CPUS_PER_TASK" ]; then
-    echo "Adjusting sims to match allocated CPUs: sims=$PP_SIMS -> ${SLURM_CPUS_PER_TASK}"
-    PP_SIMS="$SLURM_CPUS_PER_TASK"
-fi
-
 echo "=== PPDisentangle Sim Study (NeSI) ==="
 echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
@@ -210,6 +211,8 @@ echo "Robustness K values: ${PP_K_VALUES:-<default>}"
 echo "Robustness mu scales: ${PP_MU_SCALES:-<default>}"
 echo "Target points: ${PP_TARGET_POINTS:-<default>}"
 echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
+echo "SEM workers override: ${PP_SEM_WORKERS:-<none>}"
+echo "ATE workers override: ${PP_ATE_WORKERS:-<none>}"
 echo "SEM param refit cadence override: ${PP_SEM_PARAM_REFIT_CADENCE:-<none>}"
 echo "ATE compute tau override: ${PP_ATE_COMPUTE_TAU:-<none>}"
 echo "Post-time multiplier: ${PP_POST_TIME_MULTIPLIER}"
@@ -238,7 +241,7 @@ if [ -n "${PP_ATE_COMPUTE_TAU:-}" ]; then
 fi
 export PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS
 export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_WORKERS
-export PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS
+export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 

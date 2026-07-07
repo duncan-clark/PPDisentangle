@@ -1,0 +1,12 @@
+# Local NeSI configuration — never commit secrets from this folder.
+# Only config.example.env is tracked (template without credentials).
+
+*.env
+!config.example.env
+.env
+.env.*
+secrets*
+*credentials*
+*secret*
+local.*
+*.local
