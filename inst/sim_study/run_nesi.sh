@@ -19,6 +19,7 @@ PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
 PP_POST_TIME_MULTIPLIERS_B64="${PP_POST_TIME_MULTIPLIERS_B64:-}"
 PP_RUN_ROBUSTNESS="${PP_RUN_ROBUSTNESS:-0}"
 PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-}"
+PP_ROBUSTNESS_SCENARIO_WORKERS="${PP_ROBUSTNESS_SCENARIO_WORKERS:-}"
 PP_K_VALUES="${PP_K_VALUES:-}"
 PP_MU_SCALES="${PP_MU_SCALES:-}"
 PP_TARGET_POINTS="${PP_TARGET_POINTS:-}"
@@ -62,6 +63,7 @@ while [[ "$#" -gt 0 ]]; do
             PP_SEM_WORKERS="${PP_SEM_WORKERS:-8}"
             shift ;;
         --scenario-set) PP_ROBUSTNESS_SCENARIO_SET="$2"; shift 2 ;;
+        --scenario-workers) PP_ROBUSTNESS_SCENARIO_WORKERS="$2"; shift 2 ;;
         --k-values) PP_K_VALUES="$2"; shift 2 ;;
         --mu-scales) PP_MU_SCALES="$2"; shift 2 ;;
         --target-points) PP_TARGET_POINTS="$2"; shift 2 ;;
@@ -162,7 +164,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_workers=${PP_SEM_WORKERS:-<default>} ate_workers=${PP_ATE_WORKERS:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} scenario_workers=${PP_ROBUSTNESS_SCENARIO_WORKERS:-<auto>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_workers=${PP_SEM_WORKERS:-<default>} ate_workers=${PP_ATE_WORKERS:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
     # Avoid comma-splitting issues in --export when values themselves contain commas
     # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
@@ -172,7 +174,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
+    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -207,6 +209,7 @@ echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
 echo "Robustness run: ${PP_RUN_ROBUSTNESS}"
 echo "Robustness scenario set: ${PP_ROBUSTNESS_SCENARIO_SET:-<default>}"
+echo "Robustness scenario workers: ${PP_ROBUSTNESS_SCENARIO_WORKERS:-<auto>}"
 echo "Robustness K values: ${PP_K_VALUES:-<default>}"
 echo "Robustness mu scales: ${PP_MU_SCALES:-<default>}"
 echo "Target points: ${PP_TARGET_POINTS:-<default>}"
@@ -239,7 +242,7 @@ fi
 if [ -n "${PP_ATE_COMPUTE_TAU:-}" ]; then
     export PP_ATE_COMPUTE_TAU
 fi
-export PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS
+export PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS
 export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_WORKERS
 export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS
 export PP_POST_TIME_MULTIPLIER
@@ -429,6 +432,9 @@ if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
     fi
     if [ -n "${PP_ROBUSTNESS_SCENARIO_SET:-}" ]; then
         ROBUSTNESS_ARGS+=(--scenario-set "$PP_ROBUSTNESS_SCENARIO_SET")
+    fi
+    if [ -n "${PP_ROBUSTNESS_SCENARIO_WORKERS:-}" ]; then
+        ROBUSTNESS_ARGS+=(--scenario-workers "$PP_ROBUSTNESS_SCENARIO_WORKERS")
     fi
     if [ -n "${PP_K_VALUES:-}" ]; then
         ROBUSTNESS_ARGS+=(--k-values "$PP_K_VALUES")

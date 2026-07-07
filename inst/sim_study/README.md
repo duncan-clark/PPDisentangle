@@ -16,9 +16,12 @@ bash inst/sim_study/run_nesi.sh --mode long       # long-run mode preset
 
 For robustness runs, `--sims` controls the number of independent replications.
 Use `--cpus` only when you want to request a larger SLURM allocation without
-increasing replications. Extra CPUs help most in ATE/off-support work via
-`--ate-workers`; SEM worker parallelism is naturally capped by the number of
-replications.
+increasing replications. The robustness launcher uses extra CPUs by running
+multiple scenarios concurrently. By default it uses
+`floor(SLURM_CPUS_PER_TASK / sims)` scenario workers; override with
+`--scenario-workers`. SEM worker parallelism inside each scenario is naturally
+capped by the number of replications. Extra CPUs within a scenario can also help
+ATE/off-support work via `--ate-workers`.
 
 ## Output layout
 
@@ -109,7 +112,7 @@ Timing probe with 32 replications and a larger CPU allocation:
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness --mode quick \
-  --scenario-set high_count_assignment --target-points 2500 \
+  --scenario-set high_count_assignment,snr_scale --target-points 2500 \
   --sims 32 --cpus 100 --ate-workers 32 --skip-ate-tau
 ```
 

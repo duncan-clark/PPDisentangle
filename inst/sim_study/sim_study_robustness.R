@@ -62,6 +62,12 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 pp_sims <- suppressWarnings(as.integer(get_arg_val("--sims", Sys.getenv("PP_SIMS", "32"))))
 if (!is.finite(pp_sims) || is.na(pp_sims) || pp_sims < 1L) pp_sims <- 32L
+allocated_cpus <- suppressWarnings(as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", Sys.getenv("PP_CPUS", as.character(pp_sims)))))
+if (!is.finite(allocated_cpus) || is.na(allocated_cpus) || allocated_cpus < 1L) allocated_cpus <- pp_sims
+scenario_workers <- suppressWarnings(as.integer(get_arg_val("--scenario-workers", Sys.getenv("PP_ROBUSTNESS_SCENARIO_WORKERS", ""))))
+if (!is.finite(scenario_workers) || is.na(scenario_workers) || scenario_workers < 1L) {
+  scenario_workers <- max(1L, floor(allocated_cpus / pp_sims))
+}
 target_points <- suppressWarnings(as.numeric(get_arg_val("--target-points", Sys.getenv("PP_TARGET_POINTS", "2500"))))
 if (!is.finite(target_points) || is.na(target_points) || target_points <= 0) target_points <- 2500
 test_mode <- "--test" %in% args
@@ -172,6 +178,12 @@ if (!identical(tolower(scenario_filter), "all")) {
   scenarios <- scenarios %>% filter(.data$scenario_family %in% keep_families)
 }
 if (nrow(scenarios) < 1L) stop("No robustness scenarios selected.")
+scenario_workers <- max(1L, min(as.integer(scenario_workers), nrow(scenarios)))
+scenario_cpus <- max(1L, floor(allocated_cpus / scenario_workers))
+message(sprintf(
+  "[robustness] scenario workers=%d | allocated_cpus=%d | cpus_per_scenario=%d | sims_per_scenario=%d",
+  scenario_workers, allocated_cpus, scenario_cpus, pp_sims
+))
 
 robustness_dir <- file.path(out_dir, "generated", "robustness")
 fig_dir <- file.path(robustness_dir, "figures")
@@ -191,6 +203,8 @@ run_one <- function(row_id) {
     PP_OUTPUT_BASENAME = run_basename,
     PP_OUTPUT_TAG = "",
     PP_SCENARIO_ID = sc$scenario_id,
+    PP_CPUS = as.character(scenario_cpus),
+    SLURM_CPUS_PER_TASK = as.character(scenario_cpus),
     PP_CONTROL_K = as.character(sc$control_k),
     PP_TREATED_K = as.character(sc$treated_k),
     PP_MU_SCALE = as.character(sc$mu_scale),
@@ -234,7 +248,17 @@ manifest <- if (!is.null(replot_basename)) {
   message("[robustness] replot from existing summaries: ", output_basename)
   read.csv(manifest_path, stringsAsFactors = FALSE)
 } else {
-  bind_rows(lapply(seq_len(nrow(scenarios)), run_one))
+  scenario_ids <- seq_len(nrow(scenarios))
+  if (scenario_workers > 1L) {
+    bind_rows(parallel::mclapply(
+      scenario_ids,
+      run_one,
+      mc.cores = scenario_workers,
+      mc.preschedule = FALSE
+    ))
+  } else {
+    bind_rows(lapply(scenario_ids, run_one))
+  }
 }
 
 resolve_manifest_rds_path <- function(row, out_dir) {
