@@ -36,6 +36,18 @@ format_num_tag <- function(x) {
 ROBUSTNESS_CONTROL_K <- 0.8
 ROBUSTNESS_TREATED_K_DEFAULT <- 0.2
 
+# SNR grid: background-rate multiplier with mu recalibrated toward target_points.
+DEFAULT_MU_SCALES <- c(0.5, 1, 1.5)
+DEFAULT_MU_SCALES_STR <- paste(DEFAULT_MU_SCALES, collapse = ",")
+format_mu_scale_grid <- function(scales = DEFAULT_MU_SCALES, for_tex = FALSE) {
+  vals <- vapply(scales, function(x) {
+    s <- format(x, trim = TRUE, scientific = FALSE)
+    sub("\\.?0+$", "", s)
+  }, character(1L))
+  body <- paste(vals, collapse = ", ")
+  if (for_tex) paste0("\\{", body, "\\}") else paste0("{", body, "}")
+}
+
 # Treated-K grid for k_separation with control fixed at k_anchor (default 0.8).
 default_k_separation_values <- function(k_anchor = ROBUSTNESS_CONTROL_K) {
   vals <- seq(0.1, 0.7, by = 0.1)
@@ -96,9 +108,13 @@ message(sprintf(
   "[robustness] k_separation anchor=%.3f treated K grid (%d): %s",
   k_anchor, length(k_values), paste(signif(k_values, 4), collapse = ", ")
 ))
-mu_scales <- parse_num_vec(get_arg_val("--mu-scales", Sys.getenv("PP_MU_SCALES", "0.25,0.5,0.75,1,1.5,2")),
-                           default = c(0.25, 0.5, 0.75, 1, 1.5, 2))
+mu_scales <- parse_num_vec(get_arg_val("--mu-scales", Sys.getenv("PP_MU_SCALES", DEFAULT_MU_SCALES_STR)),
+                           default = DEFAULT_MU_SCALES)
 mu_scales <- mu_scales[mu_scales > 0]
+message(sprintf(
+  "[robustness] snr mu_scale grid (%d): %s",
+  length(mu_scales), paste(signif(mu_scales, 4), collapse = ", ")
+))
 
 scenario_filter <- get_arg_val("--scenario-set", Sys.getenv("PP_ROBUSTNESS_SCENARIO_SET", "all"))
 replot_basename <- get_arg_val("--replot", Sys.getenv("PP_ROBUSTNESS_REPLOT", ""))
@@ -739,7 +755,10 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
       make_snr_scale_line_plot(
         label_summary, acc_col, lbl_col,
         title = "Signal-to-noise scaling: label recovery",
-        subtitle = "K fixed at (0.8, 0.2); mu scale in {0.25, 0.5, 0.75, 1, 1.5, 2} with expected point count held fixed.",
+        subtitle = sprintf(
+          "K fixed at (0.8, 0.2); mu scale in %s with expected point count held fixed.",
+          format_mu_scale_grid(mu_scales)
+        ),
         ylab = ylab_acc
       ),
       "robustness_snr_scale_label_recovery"
@@ -1206,12 +1225,18 @@ tex_lines <- c(
     "Signal to noise ratio",
     "app:robustness-snr",
     c(
-      "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $K=(0.8,0.2)$ and the random assignment design fixed, we scale the background rate through a multiplier $\\mu_{\\mathrm{scale}}\\in\\{0.25,0.5,0.75,1,1.5,2\\}$ while recalibrating $\\mu$ so the expected point count remains fixed. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
+      sprintf(
+        "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $K=(0.8,0.2)$ and the random assignment design fixed, we scale the background rate through a multiplier $\\mu_{\\mathrm{scale}}\\in%s$ while recalibrating $\\mu$ so the expected point count remains fixed. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
+        format_mu_scale_grid(mu_scales, for_tex = TRUE)
+      ),
       "\\Cref{fig:robustness-snr-label,fig:robustness-snr-ate,fig:robustness-snr-support} trace label recovery, ATE error, and off-support contrast accuracy across this signal-to-noise grid."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_label, "fig:robustness-snr-label",
-              "Signal-to-noise sensitivity for label recovery at $K=(0.8, 0.2)$ with $\\mu$ scale in $\\{0.25, 0.5, 0.75, 1, 1.5, 2\\}$ while holding expected point count fixed."),
+              sprintf(
+                "Signal-to-noise sensitivity for label recovery at $K=(0.8, 0.2)$ with $\\mu$ scale in %s while holding expected point count fixed.",
+                format_mu_scale_grid(mu_scales, for_tex = TRUE)
+              )),
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_ate, "fig:robustness-snr-ate",
               "Signal-to-noise sensitivity for all-or-nothing ATE error at $K=(0.8, 0.2)$ across $\\mu$ scales."),
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_support, "fig:robustness-snr-support",

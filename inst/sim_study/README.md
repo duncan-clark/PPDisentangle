@@ -65,6 +65,8 @@ objects plus summary CSV/RDS files and paper-ready figures/LaTeX fragments.
 
 **K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with μ calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
 
+**SNR grid (default):** `μ_scale ∈ {0.5, 1, 1.5}` at fixed `K = (0.8, 0.2)`. Override with `PP_MU_SCALES` or `--mu-scales`.
+
 ```bash
 Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
 ```
