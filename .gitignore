@@ -28,6 +28,10 @@ inst/sim_study/tmp_prof.out
 inst/sim_study/output/
 inst/sim_study/generated/
 
+# Manuscript snapshots (Overleaf is canonical; keep locally for context only)
+docs/paper/*
+!docs/paper/README.md
+
 # Oklahoma: optional local results copy for paper assets (large)
 inst/oklahoma/paper/for_paper.rds
 
@@ -40,3 +44,13 @@ inst/oklahoma/oklahoma_report.tex
 inst/oklahoma/oklahoma_report_files/
 inst/oklahoma/output/
 inst/oklahoma/paper/generated/
+
+# NeSI local config and credentials (never commit)
+inst/nesi/*.env
+!inst/nesi/config.example.env
+inst/nesi/.env
+inst/nesi/secrets*
+inst/nesi/*credentials*
+inst/nesi/*secret*
+inst/nesi/local.*
+inst/nesi/*.local

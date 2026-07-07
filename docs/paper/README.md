@@ -1,8 +1,9 @@
 # Manuscript context (Overleaf is canonical)
 
-`paper.tex` here is a **read-only context snapshot** for developers and AI
-agents working on this repository. The live manuscript is edited and compiled on
-**Overleaf** — do not treat this file as something to build from the repo.
+`paper.tex`, `revision.tex`, `robustness.tex`, and other files in this directory
+are **local context snapshots** for developers and AI agents. They are
+**gitignored** and must not be committed or pushed. The live manuscript is edited
+and compiled on **Overleaf**.
 
 Generated figures and `\input`-able table fragments for Overleaf are produced by:
 
