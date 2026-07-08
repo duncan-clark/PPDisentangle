@@ -1510,9 +1510,14 @@ method_kept_idx <- function(labelling_name) {
     pull(.data$sim_id)
 }
 
+label_recovery_kept_idx <- function(method_name) {
+  fit_label <- if (identical(method_name, "SEM_adaptive")) "SEM_full" else method_name
+  method_kept_idx(fit_label)
+}
+
 # Recompute classification metrics using only kept fits so paper summaries
 # match the high-mu filtering used for ATE and parameter outputs.
-label_recovery_all <- label_recovery_metrics(labellings, kept_idx = method_kept_idx)
+label_recovery_all <- label_recovery_metrics(labellings, kept_idx = label_recovery_kept_idx)
 class_metrics <- summarize_label_recovery(label_recovery_all)
 log_msg("")
 log_msg("=== Classification Accuracy (after high-mu filter) ===")
@@ -1590,9 +1595,7 @@ results_df_true_control_all <- do.call(rbind, lapply(seq_along(results_flat), fu
     labelling = tasks[[k]]$labelling_name,
     control_mu = extract_mu_pair(r, tasks[[k]])[["control_mu"]],
     treated_mu = extract_mu_pair(r, tasks[[k]])[["treated_mu"]],
-    all_nothing_true_control =
-      (treated_pp$mu * TIME_INT * (1 / (1 - treated_pp$K)) -
-         ctrl_true$mu * TIME_INT * (1 / (1 - ctrl_true$K))) / partition$n,
+    all_nothing_true_control = all_nothing_dtaite_per_unit(ctrl_true, treated_pp),
     tau_1_true_control = if (all(is.na(tau_i_true))) NA_real_ else mean(tau_i_true, na.rm = TRUE),
     ATE_total = r$ATE_total,
     ATE_treatment = r$ATE_treatment,
@@ -1637,6 +1640,11 @@ expected_count_per_tile_hawkes <- function(z, control_pp, treated_pp) {
   control_rate <- as.numeric(control_pp$mu) / max(1e-8, 1 - as.numeric(control_pp$K))
   treated_rate <- as.numeric(treated_pp$mu) / max(1e-8, 1 - as.numeric(treated_pp$K))
   TIME_INT * (n_control * control_rate + n_treated * treated_rate) / partition$n
+}
+
+all_nothing_dtaite_per_unit <- function(control_pp, treated_pp, n_units = partition$n) {
+  (as.numeric(treated_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(treated_pp$K))) -
+     as.numeric(control_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(control_pp$K)))) / n_units
 }
 
 make_support_contrasts <- function() {
@@ -1689,14 +1697,23 @@ support_contrast_specs <- make_support_contrasts()
 estimate_support_contrast_for_task <- function(k, spec_row) {
   r <- results_flat[[k]]
   task_k <- tasks[[k]]
-  ctrl <- if (!is.null(r) && !is.null(r$control_pp)) r$control_pp else NULL
-  treat <- if (!is.null(r) && !is.null(r$treated_pp)) r$treated_pp else NULL
-  if ((is.null(ctrl) || is.null(treat)) &&
-      !is.null(task_k$hawkes_params)) {
-    ctrl <- task_k$hawkes_params$control
-    treat <- task_k$hawkes_params$treated
+  treat_fit <- if (!is.null(r) && !is.null(r$treated_pp)) r$treated_pp else NULL
+  if (is.null(treat_fit)) return(NULL)
+  ctrl_true <- hawkes_par_1
+  if (identical(spec_row$contrast_family, "global_1_0")) {
+    return(data.frame(
+      task_idx = k,
+      sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
+      labelling = task_k$labelling_name,
+      contrast_id = spec_row$contrast_id,
+      contrast_family = spec_row$contrast_family,
+      cell_id = spec_row$cell_id,
+      hamming_distance_from_zobs = spec_row$hamming_distance_from_zobs,
+      psi_truth = spec_row$psi_truth,
+      psi_estimate = all_nothing_dtaite_per_unit(ctrl_true, treat_fit),
+      stringsAsFactors = FALSE
+    ))
   }
-  if (is.null(ctrl) || is.null(treat)) return(NULL)
   z_obs <- partition_processes == "treated"
   z_a <- switch(
     spec_row$contrast_family,
@@ -1728,8 +1745,8 @@ estimate_support_contrast_for_task <- function(k, spec_row) {
     cell_id = spec_row$cell_id,
     hamming_distance_from_zobs = spec_row$hamming_distance_from_zobs,
     psi_truth = spec_row$psi_truth,
-    psi_estimate = expected_count_per_tile_hawkes(z_a, ctrl, treat) -
-      expected_count_per_tile_hawkes(z_b, ctrl, treat),
+    psi_estimate = expected_count_per_tile_hawkes(z_a, ctrl_true, treat_fit) -
+      expected_count_per_tile_hawkes(z_b, ctrl_true, treat_fit),
     stringsAsFactors = FALSE
   )
 }
