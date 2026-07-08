@@ -413,6 +413,37 @@ read_summary_csv <- function(suffix) {
   read.csv(path, stringsAsFactors = FALSE)
 }
 
+safe_metric_col <- function(df, candidates) {
+  hit <- candidates[candidates %in% names(df)]
+  if (length(hit) < 1L) return(NULL)
+  hit[[1L]]
+}
+
+safe_label_col <- function(df) {
+  safe_metric_col(df, c("method", "labelling"))
+}
+
+core_labelling_ids <- c("oracle", "naive", "SEM_full")
+core_labelling_levels <- c("oracle", "naive", "SEM")
+
+subset_core_labelling <- function(df, label_col = NULL) {
+  if (is.null(df) || nrow(df) < 1L) return(df[0, , drop = FALSE])
+  if (is.null(label_col)) label_col <- safe_label_col(df)
+  if (is.null(label_col) || !(label_col %in% names(df))) return(df[0, , drop = FALSE])
+  out <- df %>% filter(.data[[label_col]] %in% core_labelling_ids)
+  if (nrow(out) < 1L) return(out)
+  out[[label_col]] <- as.character(out[[label_col]])
+  out[[label_col]][out[[label_col]] == "SEM_full"] <- "SEM"
+  out[[label_col]] <- factor(out[[label_col]], levels = core_labelling_levels)
+  out
+}
+
+apply_core_labelling_subset <- function(df) {
+  lbl_col <- safe_label_col(df)
+  if (is.null(lbl_col)) return(df)
+  subset_core_labelling(df, lbl_col)
+}
+
 summary_rows <- if (!is.null(replot_basename)) {
   NULL
 } else {
@@ -511,6 +542,16 @@ decay_summary <- if (!is.null(replot_basename)) {
   }
 }
 
+if (!is.null(label_summary) && nrow(label_summary) > 0) {
+  label_summary <- apply_core_labelling_subset(label_summary)
+}
+if (!is.null(support_summary) && nrow(support_summary) > 0) {
+  support_summary <- apply_core_labelling_subset(support_summary)
+}
+if (!is.null(ate_summary) && nrow(ate_summary) > 0) {
+  ate_summary <- apply_core_labelling_subset(ate_summary)
+}
+
 if (is.null(replot_basename)) {
   write.csv(label_summary, file.path(out_dir, paste0(output_basename, "_label_recovery_summary.csv")), row.names = FALSE)
   write.csv(support_summary, file.path(out_dir, paste0(output_basename, "_support_contrast_summary.csv")), row.names = FALSE)
@@ -533,16 +574,6 @@ if (is.null(replot_basename)) {
   }
 }
 
-safe_metric_col <- function(df, candidates) {
-  hit <- candidates[candidates %in% names(df)]
-  if (length(hit) < 1L) return(NULL)
-  hit[[1L]]
-}
-
-safe_label_col <- function(df) {
-  safe_metric_col(df, c("method", "labelling"))
-}
-
 save_plot_pair <- function(plot, stem, width = 7.2, height = 4.6) {
   if (is.null(plot) || !inherits(plot, "ggplot")) return(NULL)
   pdf_path <- file.path(fig_dir, paste0(stem, ".pdf"))
@@ -552,13 +583,10 @@ save_plot_pair <- function(plot, stem, width = 7.2, height = 4.6) {
   list(stem = stem, pdf = pdf_path, png = png_path)
 }
 
-standard_labelling_levels <- c("SEM_adaptive", "SEM_full", "best", "naive", "oracle")
-
 make_k_separation_line_plot <- function(df, x_col, y_col, lbl_col, title, subtitle, ylab,
                                         family = "k_separation") {
   plot_df <- df %>%
-    filter(.data$scenario_family == family) %>%
-    filter(.data[[lbl_col]] %in% standard_labelling_levels)
+    filter(.data$scenario_family == family)
   if (nrow(plot_df) < 1L) return(NULL)
   ggplot(plot_df, aes(x = .data[[x_col]], y = .data[[y_col]],
                       color = .data[[lbl_col]], group = .data[[lbl_col]])) +
@@ -681,8 +709,7 @@ make_temporal_decay_validation_plot <- function(showcase_df, decay_reps_used = N
 
 make_high_count_assignment_bar_plot <- function(df, y_col, lbl_col, title, subtitle, ylab) {
   plot_df <- df %>%
-    filter(.data$scenario_family == "high_count_assignment") %>%
-    filter(.data[[lbl_col]] %in% standard_labelling_levels)
+    filter(.data$scenario_family == "high_count_assignment")
   if (nrow(plot_df) < 1L) return(NULL)
   plot_df <- plot_df %>%
     mutate(
@@ -708,8 +735,7 @@ make_high_count_assignment_bar_plot <- function(df, y_col, lbl_col, title, subti
 make_snr_scale_line_plot <- function(df, y_col, lbl_col, title, subtitle, ylab,
                                      family = "snr_scale") {
   plot_df <- df %>%
-    filter(.data$scenario_family == family) %>%
-    filter(.data[[lbl_col]] %in% standard_labelling_levels)
+    filter(.data$scenario_family == family)
   if (nrow(plot_df) < 1L) return(NULL)
   ggplot(plot_df, aes(x = .data$mu_scale, y = .data[[y_col]],
                       color = .data[[lbl_col]], group = .data[[lbl_col]])) +
@@ -729,7 +755,6 @@ make_snr_scale_line_plot <- function(df, y_col, lbl_col, title, subtitle, ylab,
 make_kernel_mismatch_bar_plot <- function(df, y_col, lbl_col, title, subtitle, ylab) {
   plot_df <- df %>%
     filter(.data$scenario_family == "kernel_mismatch") %>%
-    filter(.data[[lbl_col]] %in% standard_labelling_levels) %>%
     mutate(kernel_pair = kernel_pair_label(.data$sim_kernel, .data$fit_kernel))
   if (nrow(plot_df) < 1L) return(NULL)
   pair_levels <- unique(plot_df$kernel_pair)
@@ -797,63 +822,10 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
   }
 }
 
-if (!is.null(ate_summary) && nrow(ate_summary) > 0) {
-  lbl_col <- safe_label_col(ate_summary)
-  ate_col <- safe_metric_col(ate_summary, c("mean_all_nothing", "mean_all_nothing_true_control"))
-  if (!is.null(lbl_col) && !is.null(ate_col) && "true_all_nothing_ATE" %in% names(ate_summary)) {
-    ate_plot_base <- ate_summary %>%
-      mutate(abs_all_nothing_error = abs(.data[[ate_col]] - .data$true_all_nothing_ATE)) %>%
-      filter(is.finite(.data$abs_all_nothing_error))
-    ate_k_separation_plot_base <- ate_plot_base %>%
-      filter(.data[[lbl_col]] != "SEM_full")
-    plot_files$k_separation_ate_error <- save_plot_pair(
-      make_k_separation_line_plot(
-        ate_k_separation_plot_base, "k_delta", "abs_all_nothing_error", lbl_col,
-        title = "K-separation sensitivity: ATE error",
-        subtitle = "Absolute all-or-nothing ATE error relative to the known simulation truth.",
-        ylab = "Absolute all-or-nothing ATE error"
-      ),
-      "robustness_k_separation_ate_error"
-    )
-    plot_files$snr_scale_ate_error <- save_plot_pair(
-      make_snr_scale_line_plot(
-        ate_plot_base %>% filter(.data[[lbl_col]] != "SEM_full"),
-        "abs_all_nothing_error", lbl_col,
-        title = "Signal-to-noise scaling: ATE error",
-        subtitle = "Absolute all-or-nothing ATE error at K=(0.8, 0.2) across mu scales.",
-        ylab = "Absolute all-or-nothing ATE error"
-      ),
-      "robustness_snr_scale_ate_error"
-    )
-    plot_files$high_count_assignment_ate_error <- save_plot_pair(
-      make_high_count_assignment_bar_plot(
-        ate_plot_base %>% filter(.data[[lbl_col]] != "SEM_full"),
-        "abs_all_nothing_error", lbl_col,
-        title = "High-count treatment assignment: ATE error",
-        subtitle = "Treatment assigned to the 50% of cells with most points in a reference pre-treatment catalogue; K_c=0.8, K_t=0.2.",
-        ylab = "Absolute all-or-nothing ATE error"
-      ),
-      "robustness_high_count_assignment_ate_error",
-      width = 7.2, height = 4.8
-    )
-    plot_files$kernel_mismatch_ate_error <- save_plot_pair(
-      make_kernel_mismatch_bar_plot(
-        ate_plot_base %>% filter(.data[[lbl_col]] != "SEM_full"),
-        "abs_all_nothing_error", lbl_col,
-        title = "Kernel mismatch: ATE error",
-        subtitle = "Absolute all-or-nothing ATE error at K=(0.8, 0.2) for each sim/fit kernel pair.",
-        ylab = "Absolute all-or-nothing ATE error"
-      ),
-      "robustness_kernel_mismatch_ate_error",
-      width = 8.0, height = 4.8
-    )
-  }
-}
-
 support_contrast_display_labels <- c(
   single_cell_flip = "Single-cell flip",
   random_50pct_flip = "Random 50% flip",
-  global_1_0 = "All-or-nothing ATE"
+  global_1_0 = "All-or-nothing DTAITE"
 )
 
 prepare_support_plot_df <- function(df, family, keep_kernel_pair = FALSE) {
@@ -1023,26 +995,26 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       support_summary, "k_separation",
       title = "K-separation: off-support allocation contrasts",
       stem = "robustness_k_separation_support_contrasts",
-      subtitle = "Mean percentage error in psi estimates. Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0.",
+      subtitle = "Mean percentage error in plug-in contrast estimates. The rightmost contrast is the all-or-nothing DTAITE; single-cell flips use |all-or-nothing truth| as the reference scale when the local contrast is ~0.",
       keep_kernel_pair = FALSE
     )
     plot_files$snr_scale_support <- make_snr_scale_support_plot(
       support_summary,
       title = "Signal-to-noise scaling: off-support allocation contrasts",
       stem = "robustness_snr_scale_support_contrasts",
-      subtitle = "Mean percentage error in psi estimates at K=(0.8, 0.2) by mu scale. Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0."
+      subtitle = "Mean percentage error in plug-in contrast estimates at K=(0.8, 0.2) by mu scale. The all-or-nothing DTAITE is the rightmost facet; single-cell flips use |all-or-nothing truth| as the reference scale when the local contrast is ~0."
     )
     plot_files$kernel_mismatch_support <- make_kernel_support_plot(
       support_summary,
       title = "Kernel mismatch: off-support allocation contrasts",
       stem = "robustness_kernel_mismatch_support_contrasts",
-      subtitle = "Mean percentage error in psi estimates by sim/fit kernel pair at K=(0.8, 0.2). Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0."
+      subtitle = "Mean percentage error in plug-in contrast estimates by sim/fit kernel pair at K=(0.8, 0.2). Facets include the all-or-nothing DTAITE; single-cell flips use |all-or-nothing truth| as the reference scale when the local contrast is ~0."
     )
     plot_files$high_count_assignment_support <- make_support_plot(
       support_summary, "high_count_assignment",
       title = "High-count treatment assignment: off-support allocation contrasts",
       stem = "robustness_high_count_assignment_support_contrasts",
-      subtitle = "Mean percentage error in psi estimates at K_c=0.8, K_t=0.2 under high-count assignment. Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0.",
+      subtitle = "Mean percentage error in plug-in contrast estimates at K_c=0.8, K_t=0.2 under high-count assignment. The rightmost contrast is the all-or-nothing DTAITE; single-cell flips use |all-or-nothing truth| as the reference scale when the local contrast is ~0.",
       keep_kernel_pair = FALSE
     )
   }
@@ -1076,16 +1048,12 @@ latex_escape <- function(x) {
 
 ROBUSTNESS_FIG_STEMS <- list(
   k_separation_label = "robustness_k_separation_label_recovery",
-  k_separation_ate = "robustness_k_separation_ate_error",
   k_separation_support = "robustness_k_separation_support_contrasts",
   kernel_label = "robustness_kernel_mismatch_label_recovery",
-  kernel_ate = "robustness_kernel_mismatch_ate_error",
   kernel_support = "robustness_kernel_mismatch_support_contrasts",
   high_count_label = "robustness_high_count_assignment_label_recovery",
-  high_count_ate = "robustness_high_count_assignment_ate_error",
   high_count_support = "robustness_high_count_assignment_support_contrasts",
   snr_label = "robustness_snr_scale_label_recovery",
-  snr_ate = "robustness_snr_scale_ate_error",
   snr_support = "robustness_snr_scale_support_contrasts",
   decay_spatial = "robustness_decay_validation",
   decay_temporal = "robustness_temporal_decay_validation"
@@ -1179,7 +1147,7 @@ tex_lines <- c(
   "",
   "The main simulation in \\cref{sec:simulation_study} uses one baseline parameterisation---control $K_c=0.8$, treated $K_t=0.2$---and random treatment assignment. This subsection reports a structured robustness suite designed around the finite-sample assumptions in \\cref{sec:finite-sample-theory} and the identification discussion in \\cref{sec:identification}. Unless stated otherwise, all scenarios use the same window $[0,100]\\times[0,100]$, treatment time $t^\\star=10$, end time $T=110$, a $10\\times10$ cell tessellation, exponential temporal triggering with $(\\alpha,\\beta)=(0.01,10)$, and exponential models at fit time. Treatment lowers the branching ratio relative to control and is assigned to $50\\%$ of cells.",
   "",
-  "For each scenario we simulate an ensemble of independent replications and report three classes of outcome. First, \\emph{label recovery}: balanced accuracy of the oracle, naive, best-proposal, adaptive SEM, and full SEM labellings of post-$t^\\star$ events. Second, \\emph{all-or-nothing ATE error}: absolute bias in the plug-in all-treated versus all-control contrast relative to the simulation truth (SEM fits with explosive parameter estimates are excluded). Third, \\emph{off-support allocation contrasts}: mean percentage error in the expected count contrast under (i) flipping a single cell relative to the observed assignment, (ii) a random $50\\%$ relabelling of cells, and (iii) the global all-treated versus all-control allocation. The first two contrasts are local perturbations of the observed design; the third coincides with the all-or-nothing estimand and probes extrapolation to an unsupported allocation.",
+  "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: balanced accuracy of the oracle, naive, and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean percentage error in the plug-in expected count contrast under (i) flipping a single cell relative to the observed assignment, (ii) a random $50\\%$ relabelling of cells, and (iii) the global all-treated versus all-control allocation. The first two contrasts are local perturbations of the observed design; the third is the all-or-nothing DTAITE and probes extrapolation to an unsupported allocation (SEM fits with explosive parameter estimates are excluded throughout).",
   "",
   "The branching-ratio grid, kernel misspecification, assignment designs, signal-to-noise scalings, and single-flip decay diagnostics below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Figures are reported in \\cref{app:robustness-k-separation,app:robustness-kernel,app:robustness-high-count,app:robustness-snr,app:robustness-decay}.",
   "",
@@ -1210,15 +1178,13 @@ tex_lines <- c(
     "app:robustness-k-separation",
     c(
       "The main study in \\cref{sec:simulation_study} fixes a large separation between control and treated branching ratios, with treatment lowering the branching ratio from $K_c=0.8$ to $K_t=0.2$. Here we stress-test performance as that separation shrinks. Throughout, control and treated processes share $(\\alpha,\\beta)=(0.01,10)$ and exponential temporal triggering; treatment is assigned independently to $50\\%$ of cells. The control branching ratio is fixed at $K_c=0.8$ and the treated ratio varies over $K_t\\in\\{0.1,0.2,0.3,0.4,0.5,0.6,0.7\\}$, always below control. For each pair $(K_c,K_t)$ the background rate $\\mu$ is recalibrated so the expected post-treatment point count remains fixed; small $K_c-K_t$ therefore isolates weak component separation at comparable event abundance.",
-      "\\Cref{fig:robustness-k-separation-label,fig:robustness-k-separation-ate,fig:robustness-k-separation-support} report balanced labelling accuracy, absolute all-or-nothing ATE error (excluding explosive SEM fits), and mean percentage error in three off-support allocation contrasts: a single-cell flip from the observed assignment, a random $50\\%$ relabelling of cells, and the global all-treated versus all-control contrast. These diagnostics are directly motivated by the finite-sample theory: label recovery feeds the E-step surrogates in Assumptions~\\ref{ass:G4}--\\ref{ass:G8}, while off-support contrasts probe the regime-stable extrapolations in \\cref{sec:identification}."
+      "\\Cref{fig:robustness-k-separation-label,fig:robustness-k-separation-support} report balanced labelling accuracy and mean percentage error in three off-support allocation contrasts: a single-cell flip from the observed assignment, a random $50\\%$ relabelling of cells, and the all-or-nothing DTAITE (global all-treated versus all-control). These diagnostics are directly motivated by the finite-sample theory: label recovery feeds the E-step surrogates in Assumptions~\\ref{ass:G4}--\\ref{ass:G8}, while off-support contrasts probe the regime-stable extrapolations in \\cref{sec:identification}."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$k_separation_label, "fig:robustness-k-separation-label",
               "K-separation sensitivity for label recovery. Control $K=0.8$; treated $K \\in \\{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7\\}$ with treatment lowering $K$; $\\mu$ is calibrated to hold expected point count fixed."),
-      tex_fig(ROBUSTNESS_FIG_STEMS$k_separation_ate, "fig:robustness-k-separation-ate",
-              "K-separation sensitivity for all-or-nothing ATE error."),
       tex_fig(ROBUSTNESS_FIG_STEMS$k_separation_support, "fig:robustness-k-separation-support",
-              "K-separation off-support allocation contrast accuracy (mean percentage error). The rightmost contrast is the all-or-nothing ATE.")
+              "K-separation off-support allocation contrast accuracy (mean percentage error). The rightmost contrast is the all-or-nothing DTAITE.")
     )
   ),
   tex_subsubsection(
@@ -1227,15 +1193,13 @@ tex_lines <- c(
     c(
       "Assumption~\\ref{ass:G3} and the identification discussion in \\cref{sec:identification} treat the triggering kernel as part of the causal specification: misspecification changes both fit and the transmitted spillover geometry. We therefore simulate from exponential and power-law temporal kernels and fit exponential or power-law models, covering all four sim/fit pairings at $K=(0.8,0.2)$ with random $50\\%$ treatment assignment and the same $\\mu$-calibration scheme as above.",
       "Power-law temporal decay generates heavier tails than the fitted exponential, so this exercise is a structured check on whether SEM labelling and plug-in ATE estimation remain stable when the true memory of the process is longer than the fitted kernel assumes.",
-      "\\Cref{fig:robustness-kernel-label,fig:robustness-kernel-ate,fig:robustness-kernel-support} report label recovery, all-or-nothing ATE error, and off-support contrast accuracy across the four sim/fit kernel pairings."
+      "\\Cref{fig:robustness-kernel-label,fig:robustness-kernel-support} report label recovery and off-support contrast accuracy across the four sim/fit kernel pairings, including the all-or-nothing DTAITE."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$kernel_label, "fig:robustness-kernel-label",
               "Kernel specification check for label recovery across all four sim/fit kernel pairs at $K=(0.8, 0.2)$."),
-      tex_fig(ROBUSTNESS_FIG_STEMS$kernel_ate, "fig:robustness-kernel-ate",
-              "Kernel specification check for all-or-nothing ATE error across all four sim/fit kernel pairs."),
       tex_fig(ROBUSTNESS_FIG_STEMS$kernel_support, "fig:robustness-kernel-support",
-              "Kernel mismatch off-support allocation contrast accuracy (mean percentage error) by sim/fit kernel pair, faceted by contrast type including all-or-nothing ATE.")
+              "Kernel mismatch off-support allocation contrast accuracy (mean percentage error) by sim/fit kernel pair, faceted by contrast type. The all-or-nothing DTAITE facet is the global all-treated versus all-control contrast.")
     )
   ),
   tex_subsubsection(
@@ -1243,15 +1207,13 @@ tex_lines <- c(
     "app:robustness-high-count",
     c(
       "The baseline design randomises treated cells. Many applications instead concentrate treatment on historically active locations---for example, when a policy targets high-activity areas while the intervention reduces subsequent productivity. To mimic this structure, we simulate a reference pre-treatment catalogue from the control Hawkes law on $[0,t^\\star]$, count points per cell, and assign treatment to the $50\\%$ of cells with the largest reference counts. The post-treatment law uses $K_c=0.8$ and $K_t=0.2$, so treated cells are less self-exciting than controls even though they were selected for prior activity.",
-      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-ate,fig:robustness-high-count-support} summarise labelling accuracy, all-or-nothing ATE error, and off-support allocation contrast accuracy under this assignment mechanism."
+      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-support} summarise labelling accuracy and off-support allocation contrast accuracy under this assignment mechanism, including the all-or-nothing DTAITE."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_label, "fig:robustness-high-count-label",
               "Label recovery when treatment is assigned to the 50\\% of cells with the most points in a reference pre-treatment catalogue at $K_c=0.8$, $K_t=0.2$."),
-      tex_fig(ROBUSTNESS_FIG_STEMS$high_count_ate, "fig:robustness-high-count-ate",
-              "All-or-nothing ATE error under high-count treatment assignment at $K_c=0.8$, $K_t=0.2$. Treatment lowers the branching ratio relative to control, as in the main simulation study."),
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_support, "fig:robustness-high-count-support",
-              "High-count assignment off-support allocation contrast accuracy (mean percentage error). The rightmost contrast is the all-or-nothing ATE.")
+              "High-count assignment off-support allocation contrast accuracy (mean percentage error). The rightmost contrast is the all-or-nothing DTAITE.")
     )
   ),
   tex_subsubsection(
@@ -1262,7 +1224,7 @@ tex_lines <- c(
         "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $K=(0.8,0.2)$ and the random assignment design fixed, we vary a background-rate multiplier $\\mu_{\\mathrm{scale}}\\in%s$ while calibrating $\\mu$ from a common target abundance; realized point counts therefore vary across the grid. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
         format_mu_scale_grid(mu_scales, for_tex = TRUE)
       ),
-      "\\Cref{fig:robustness-snr-label,fig:robustness-snr-ate,fig:robustness-snr-support} trace label recovery, ATE error, and off-support contrast accuracy across this signal-to-noise grid."
+      "\\Cref{fig:robustness-snr-label,fig:robustness-snr-support} trace label recovery and off-support contrast accuracy across this signal-to-noise grid, including the all-or-nothing DTAITE."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_label, "fig:robustness-snr-label",
@@ -1270,10 +1232,10 @@ tex_lines <- c(
                 "Signal-to-noise sensitivity for label recovery at $K=(0.8, 0.2)$ with $\\mu$ scale in %s.",
                 format_mu_scale_grid(mu_scales, for_tex = TRUE)
               )),
-      tex_fig(ROBUSTNESS_FIG_STEMS$snr_ate, "fig:robustness-snr-ate",
-              "Signal-to-noise sensitivity for all-or-nothing ATE error at $K=(0.8, 0.2)$ across $\\mu$ scales."),
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_support, "fig:robustness-snr-support",
-              "Signal-to-noise off-support allocation contrast accuracy (mean percentage error) across $\\mu$ scales at $K=(0.8, 0.2)$.")
+              sprintf(
+                "Signal-to-noise off-support allocation contrast accuracy (mean percentage error) across $\\mu$ scales at $K=(0.8, 0.2)$. The all-or-nothing DTAITE is the rightmost facet."
+              ))
     )
   ),
   tex_subsubsection(

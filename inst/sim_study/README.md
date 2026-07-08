@@ -59,7 +59,8 @@ PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
 ## Robustness suite
 
 The robustness launcher runs grids over K separation, signal-to-noise,
-kernel misspecification, off-support allocation contrasts, label recovery,
+kernel misspecification, off-support allocation contrasts (including the
+all-or-nothing DTAITE as the global contrast), label recovery,
 and the forward-simulation decay diagnostic. It writes per-scenario result
 objects plus summary CSV/RDS files and paper-ready figures/LaTeX fragments.
 
@@ -76,17 +77,22 @@ Default generated assets:
 ```text
 PPDisentangle-output/sim_study/generated/robustness/figures/
   robustness_k_separation_label_recovery.{pdf,png}
-  robustness_k_separation_ate_error.{pdf,png}
   robustness_k_separation_support_contrasts.{pdf,png}
   robustness_kernel_mismatch_label_recovery.{pdf,png}
-  robustness_kernel_mismatch_ate_error.{pdf,png}
   robustness_kernel_mismatch_support_contrasts.{pdf,png}
   robustness_high_count_assignment_label_recovery.{pdf,png}
-  robustness_high_count_assignment_ate_error.{pdf,png}
   robustness_high_count_assignment_support_contrasts.{pdf,png}
+  robustness_snr_scale_label_recovery.{pdf,png}
+  robustness_snr_scale_support_contrasts.{pdf,png}
   robustness_decay_validation.{pdf,png}
+  robustness_temporal_decay_validation.{pdf,png}
 PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
 ```
+
+Each scenario family reports label recovery and off-support contrast accuracy
+for oracle, naive, and SEM only (matching the main simulation study).
+The rightmost contrast (or facet) in the support figures is the all-or-nothing
+DTAITE; standalone absolute ATE error figures are not generated.
 
 Copy `simulation_robustness_appendix.tex` and `figures/*.pdf` to
 `plots/sim_study/robustness/` on Overleaf, then
