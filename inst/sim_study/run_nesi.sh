@@ -64,7 +64,8 @@ while [[ "$#" -gt 0 ]]; do
             PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
             PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
             PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
-            PP_SEM_WORKERS="${PP_SEM_WORKERS:-8}"
+            # PP_SEM_WORKERS intentionally not capped here; runtime default
+            # below sizes it from the allocation (min of sims and CPUs).
             shift ;;
         --robustness-quick-probe)
             # Quick-mode timing probe: one scenario per family (3 total), full quick SEM/ATE knobs.
@@ -77,7 +78,7 @@ while [[ "$#" -gt 0 ]]; do
             PP_MU_SCALES="${PP_MU_SCALES:-1}"
             PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
             PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
-            PP_SEM_WORKERS="${PP_SEM_WORKERS:-$PP_SIMS}"
+            # PP_SEM_WORKERS resolved by the runtime default (min of sims, CPUs).
             shift ;;
         --scenario-set) PP_ROBUSTNESS_SCENARIO_SET="$2"; shift 2 ;;
         --scenario-workers) PP_ROBUSTNESS_SCENARIO_WORKERS="$2"; shift 2 ;;
@@ -291,17 +292,28 @@ export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_RE
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 
+# Default worker counts from the actual allocation. Historical presets capped
+# SEM at 8 workers and sim_study.R's cluster heuristic caps ATE at CPUs/8,
+# which left 3/4 of a 32-CPU node idle during the dominant SEM phase.
+# Explicit --sem-workers / --ate-workers (or pre-set env) always win;
+# sim_study.R additionally caps both at the CPUs visible to each scenario.
+RUNTIME_CPUS="${SLURM_CPUS_PER_TASK:-${PP_CPUS:-8}}"
+if [ -z "${PP_SEM_WORKERS:-}" ]; then
+    if [ "$PP_SIMS" -lt "$RUNTIME_CPUS" ]; then
+        export PP_SEM_WORKERS="$PP_SIMS"
+    else
+        export PP_SEM_WORKERS="$RUNTIME_CPUS"
+    fi
+fi
+if [ -z "${PP_ATE_WORKERS:-}" ]; then
+    PP_ATE_WORKERS=$(( RUNTIME_CPUS / 2 ))
+    if [ "$PP_ATE_WORKERS" -lt 1 ]; then PP_ATE_WORKERS=1; fi
+    export PP_ATE_WORKERS
+fi
+echo "Worker defaults resolved: PP_SEM_WORKERS=$PP_SEM_WORKERS PP_ATE_WORKERS=$PP_ATE_WORKERS (runtime CPUs=$RUNTIME_CPUS)"
+
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
-    if [ -z "${PP_SEM_WORKERS:-}" ]; then
-        if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
-            export PP_SEM_WORKERS="$PP_SIMS"
-        elif [ "$PP_SIMS" -gt 8 ]; then
-            export PP_SEM_WORKERS=8
-        else
-            export PP_SEM_WORKERS="$PP_SIMS"
-        fi
-    fi
     export PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-200}"
     export PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-3}"
     export PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-20}"

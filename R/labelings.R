@@ -1263,7 +1263,12 @@ em_style_labelling <- function(pp_data,
           NULL
         }
         proposal_sim_cache <- NULL
-        post_proposals <- lapply(1:n_props, function(j) {
+        # NOTE: this must stay a for-loop. With lapply, the cache assignment
+        # inside the closure only creates a local binding, so proposals 2..n
+        # silently re-run the full Hawkes simulations instead of reusing the
+        # first proposal's simulation discrepancies.
+        post_proposals <- vector("list", n_props)
+        for (j in seq_len(n_props)) {
           t_prop <- proc.time()[3]
           prop_result <- simulation_labeling_hawkes_hawkes_fast(
             post_data, partition = partition, partition_process = partition_processes,
@@ -1281,17 +1286,16 @@ em_style_labelling <- function(pp_data,
             return_proposal_sim_cache = TRUE,
             ...
           )
-          prop_out <- prop_result$data
+          post_proposals[[j]] <- prop_result$data
           if (is.null(proposal_sim_cache)) {
             proposal_sim_cache <- prop_result$proposal_sim_cache
           }
           if (verbose && sem_timing_verbose) {
-            flips_j <- sum(post_data$inferred_process != prop_out$inferred_process, na.rm = TRUE)
+            flips_j <- sum(post_data$inferred_process != post_proposals[[j]]$inferred_process, na.rm = TRUE)
             cat(sprintf("    [proposal %d/%d] done in %.2fs flips=%d\n",
                         j, n_props, proc.time()[3] - t_prop, flips_j))
           }
-          prop_out
-        })
+        }
         # Proposals preserve post_data ordering; avoid redundant per-proposal sort.
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
