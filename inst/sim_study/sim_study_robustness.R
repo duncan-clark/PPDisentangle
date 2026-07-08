@@ -439,7 +439,12 @@ summary_rows <- if (!is.null(replot_basename)) {
 }
 spatial_decay_showcase_specs <- default_spatial_decay_showcase_specs()
 temporal_decay_showcase_specs <- default_temporal_decay_showcase_specs()
-decay_showcase_summary <- if (isTRUE(refresh_decay)) {
+manifest_has_k_separation <- any(manifest$scenario_family == "k_separation", na.rm = TRUE)
+auto_refresh_decay_showcase <- is.null(replot_basename) && isTRUE(manifest_has_k_separation)
+decay_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) {
+  if (isTRUE(auto_refresh_decay_showcase) && !isTRUE(refresh_decay)) {
+    message("[robustness] auto-refreshing spatial decay showcase for appendix figures")
+  }
   refresh_decay_showcase(manifest, spatial_decay_showcase_specs, decay_reps, out_dir)
 } else if (!is.null(replot_basename)) {
   showcase_csv <- read_summary_csv("_decay_showcase_summary.csv")
@@ -452,10 +457,14 @@ decay_showcase_summary <- if (isTRUE(refresh_decay)) {
 } else {
   NULL
 }
-if ((is.null(decay_showcase_summary) || nrow(decay_showcase_summary) < 1L) && isTRUE(refresh_decay)) {
+if ((is.null(decay_showcase_summary) || nrow(decay_showcase_summary) < 1L) &&
+    (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase))) {
   stop("Decay showcase refresh produced no rows.")
 }
-decay_temporal_showcase_summary <- if (isTRUE(refresh_decay)) {
+decay_temporal_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) {
+  if (isTRUE(auto_refresh_decay_showcase) && !isTRUE(refresh_decay)) {
+    message("[robustness] auto-refreshing temporal decay showcase for appendix figures")
+  }
   refresh_temporal_decay_showcase(manifest, temporal_decay_showcase_specs, decay_reps, out_dir)
 } else if (!is.null(replot_basename)) {
   temporal_csv <- read_summary_csv("_decay_temporal_showcase_summary.csv")
@@ -468,7 +477,8 @@ decay_temporal_showcase_summary <- if (isTRUE(refresh_decay)) {
 } else {
   NULL
 }
-if ((is.null(decay_temporal_showcase_summary) || nrow(decay_temporal_showcase_summary) < 1L) && isTRUE(refresh_decay)) {
+if ((is.null(decay_temporal_showcase_summary) || nrow(decay_temporal_showcase_summary) < 1L) &&
+    (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase))) {
   stop("Temporal decay showcase refresh produced no rows.")
 }
 label_summary <- if (!is.null(replot_basename)) {
@@ -1028,12 +1038,19 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       stem = "robustness_kernel_mismatch_support_contrasts",
       subtitle = "Mean percentage error in psi estimates by sim/fit kernel pair at K=(0.8, 0.2). Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0."
     )
+    plot_files$high_count_assignment_support <- make_support_plot(
+      support_summary, "high_count_assignment",
+      title = "High-count treatment assignment: off-support allocation contrasts",
+      stem = "robustness_high_count_assignment_support_contrasts",
+      subtitle = "Mean percentage error in psi estimates at K_c=0.8, K_t=0.2 under high-count assignment. Single-cell flips use |all-or-nothing ATE truth| as the reference scale when the local contrast is ~0.",
+      keep_kernel_pair = FALSE
+    )
   }
 }
 
 if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
     all(c("d_mid", "mean_abs_delta", "decay_label") %in% names(decay_showcase_summary))) {
-  decay_reps_used <- if (isTRUE(refresh_decay)) decay_reps else 2000L
+  decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_decay <- make_decay_validation_plot(decay_showcase_summary, decay_reps_used)
   plot_files$decay <- save_plot_pair(p_decay, "robustness_decay_validation", width = 8.5, height = 5.2)
 }
@@ -1041,7 +1058,7 @@ if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
 if (!is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_summary) > 0 &&
     all(c("mean_abs_delta", "decay_label") %in% names(decay_temporal_showcase_summary)) &&
     any(c("t_mid", "d_mid") %in% names(decay_temporal_showcase_summary))) {
-  decay_reps_used <- if (isTRUE(refresh_decay)) decay_reps else 2000L
+  decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_decay_temporal <- make_temporal_decay_validation_plot(decay_temporal_showcase_summary, decay_reps_used)
   plot_files$decay_temporal <- save_plot_pair(
     p_decay_temporal,
@@ -1066,6 +1083,7 @@ ROBUSTNESS_FIG_STEMS <- list(
   kernel_support = "robustness_kernel_mismatch_support_contrasts",
   high_count_label = "robustness_high_count_assignment_label_recovery",
   high_count_ate = "robustness_high_count_assignment_ate_error",
+  high_count_support = "robustness_high_count_assignment_support_contrasts",
   snr_label = "robustness_snr_scale_label_recovery",
   snr_ate = "robustness_snr_scale_ate_error",
   snr_support = "robustness_snr_scale_support_contrasts",
@@ -1225,13 +1243,15 @@ tex_lines <- c(
     "app:robustness-high-count",
     c(
       "The baseline design randomises treated cells. Many applications instead concentrate treatment on historically active locations---for example, when a policy targets high-activity areas while the intervention reduces subsequent productivity. To mimic this structure, we simulate a reference pre-treatment catalogue from the control Hawkes law on $[0,t^\\star]$, count points per cell, and assign treatment to the $50\\%$ of cells with the largest reference counts. The post-treatment law uses $K_c=0.8$ and $K_t=0.2$, so treated cells are less self-exciting than controls even though they were selected for prior activity.",
-      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-ate} summarise labelling accuracy and all-or-nothing ATE error under this assignment mechanism."
+      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-ate,fig:robustness-high-count-support} summarise labelling accuracy, all-or-nothing ATE error, and off-support allocation contrast accuracy under this assignment mechanism."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_label, "fig:robustness-high-count-label",
               "Label recovery when treatment is assigned to the 50\\% of cells with the most points in a reference pre-treatment catalogue at $K_c=0.8$, $K_t=0.2$."),
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_ate, "fig:robustness-high-count-ate",
-              "All-or-nothing ATE error under high-count treatment assignment at $K_c=0.8$, $K_t=0.2$. Treatment lowers the branching ratio relative to control, as in the main simulation study.")
+              "All-or-nothing ATE error under high-count treatment assignment at $K_c=0.8$, $K_t=0.2$. Treatment lowers the branching ratio relative to control, as in the main simulation study."),
+      tex_fig(ROBUSTNESS_FIG_STEMS$high_count_support, "fig:robustness-high-count-support",
+              "High-count assignment off-support allocation contrast accuracy (mean percentage error). The rightmost contrast is the all-or-nothing ATE.")
     )
   ),
   tex_subsubsection(

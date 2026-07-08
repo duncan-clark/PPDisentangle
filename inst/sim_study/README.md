@@ -81,6 +81,9 @@ PPDisentangle-output/sim_study/generated/robustness/figures/
   robustness_kernel_mismatch_label_recovery.{pdf,png}
   robustness_kernel_mismatch_ate_error.{pdf,png}
   robustness_kernel_mismatch_support_contrasts.{pdf,png}
+  robustness_high_count_assignment_label_recovery.{pdf,png}
+  robustness_high_count_assignment_ate_error.{pdf,png}
+  robustness_high_count_assignment_support_contrasts.{pdf,png}
   robustness_decay_validation.{pdf,png}
 PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
 ```
@@ -104,13 +107,37 @@ an overnight run:
 bash inst/sim_study/run_nesi.sh --robustness-inspect
 ```
 
+Quick-mode timing probe (3 scenarios, full quick SEM/ATE knobs — extrapolate ×5
+for the full 15-scenario appendix):
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness-quick-probe
+```
+
 Full NeSI robustness run:
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness --mode long --sims 32 --target-points 2500
 ```
 
-Timing probe with 32 replications and a larger CPU allocation:
+Quick NeSI run for the full `robustness_standalone.pdf` appendix (all 15 scenarios,
+lighter SEM/ATE, 200 decay reps, no estimated `tau_i`):
+
+```bash
+bash inst/nesi/submit.sh sim_study \
+  --robustness --mode quick \
+  --sims 32 --cpus 100 --target-points 2500
+```
+
+After fetch, replot and compile locally:
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<JOBID>
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness_standalone '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+```
+
+Partial timing probe (subset only — not sufficient for the full PDF):
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness --mode quick \

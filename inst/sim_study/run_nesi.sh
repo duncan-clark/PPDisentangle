@@ -26,6 +26,8 @@ PP_TARGET_POINTS="${PP_TARGET_POINTS:-}"
 PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-}"
 PP_SEM_WORKERS="${PP_SEM_WORKERS:-}"
 PP_ATE_WORKERS="${PP_ATE_WORKERS:-}"
+PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-}"
+PP_SEM_PROPOSAL_UPDATE_CADENCE="${PP_SEM_PROPOSAL_UPDATE_CADENCE:-}"
 PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-}"
 PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-}"
 HAVE_SIMS_ARG=0
@@ -38,6 +40,8 @@ while [[ "$#" -gt 0 ]]; do
         --sem-workers) PP_SEM_WORKERS="$2"; shift 2 ;;
         --ate-workers) PP_ATE_WORKERS="$2"; shift 2 ;;
         --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
+        --sem-param-cadence) PP_SEM_PARAM_UPDATE_CADENCE="$2"; shift 2 ;;
+        --sem-proposal-cadence) PP_SEM_PROPOSAL_UPDATE_CADENCE="$2"; shift 2 ;;
         --sem-refit-cadence) PP_SEM_PARAM_REFIT_CADENCE="$2"; shift 2 ;;
         --ate-compute-tau) PP_ATE_COMPUTE_TAU="$2"; shift 2 ;;
         --skip-ate-tau) PP_ATE_COMPUTE_TAU="0"; shift ;;
@@ -61,6 +65,19 @@ while [[ "$#" -gt 0 ]]; do
             PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
             PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
             PP_SEM_WORKERS="${PP_SEM_WORKERS:-8}"
+            shift ;;
+        --robustness-quick-probe)
+            # Quick-mode timing probe: one scenario per family (3 total), full quick SEM/ATE knobs.
+            PP_RUN_ROBUSTNESS=1
+            PP_MODE="${PP_MODE:-quick}"
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then PP_SIMS=32; fi
+            PP_CPUS="${PP_CPUS:-100}"
+            PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-k_separation,high_count_assignment,snr_scale}"
+            PP_K_VALUES="${PP_K_VALUES:-0.3}"
+            PP_MU_SCALES="${PP_MU_SCALES:-1}"
+            PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
+            PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
+            PP_SEM_WORKERS="${PP_SEM_WORKERS:-$PP_SIMS}"
             shift ;;
         --scenario-set) PP_ROBUSTNESS_SCENARIO_SET="$2"; shift 2 ;;
         --scenario-workers) PP_ROBUSTNESS_SCENARIO_WORKERS="$2"; shift 2 ;;
@@ -105,6 +122,19 @@ if [ -n "$PP_MODE" ]; then
             exit 1
             ;;
     esac
+fi
+
+# Quick robustness: full appendix grid + all figure stems for robustness_standalone.pdf.
+if [ -n "$PP_MODE" ] && [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
+    mode_norm_quick="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
+    if [ "$mode_norm_quick" = "quick" ]; then
+        PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
+        PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
+        PP_REFRESH_DECAY="${PP_REFRESH_DECAY:-1}"
+        PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
+        PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-50}"
+        PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-3}"
+    fi
 fi
 
 if [ -n "$PP_TEST" ] && [ "$HAVE_SIMS_ARG" -eq 0 ]; then
@@ -164,7 +194,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         echo "Note: >72 CPUs requested, using Milan partition."
     fi
 
-    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} scenario_workers=${PP_ROBUSTNESS_SCENARIO_WORKERS:-<auto>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_workers=${PP_SEM_WORKERS:-<default>} ate_workers=${PP_ATE_WORKERS:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
+    echo "Submitting to NeSI: mode=${PP_MODE:-manual} sims=$PP_SIMS cpus=$CPUS mem=$SB_MEM time=$SB_TIME robustness=$PP_RUN_ROBUSTNESS scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-<default>} scenario_workers=${PP_ROBUSTNESS_SCENARIO_WORKERS:-<auto>} sem_inner=${PP_SEM_INNER_ITER:-<default>} sem_workers=${PP_SEM_WORKERS:-<default>} ate_workers=${PP_ATE_WORKERS:-<default>} sem_param_cadence=${PP_SEM_PARAM_UPDATE_CADENCE:-<default>} sem_proposal_cadence=${PP_SEM_PROPOSAL_UPDATE_CADENCE:-<default>} sem_refit_cadence=${PP_SEM_PARAM_REFIT_CADENCE:-<default>} ate_compute_tau=${PP_ATE_COMPUTE_TAU:-<default>} post_time_multiplier=$PP_POST_TIME_MULTIPLIER post_time_multipliers=${PP_POST_TIME_MULTIPLIERS:-<none>} ${PP_TEST:+(test)}"
 
     # Avoid comma-splitting issues in --export when values themselves contain commas
     # (e.g. PP_POST_TIME_MULTIPLIERS="0.1,0.5,1,2"). Export in parent env first,
@@ -174,7 +204,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
+    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -215,6 +245,8 @@ echo "Robustness mu scales: ${PP_MU_SCALES:-<default>}"
 echo "Target points: ${PP_TARGET_POINTS:-<default>}"
 echo "SEM inner iter override: ${PP_SEM_INNER_ITER:-<none>}"
 echo "SEM workers override: ${PP_SEM_WORKERS:-<none>}"
+echo "SEM param cadence override: ${PP_SEM_PARAM_UPDATE_CADENCE:-<none>}"
+echo "SEM proposal cadence override: ${PP_SEM_PROPOSAL_UPDATE_CADENCE:-<none>}"
 echo "ATE workers override: ${PP_ATE_WORKERS:-<none>}"
 echo "SEM param refit cadence override: ${PP_SEM_PARAM_REFIT_CADENCE:-<none>}"
 echo "ATE compute tau override: ${PP_ATE_COMPUTE_TAU:-<none>}"
@@ -239,6 +271,12 @@ fi
 if [ -n "${PP_SEM_PARAM_REFIT_CADENCE:-}" ]; then
     export PP_SEM_PARAM_REFIT_CADENCE
 fi
+if [ -n "${PP_SEM_PARAM_UPDATE_CADENCE:-}" ]; then
+    export PP_SEM_PARAM_UPDATE_CADENCE
+fi
+if [ -n "${PP_SEM_PROPOSAL_UPDATE_CADENCE:-}" ]; then
+    export PP_SEM_PROPOSAL_UPDATE_CADENCE
+fi
 if [ -n "${PP_ATE_COMPUTE_TAU:-}" ]; then
     export PP_ATE_COMPUTE_TAU
 fi
@@ -248,15 +286,17 @@ if [ -n "${PP_ROBUSTNESS_SCENARIO_SET:-}" ]; then
 else
     unset PP_ROBUSTNESS_SCENARIO_SET
 fi
-export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_WORKERS
-export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS
+export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_WORKERS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE
+export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
     if [ -z "${PP_SEM_WORKERS:-}" ]; then
-        if [ "$PP_SIMS" -gt 8 ]; then
+        if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
+            export PP_SEM_WORKERS="$PP_SIMS"
+        elif [ "$PP_SIMS" -gt 8 ]; then
             export PP_SEM_WORKERS=8
         else
             export PP_SEM_WORKERS="$PP_SIMS"
@@ -266,16 +306,33 @@ if [ "$mode_norm_runtime" = "quick" ]; then
     export PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-3}"
     export PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-20}"
     export PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-10}"
+    export PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-50}"
+    export PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-3}"
     export PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-1}"
     export PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
     export PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
+    if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
+        export PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
+        export PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
+        export PP_REFRESH_DECAY="${PP_REFRESH_DECAY:-1}"
+        export PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
+    fi
     echo "Quick profile env:"
     echo "  PP_SEM_INNER_ITER=$PP_SEM_INNER_ITER"
     echo "  PP_SEM_OUTER_ITER=$PP_SEM_OUTER_ITER"
     echo "  PP_SEM_N_PROPS=$PP_SEM_N_PROPS"
     echo "  PP_SEM_N_LABELLINGS=$PP_SEM_N_LABELLINGS"
     echo "  PP_SEM_WORKERS=$PP_SEM_WORKERS"
+    echo "  PP_SEM_PARAM_UPDATE_CADENCE=$PP_SEM_PARAM_UPDATE_CADENCE"
+    echo "  PP_SEM_PROPOSAL_UPDATE_CADENCE=${PP_SEM_PROPOSAL_UPDATE_CADENCE:-<default>}"
+    echo "  PP_SEM_PARAM_REFIT_CADENCE=$PP_SEM_PARAM_REFIT_CADENCE"
     echo "  PP_ATE_N_SIMS=$PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS=$PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I=$PP_ATE_N_TAU_I"
+    if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
+        echo "  PP_TARGET_POINTS=${PP_TARGET_POINTS:-<default>}"
+        echo "  PP_DECAY_REPS=${PP_DECAY_REPS:-<default>} PP_REFRESH_DECAY=${PP_REFRESH_DECAY:-<default>}"
+        echo "  PP_ATE_COMPUTE_TAU=${PP_ATE_COMPUTE_TAU:-<default>} (0 skips estimated tau_i in ATE stage)"
+        echo "  scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-all families for robustness_standalone.pdf}"
+    fi
     echo ""
 fi
 

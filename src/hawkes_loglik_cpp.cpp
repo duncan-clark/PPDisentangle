@@ -1,4 +1,5 @@
 #include <Rcpp.h>
+#include <algorithm>
 using namespace Rcpp;
 
 // [[Rcpp::export]]
@@ -138,18 +139,40 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
   if (do_trunc && t_trunc < dt_cut) dt_cut = t_trunc;
 
   double loglik = 0.0;
+  bool parent_sorted = true;
+  for (int j = 1; j < n_parent; ++j) {
+    if (parent_t[j] < parent_t[j - 1]) {
+      parent_sorted = false;
+      break;
+    }
+  }
+
   for (int i = 0; i < n_post; ++i) {
     double lambda_i = mu_base * W_val[i];
     double ti = post_t[i];
-    for (int j = n_parent - 1; j >= 0; --j) {
-      double dt = ti - parent_t[j];
-      if (dt <= 0.0) continue;
-      if (dt > dt_cut) break;
-      double dx = post_x[i] - parent_x[j];
-      double dy = post_y[i] - parent_y[j];
-      double r2 = dx * dx + dy * dy;
-      if (r2 * alpha > 20.0) continue;
-      lambda_i += K * spatial_const * temporal_density(dt) * std::exp(-alpha * r2) / temporal_norm;
+    if (parent_sorted) {
+      NumericVector::iterator first_ge = std::lower_bound(parent_t.begin(), parent_t.end(), ti);
+      int j_start = static_cast<int>(first_ge - parent_t.begin()) - 1;
+      for (int j = j_start; j >= 0; --j) {
+        double dt = ti - parent_t[j];
+        if (dt > dt_cut) break;
+        double dx = post_x[i] - parent_x[j];
+        double dy = post_y[i] - parent_y[j];
+        double r2 = dx * dx + dy * dy;
+        if (r2 * alpha > 20.0) continue;
+        lambda_i += K * spatial_const * temporal_density(dt) * std::exp(-alpha * r2) / temporal_norm;
+      }
+    } else {
+      for (int j = n_parent - 1; j >= 0; --j) {
+        double dt = ti - parent_t[j];
+        if (dt <= 0.0) continue;
+        if (dt > dt_cut) break;
+        double dx = post_x[i] - parent_x[j];
+        double dy = post_y[i] - parent_y[j];
+        double r2 = dx * dx + dy * dy;
+        if (r2 * alpha > 20.0) continue;
+        lambda_i += K * spatial_const * temporal_density(dt) * std::exp(-alpha * r2) / temporal_norm;
+      }
     }
     if (lambda_i <= 1e-15) lambda_i = 1e-15;
     loglik += std::log(lambda_i);
