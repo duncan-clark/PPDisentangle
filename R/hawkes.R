@@ -232,6 +232,29 @@ hawkes_kernel_type <- function(kernel) {
   if (identical(normalize_hawkes_kernel(kernel), "power_law")) 1L else 0L
 }
 
+normalize_hawkes_spatial_kernel <- function(kernel = NULL, params = NULL) {
+  if (is.null(kernel) && is.list(params) && !is.null(params$spatial_kernel)) kernel <- params$spatial_kernel
+  if (is.null(kernel) && is.list(params) && !is.null(params$spatial_kernel_type)) {
+    kernel <- if (as.integer(params$spatial_kernel_type) == 1L) "power_law" else "exponential"
+  }
+  if (is.null(kernel)) kernel <- "exponential"
+  kernel <- tolower(gsub("-", "_", as.character(kernel)[[1]]))
+  if (kernel %in% c("exp", "exponential", "gaussian")) return("exponential")
+  if (kernel %in% c("power", "powerlaw", "power_law", "zhuang")) return("power_law")
+  stop("Unsupported Hawkes spatial kernel: ", kernel)
+}
+
+hawkes_spatial_kernel_type <- function(kernel) {
+  if (identical(normalize_hawkes_spatial_kernel(kernel), "power_law")) 1L else 0L
+}
+
+hawkes_power_law_spatial_d <- function(alpha, q) {
+  alpha <- as.numeric(alpha)[1]
+  q <- as.numeric(q)[1]
+  if (!is.finite(alpha) || alpha <= 0 || !is.finite(q) || q <= 1.5) return(NA_real_)
+  exp(2 * (lgamma(q) - log(q - 1) - lgamma(q - 1.5)) - log(alpha))
+}
+
 hawkes_param_names <- function(kernel) {
   if (identical(normalize_hawkes_kernel(kernel), "power_law")) {
     c("mu", "alpha", "c", "p", "K")
@@ -240,8 +263,10 @@ hawkes_param_names <- function(kernel) {
   }
 }
 
-as_hawkes_params <- function(params, kernel = NULL) {
+as_hawkes_params <- function(params, kernel = NULL, spatial_kernel = NULL,
+                             spatial_q = NULL, spatial_d = NULL) {
   kernel <- normalize_hawkes_kernel(kernel, params)
+  spatial_kernel <- normalize_hawkes_spatial_kernel(spatial_kernel, params)
   if (is.list(params)) {
     out <- params
   } else {
@@ -257,6 +282,7 @@ as_hawkes_params <- function(params, kernel = NULL) {
     out <- as.list(vals)
   }
   out$kernel <- kernel
+  out$spatial_kernel <- spatial_kernel
   if (is.null(out$mu)) out$mu <- NA_real_
   if (is.null(out$alpha)) out$alpha <- NA_real_
   if (identical(kernel, "power_law")) {
@@ -267,6 +293,19 @@ as_hawkes_params <- function(params, kernel = NULL) {
     if (is.null(out$beta)) out$beta <- if (!is.null(out[["c"]])) out[["c"]] else NA_real_
   }
   if (is.null(out$K)) out$K <- NA_real_
+  if (identical(spatial_kernel, "power_law")) {
+    if (is.null(out$spatial_q) || !is.finite(out$spatial_q)) {
+      out$spatial_q <- if (!is.null(spatial_q)) as.numeric(spatial_q) else 2
+    }
+    out$spatial_d <- if (!is.null(spatial_d) && is.finite(spatial_d) && spatial_d > 0) {
+      as.numeric(spatial_d)
+    } else {
+      hawkes_power_law_spatial_d(out$alpha, out$spatial_q)
+    }
+  } else {
+    if (is.null(out$spatial_q) && !is.null(spatial_q)) out$spatial_q <- as.numeric(spatial_q)
+    if (is.null(out$spatial_d) && !is.null(spatial_d)) out$spatial_d <- as.numeric(spatial_d)
+  }
   out
 }
 
@@ -281,11 +320,17 @@ loglik_hawk_fast <- function(params,
                              beta_min = NULL,
                              t_trunc = NULL,
                              kernel = NULL,
+                             spatial_kernel = NULL,
+                             spatial_q = NULL,
+                             spatial_d = NULL,
                              ...) {
-  params <- as_hawkes_params(params, kernel)
+  params <- as_hawkes_params(params, kernel, spatial_kernel, spatial_q, spatial_d)
   kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
   mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
   cc <- params[["c"]]; p <- params$p
+  q_spatial <- if (is.null(params$spatial_q)) 2.0 else as.numeric(params$spatial_q)
+  d_spatial <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
 
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
 
@@ -342,7 +387,9 @@ loglik_hawk_fast <- function(params,
   }
   beta_bad <- identical(kernel, "exponential") && (beta < beta_min || beta > 1e6)
   power_bad <- identical(kernel, "power_law") && (cc <= 0 || p <= 1 || cc > 1e6 || p > 1e3)
-  if (mu > 1e6 || alpha > alpha_max || beta_bad || power_bad) {
+  spatial_bad <- identical(spatial_kernel, "power_law") &&
+    (!is.finite(q_spatial) || q_spatial <= 1.5 || !is.finite(d_spatial) || d_spatial <= 0)
+  if (mu > 1e6 || alpha > alpha_max || beta_bad || power_bad || spatial_bad) {
     if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] constraint: mu=%g alpha=%g (max=%g) beta/c=%g p=%g K=%g kernel=%s\n",
                                    mu, alpha, alpha_max, beta, p, K, kernel))
     return(-1e15)
@@ -362,7 +409,10 @@ loglik_hawk_fast <- function(params,
     t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
     kernel_type = hawkes_kernel_type(kernel),
     cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-    p = if (is.null(p)) 2.0 else as.numeric(p)
+    p = if (is.null(p)) 2.0 else as.numeric(p),
+    spatial_kernel_type = hawkes_spatial_kernel_type(spatial_kernel),
+    spatial_q = q_spatial,
+    spatial_d = d_spatial
   )
 
   if (verbose_trace && loglik <= -1e14) {
@@ -548,9 +598,16 @@ fit_hawkes <- function(params_init,
                        fixed_params = NULL,
                        t_trunc = NULL,
                        kernel = NULL,
+                       spatial_kernel = NULL,
+                       spatial_q = NULL,
+                       spatial_d = NULL,
                        ...) {
-  params_init_list <- as_hawkes_params(params_init, kernel)
+  spatial_d_input <- spatial_d
+  params_init_list <- as_hawkes_params(params_init, kernel, spatial_kernel, spatial_q, spatial_d)
   kernel <- params_init_list$kernel
+  spatial_kernel <- params_init_list$spatial_kernel
+  spatial_q <- params_init_list$spatial_q
+  spatial_d <- spatial_d_input
   params_init <- unlist(params_init_list[hawkes_param_names(kernel)])
   if (poisson_flag) {
     par_out <- if (identical(kernel, "power_law")) {
@@ -558,6 +615,7 @@ fit_hawkes <- function(params_init,
     } else {
       list(mu = dim(realiz)[1] / windowT[2], alpha = 1, beta = 1, K = 0, kernel = kernel)
     }
+    par_out <- as_hawkes_params(par_out, kernel, spatial_kernel, spatial_q, spatial_d)
     if (is.null(zero_background_region)) {
       return(list(par = par_out, converged = TRUE))
     } else {
@@ -633,7 +691,10 @@ fit_hawkes <- function(params_init,
           alpha_max = alpha_max,
           beta_min = beta_min,
           t_trunc = t_trunc,
-          kernel = kernel
+          kernel = kernel,
+          spatial_kernel = spatial_kernel,
+          spatial_q = spatial_q,
+          spatial_d = spatial_d
         ),
         extra
       )
@@ -670,8 +731,10 @@ fit_hawkes <- function(params_init,
     if (identical(kernel, "power_law")) {
       par_out <- c(par_out, beta = par_out[["c"]])
     }
+    par_out <- as_hawkes_params(as.list(par_out), kernel, spatial_kernel, spatial_q, spatial_d)
     fit$par <- par_out
     fit$kernel <- kernel
+    fit$spatial_kernel <- spatial_kernel
   }
   return(fit)
 }
@@ -708,6 +771,9 @@ sim_hawkes <- function(params,
   beta <- params$beta
   K <- params$K
   kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
+  spatial_q <- if (is.null(params$spatial_q)) 2 else as.numeric(params$spatial_q)
+  spatial_d <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
   cc <- params[["c"]]
   p <- params$p
   draw_hawkes_delays <- function(n) {
@@ -716,6 +782,14 @@ sim_hawkes <- function(params,
       cc * ((1 - u)^(-1 / (p - 1)) - 1)
     } else {
       rexp(n, rate = beta)
+    }
+  }
+  draw_hawkes_distances <- function(n) {
+    if (identical(spatial_kernel, "power_law")) {
+      u <- runif(n)
+      sqrt(spatial_d * ((1 - u)^(-1 / (spatial_q - 1)) - 1))
+    } else {
+      sqrt(rexp(n, rate = alpha))
     }
   }
   events <- list()
@@ -781,7 +855,7 @@ sim_hawkes <- function(params,
       num_aftershocks <- rpois(1, K)
       if (num_aftershocks > 0) {
         delay <- draw_hawkes_delays(num_aftershocks)
-        dist <- sqrt(rexp(num_aftershocks, rate = alpha))
+        dist <- draw_hawkes_distances(num_aftershocks)
         angle <- runif(num_aftershocks, min = 0, max = 2 * pi)
         new_lon <- current_event$x + dist * cos(angle)
         new_lat <- current_event$y + dist * sin(angle)
@@ -830,7 +904,7 @@ sim_hawkes <- function(params,
       total_aftershocks <- length(parent_x)
 
       delay <- draw_hawkes_delays(total_aftershocks)
-      dist <- sqrt(rexp(total_aftershocks, rate = alpha))
+      dist <- draw_hawkes_distances(total_aftershocks)
       angle <- runif(total_aftershocks, min = 0, max = 2 * pi)
       new_lon <- parent_x + dist * cos(angle)
       new_lat <- parent_y + dist * sin(angle)
@@ -887,8 +961,11 @@ sim_hawkes_fast <- function(params,
                             covariate_lookup = NULL,
                             t_trunc = NULL,
                             kernel = NULL,
+                            spatial_kernel = NULL,
+                            spatial_q = NULL,
+                            spatial_d = NULL,
                             ...) {
-  params <- as_hawkes_params(params, kernel)
+  params <- as_hawkes_params(params, kernel, spatial_kernel, spatial_q, spatial_d)
   mu <- params$mu
   K  <- params$K
 
@@ -910,6 +987,9 @@ sim_hawkes_fast <- function(params,
   alpha <- params$alpha
   beta  <- params$beta
   kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
+  q_spatial <- if (is.null(params$spatial_q)) 2.0 else as.numeric(params$spatial_q)
+  d_spatial <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
   cc <- params[["c"]]
   p <- params$p
 
@@ -1002,7 +1082,10 @@ sim_hawkes_fast <- function(params,
       t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
       kernel_type = hawkes_kernel_type(kernel),
       cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-      p = if (is.null(p)) 2.0 else as.numeric(p)
+      p = if (is.null(p)) 2.0 else as.numeric(p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     n_ch <- length(children$x)
     if (n_ch > 0) {

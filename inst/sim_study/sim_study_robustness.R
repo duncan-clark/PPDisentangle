@@ -137,6 +137,8 @@ k_separation <- data.frame(
   mu_scale = 1,
   sim_kernel = "exponential",
   fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
   treatment_assignment = "random",
   stringsAsFactors = FALSE
 )
@@ -148,6 +150,8 @@ high_count_assignment <- data.frame(
   mu_scale = 1,
   sim_kernel = "exponential",
   fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
   treatment_assignment = "highest_count_50pct",
   stringsAsFactors = FALSE
 )
@@ -159,6 +163,8 @@ snr_scale <- data.frame(
   mu_scale = mu_scales,
   sim_kernel = "exponential",
   fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
   treatment_assignment = "random",
   stringsAsFactors = FALSE
 )
@@ -170,11 +176,26 @@ kernel_mismatch <- expand.grid(
   mu_scale = 1,
   sim_kernel = c("exponential", "power_law"),
   fit_kernel = c("exponential", "power_law"),
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
   treatment_assignment = "random",
   stringsAsFactors = FALSE
 )
 
-scenarios <- bind_rows(k_separation, high_count_assignment, snr_scale, kernel_mismatch) %>%
+spatial_kernel_mismatch <- expand.grid(
+  scenario_family = "spatial_kernel_mismatch",
+  control_k = ROBUSTNESS_CONTROL_K,
+  treated_k = ROBUSTNESS_TREATED_K_DEFAULT,
+  mu_scale = 1,
+  sim_kernel = "exponential",
+  fit_kernel = "exponential",
+  sim_spatial_kernel = c("exponential", "power_law"),
+  fit_spatial_kernel = c("exponential", "power_law"),
+  treatment_assignment = "random",
+  stringsAsFactors = FALSE
+)
+
+scenarios <- bind_rows(k_separation, high_count_assignment, snr_scale, kernel_mismatch, spatial_kernel_mismatch) %>%
   mutate(
     k_delta = abs(.data$treated_k - .data$control_k),
     scenario_id = paste0(
@@ -184,6 +205,8 @@ scenarios <- bind_rows(k_separation, high_count_assignment, snr_scale, kernel_mi
       "_mu", format_num_tag(.data$mu_scale),
       "_sim", .data$sim_kernel,
       "_fit", .data$fit_kernel,
+      "_ssim", .data$sim_spatial_kernel,
+      "_sfit", .data$fit_spatial_kernel,
       "_assign", .data$treatment_assignment
     )
   ) %>%
@@ -228,6 +251,8 @@ run_one <- function(row_id) {
     PP_TARGET_POINTS = as.character(target_points),
     PP_SIM_KERNEL = sc$sim_kernel,
     PP_FIT_KERNEL = sc$fit_kernel,
+    PP_SIM_SPATIAL_KERNEL = sc$sim_spatial_kernel,
+    PP_FIT_SPATIAL_KERNEL = sc$fit_spatial_kernel,
     PP_TREATMENT_ASSIGNMENT = sc$treatment_assignment,
     PP_DECAY_REPS = as.character(decay_reps)
   )
@@ -249,6 +274,8 @@ run_one <- function(row_id) {
     mu_scale = sc$mu_scale,
     sim_kernel = sc$sim_kernel,
     fit_kernel = sc$fit_kernel,
+    sim_spatial_kernel = sc$sim_spatial_kernel,
+    fit_spatial_kernel = sc$fit_spatial_kernel,
     treatment_assignment = sc$treatment_assignment,
     target_points = target_points,
     run_basename = run_basename,
@@ -610,6 +637,10 @@ kernel_pair_label <- function(sim_kernel, fit_kernel) {
   paste0(short_kernel(sim_kernel), " sim / ", short_kernel(fit_kernel), " fit")
 }
 
+spatial_kernel_pair_label <- function(sim_spatial_kernel, fit_spatial_kernel) {
+  kernel_pair_label(sim_spatial_kernel, fit_spatial_kernel)
+}
+
 spatial_decay_showcase_label_levels <- function() {
   c(
     "K_c=0.8, K_t=0.2 (exp)",
@@ -772,6 +803,27 @@ make_kernel_mismatch_bar_plot <- function(df, y_col, lbl_col, title, subtitle, y
     theme(axis.text.x = element_text(angle = 25, hjust = 1), legend.position = "bottom")
 }
 
+make_spatial_kernel_mismatch_bar_plot <- function(df, y_col, lbl_col, title, subtitle, ylab) {
+  if (!all(c("sim_spatial_kernel", "fit_spatial_kernel") %in% names(df))) return(NULL)
+  plot_df <- df %>%
+    filter(.data$scenario_family == "spatial_kernel_mismatch") %>%
+    mutate(kernel_pair = spatial_kernel_pair_label(.data$sim_spatial_kernel, .data$fit_spatial_kernel))
+  if (nrow(plot_df) < 1L) return(NULL)
+  pair_levels <- unique(plot_df$kernel_pair)
+  plot_df$kernel_pair <- factor(plot_df$kernel_pair, levels = pair_levels)
+  ggplot(plot_df, aes(x = .data$kernel_pair, y = .data[[y_col]], fill = .data[[lbl_col]])) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+    labs(
+      x = "Spatial kernel scenario",
+      y = ylab,
+      fill = "Labelling",
+      title = title,
+      subtitle = subtitle
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 25, hjust = 1), legend.position = "bottom")
+}
+
 plot_files <- list()
 if (!is.null(label_summary) && nrow(label_summary) > 0) {
   lbl_col <- safe_label_col(label_summary)
@@ -819,6 +871,16 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
       "robustness_kernel_mismatch_label_recovery",
       width = 8.0, height = 4.8
     )
+    plot_files$spatial_kernel_mismatch_label_recovery <- save_plot_pair(
+      make_spatial_kernel_mismatch_bar_plot(
+        label_summary, acc_col, lbl_col,
+        title = "Spatial kernel mismatch: label recovery",
+        subtitle = "Mean-matched exponential/power-law spatial sim/fit pairs at K=(0.8, 0.2). Temporal kernel fixed exponential.",
+        ylab = ylab_acc
+      ),
+      "robustness_spatial_kernel_mismatch_label_recovery",
+      width = 8.0, height = 4.8
+    )
   }
 }
 
@@ -828,7 +890,7 @@ support_contrast_display_labels <- c(
   global_1_0 = "All-or-nothing DTAITE"
 )
 
-prepare_support_plot_df <- function(df, family, keep_kernel_pair = FALSE) {
+prepare_support_plot_df <- function(df, family, keep_kernel_pair = FALSE, keep_spatial_pair = FALSE) {
   if (is.null(df) || nrow(df) < 1L) return(NULL)
   lbl_col <- safe_label_col(df)
   if (is.null(lbl_col)) return(NULL)
@@ -863,6 +925,21 @@ prepare_support_plot_df <- function(df, family, keep_kernel_pair = FALSE) {
     select(-.data$global_ate_truth) %>%
     filter(is.finite(.data$mean_pct_error))
   if (nrow(out) < 1L) return(NULL)
+  if (isTRUE(keep_spatial_pair) && all(c("sim_spatial_kernel", "fit_spatial_kernel") %in% names(out))) {
+    out <- out %>%
+      mutate(kernel_pair = spatial_kernel_pair_label(.data$sim_spatial_kernel, .data$fit_spatial_kernel)) %>%
+      group_by(.data$contrast_family, .data[[lbl_col]], .data$kernel_pair) %>%
+      summarize(mean_pct_error = mean(.data$mean_pct_error, na.rm = TRUE), .groups = "drop")
+    if (nrow(out) < 1L) return(NULL)
+    out$contrast_display <- support_contrast_display_labels[out$contrast_family]
+    out$contrast_display <- factor(
+      out$contrast_display,
+      levels = unname(support_contrast_display_labels)
+    )
+    pair_levels <- unique(out$kernel_pair)
+    out$kernel_pair <- factor(out$kernel_pair, levels = pair_levels)
+    return(out)
+  }
   if (isTRUE(keep_kernel_pair) && all(c("sim_kernel", "fit_kernel") %in% names(out))) {
     out <- out %>%
       mutate(kernel_pair = kernel_pair_label(.data$sim_kernel, .data$fit_kernel)) %>%
@@ -987,6 +1064,27 @@ make_kernel_support_plot <- function(df, title, stem, subtitle) {
   save_plot_pair(p_support, stem, width = 10.0, height = 5.5)
 }
 
+make_spatial_kernel_support_plot <- function(df, title, stem, subtitle) {
+  lbl_col <- safe_label_col(df)
+  if (is.null(lbl_col)) return(NULL)
+  support_plot_df <- prepare_support_plot_df(df, "spatial_kernel_mismatch", keep_spatial_pair = TRUE)
+  if (is.null(support_plot_df) || nrow(support_plot_df) < 1L) return(NULL)
+  p_support <- ggplot(support_plot_df, aes(x = .data$kernel_pair, y = .data$mean_pct_error,
+                                             fill = .data[[lbl_col]])) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+    facet_wrap(~ .data$contrast_display, scales = "free_y") +
+    labs(
+      x = "Spatial kernel scenario",
+      y = "Mean percentage error (%)",
+      fill = "Labelling",
+      title = title,
+      subtitle = subtitle
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 25, hjust = 1), legend.position = "bottom")
+  save_plot_pair(p_support, stem, width = 10.0, height = 5.5)
+}
+
 if (!is.null(support_summary) && nrow(support_summary) > 0 &&
     all(c("contrast_family", "mean_abs_error") %in% names(support_summary))) {
   lbl_col <- safe_label_col(support_summary)
@@ -1009,6 +1107,12 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       title = "Kernel mismatch: off-support allocation contrasts",
       stem = "robustness_kernel_mismatch_support_contrasts",
       subtitle = "Mean percentage error in plug-in contrast estimates by sim/fit kernel pair at K=(0.8, 0.2). Facets include the all-or-nothing DTAITE; single-cell flips use |all-or-nothing truth| as the reference scale when the local contrast is ~0."
+    )
+    plot_files$spatial_kernel_mismatch_support <- make_spatial_kernel_support_plot(
+      support_summary,
+      title = "Spatial kernel mismatch: off-support allocation contrasts",
+      stem = "robustness_spatial_kernel_mismatch_support_contrasts",
+      subtitle = "Mean percentage error in plug-in contrast estimates by mean-matched spatial sim/fit kernel pair at K=(0.8, 0.2). Temporal kernel fixed exponential."
     )
     plot_files$high_count_assignment_support <- make_support_plot(
       support_summary, "high_count_assignment",
@@ -1051,6 +1155,8 @@ ROBUSTNESS_FIG_STEMS <- list(
   k_separation_support = "robustness_k_separation_support_contrasts",
   kernel_label = "robustness_kernel_mismatch_label_recovery",
   kernel_support = "robustness_kernel_mismatch_support_contrasts",
+  spatial_kernel_label = "robustness_spatial_kernel_mismatch_label_recovery",
+  spatial_kernel_support = "robustness_spatial_kernel_mismatch_support_contrasts",
   high_count_label = "robustness_high_count_assignment_label_recovery",
   high_count_support = "robustness_high_count_assignment_support_contrasts",
   snr_label = "robustness_snr_scale_label_recovery",
@@ -1149,7 +1255,7 @@ tex_lines <- c(
   "",
   "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: balanced accuracy of the oracle, naive, and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean percentage error in the plug-in expected count contrast under (i) flipping a single cell relative to the observed assignment, (ii) a random $50\\%$ relabelling of cells, and (iii) the global all-treated versus all-control allocation. The first two contrasts are local perturbations of the observed design; the third is the all-or-nothing DTAITE and probes extrapolation to an unsupported allocation (SEM fits with explosive parameter estimates are excluded throughout).",
   "",
-  "The branching-ratio grid, kernel misspecification, assignment designs, signal-to-noise scalings, and single-flip decay diagnostics below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Figures are reported in \\cref{app:robustness-k-separation,app:robustness-kernel,app:robustness-high-count,app:robustness-snr,app:robustness-decay}.",
+  "The branching-ratio grid, temporal and spatial kernel misspecification checks, assignment designs, signal-to-noise scalings, and single-flip decay diagnostics below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Figures are reported in \\cref{app:robustness-k-separation,app:robustness-kernel,app:robustness-spatial-kernel,app:robustness-high-count,app:robustness-snr,app:robustness-decay}.",
   "",
   "\\makeatletter",
   "\\ifdefined\\robustnessstandalone",
@@ -1200,6 +1306,21 @@ tex_lines <- c(
               "Kernel specification check for label recovery across all four sim/fit kernel pairs at $K=(0.8, 0.2)$."),
       tex_fig(ROBUSTNESS_FIG_STEMS$kernel_support, "fig:robustness-kernel-support",
               "Kernel mismatch off-support allocation contrast accuracy (mean percentage error) by sim/fit kernel pair, faceted by contrast type. The all-or-nothing DTAITE facet is the global all-treated versus all-control contrast.")
+    )
+  ),
+  tex_subsubsection(
+    "Mis-specified spatial kernels",
+    "app:robustness-spatial-kernel",
+    c(
+      "The baseline Hawkes simulations use the Gaussian spatial factor $\\alpha\\pi^{-1}\\exp(-\\alpha r^2)$. This check adds a mean-matched power-law spatial factor with the same expected triggering distance but heavier tails. We hold the temporal kernel fixed at exponential and run all four exponential/power-law spatial sim/fit pairings at $K=(0.8,0.2)$ with random $50\\%$ treatment assignment.",
+      "For a selected power-law tail exponent $q>3/2$, the spatial scale is calibrated from $\\alpha$ so that the radial mean distance matches the exponential kernel; changing from exponential to power-law therefore isolates slower spatial tail decay rather than changing the first spatial moment.",
+      "\\Cref{fig:robustness-spatial-kernel-label,fig:robustness-spatial-kernel-support} report label recovery and off-support contrast accuracy across the four spatial sim/fit pairings."
+    ),
+    c(
+      tex_fig(ROBUSTNESS_FIG_STEMS$spatial_kernel_label, "fig:robustness-spatial-kernel-label",
+              "Spatial kernel specification check for label recovery across mean-matched exponential and power-law spatial sim/fit pairs at $K=(0.8, 0.2)$."),
+      tex_fig(ROBUSTNESS_FIG_STEMS$spatial_kernel_support, "fig:robustness-spatial-kernel-support",
+              "Spatial kernel mismatch off-support allocation contrast accuracy (mean percentage error) by spatial sim/fit kernel pair, faceted by contrast type.")
     )
   ),
   tex_subsubsection(

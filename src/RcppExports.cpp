@@ -144,8 +144,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // hawkes_loglik_inhom_cpp
-double hawkes_loglik_inhom_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector W_val, double mu, double alpha, double beta, double K, double areaS, double t_max, double t_trunc, int kernel_type, double cc, double p);
-RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP W_valSEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_maxSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP) {
+double hawkes_loglik_inhom_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector W_val, double mu, double alpha, double beta, double K, double areaS, double t_max, double t_trunc, int kernel_type, double cc, double p, int spatial_kernel_type, double spatial_q, double spatial_d);
+RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP W_valSEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_maxSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP spatial_kernel_typeSEXP, SEXP spatial_qSEXP, SEXP spatial_dSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -163,13 +163,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type kernel_type(kernel_typeSEXP);
     Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
     Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    rcpp_result_gen = Rcpp::wrap(hawkes_loglik_inhom_cpp(t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc, kernel_type, cc, p));
+    Rcpp::traits::input_parameter< int >::type spatial_kernel_type(spatial_kernel_typeSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_q(spatial_qSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_d(spatial_dSEXP);
+    rcpp_result_gen = Rcpp::wrap(hawkes_loglik_inhom_cpp(t, x, y, W_val, mu, alpha, beta, K, areaS, t_max, t_trunc, kernel_type, cc, p, spatial_kernel_type, spatial_q, spatial_d));
     return rcpp_result_gen;
 END_RCPP
 }
 // hawkes_loglik_inhom_filtration_cpp
-double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t, NumericVector post_x, NumericVector post_y, NumericVector W_val, NumericVector parent_t, NumericVector parent_x, NumericVector parent_y, double mu, double alpha, double beta, double K, double areaS, double t_start, double t_end, double adjust_factor, double t_trunc, int kernel_type, double cc, double p);
-RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_filtration_cpp(SEXP post_tSEXP, SEXP post_xSEXP, SEXP post_ySEXP, SEXP W_valSEXP, SEXP parent_tSEXP, SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_startSEXP, SEXP t_endSEXP, SEXP adjust_factorSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP) {
+double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t, NumericVector post_x, NumericVector post_y, NumericVector W_val, NumericVector parent_t, NumericVector parent_x, NumericVector parent_y, double mu, double alpha, double beta, double K, double areaS, double t_start, double t_end, double adjust_factor, double t_trunc, int kernel_type, double cc, double p, int spatial_kernel_type, double spatial_q, double spatial_d);
+RcppExport SEXP _PPDisentangle_hawkes_loglik_inhom_filtration_cpp(SEXP post_tSEXP, SEXP post_xSEXP, SEXP post_ySEXP, SEXP W_valSEXP, SEXP parent_tSEXP, SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP muSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP areaSSEXP, SEXP t_startSEXP, SEXP t_endSEXP, SEXP adjust_factorSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP spatial_kernel_typeSEXP, SEXP spatial_qSEXP, SEXP spatial_dSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -192,13 +195,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type kernel_type(kernel_typeSEXP);
     Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
     Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    rcpp_result_gen = Rcpp::wrap(hawkes_loglik_inhom_filtration_cpp(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor, t_trunc, kernel_type, cc, p));
+    Rcpp::traits::input_parameter< int >::type spatial_kernel_type(spatial_kernel_typeSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_q(spatial_qSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_d(spatial_dSEXP);
+    rcpp_result_gen = Rcpp::wrap(hawkes_loglik_inhom_filtration_cpp(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, mu, alpha, beta, K, areaS, t_start, t_end, adjust_factor, t_trunc, kernel_type, cc, p, spatial_kernel_type, spatial_q, spatial_d));
     return rcpp_result_gen;
 END_RCPP
 }
 // sim_hawkes_children_cpp
-DataFrame sim_hawkes_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, double alpha, double beta, double K, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, int kernel_type, double cc, double p);
-RcppExport SEXP _PPDisentangle_sim_hawkes_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP) {
+DataFrame sim_hawkes_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, double alpha, double beta, double K, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, int kernel_type, double cc, double p, int spatial_kernel_type, double spatial_q, double spatial_d);
+RcppExport SEXP _PPDisentangle_sim_hawkes_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP kernel_typeSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP spatial_kernel_typeSEXP, SEXP spatial_qSEXP, SEXP spatial_dSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -218,7 +224,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type kernel_type(kernel_typeSEXP);
     Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
     Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    rcpp_result_gen = Rcpp::wrap(sim_hawkes_children_cpp(parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, kernel_type, cc, p));
+    Rcpp::traits::input_parameter< int >::type spatial_kernel_type(spatial_kernel_typeSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_q(spatial_qSEXP);
+    Rcpp::traits::input_parameter< double >::type spatial_d(spatial_dSEXP);
+    rcpp_result_gen = Rcpp::wrap(sim_hawkes_children_cpp(parent_x, parent_y, parent_t, alpha, beta, K, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, kernel_type, cc, p, spatial_kernel_type, spatial_q, spatial_d));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -242,9 +251,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 28},
     {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
     {"_PPDisentangle_sim_etas_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_children_cpp, 21},
-    {"_PPDisentangle_hawkes_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_cpp, 14},
-    {"_PPDisentangle_hawkes_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_filtration_cpp, 19},
-    {"_PPDisentangle_sim_hawkes_children_cpp", (DL_FUNC) &_PPDisentangle_sim_hawkes_children_cpp, 16},
+    {"_PPDisentangle_hawkes_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_cpp, 17},
+    {"_PPDisentangle_hawkes_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_filtration_cpp, 22},
+    {"_PPDisentangle_sim_hawkes_children_cpp", (DL_FUNC) &_PPDisentangle_sim_hawkes_children_cpp, 19},
     {"_PPDisentangle_tile_index_rect_cpp", (DL_FUNC) &_PPDisentangle_tile_index_rect_cpp, 4},
     {NULL, NULL, 0}
 };

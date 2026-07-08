@@ -124,10 +124,17 @@ fit_hawkes_with_filtration <- function(params_init,
                                        maxit = 1000,
                                        poisson_flag = FALSE,
                                        zero_background_region = NULL,
-                                       kernel = NULL) {
+                                       kernel = NULL,
+                                       spatial_kernel = NULL,
+                                       spatial_q = NULL,
+                                       spatial_d = NULL) {
   if (!inherits(windowS, "owin")) windowS <- as.owin(windowS)
-  params_init_list <- as_hawkes_params(params_init, kernel)
+  spatial_d_input <- spatial_d
+  params_init_list <- as_hawkes_params(params_init, kernel, spatial_kernel, spatial_q, spatial_d)
   kernel <- params_init_list$kernel
+  spatial_kernel <- params_init_list$spatial_kernel
+  spatial_q <- params_init_list$spatial_q
+  spatial_d <- spatial_d_input
   par_names <- hawkes_param_names(kernel)
   params_init <- as.numeric(unlist(params_init_list[par_names]))
   names(params_init) <- par_names
@@ -149,6 +156,7 @@ fit_hawkes_with_filtration <- function(params_init,
     empty_par$K <- 0
     empty_par$kernel <- kernel
     if (identical(kernel, "power_law")) empty_par$beta <- empty_par[["c"]]
+    empty_par <- as_hawkes_params(empty_par, kernel, spatial_kernel, spatial_q, spatial_d)
     return(list(par = empty_par, converged = TRUE))
   }
 
@@ -180,6 +188,7 @@ fit_hawkes_with_filtration <- function(params_init,
     pois_par$K <- 0
     pois_par$kernel <- kernel
     if (identical(kernel, "power_law")) pois_par$beta <- pois_par[["c"]]
+    pois_par <- as_hawkes_params(pois_par, kernel, spatial_kernel, spatial_q, spatial_d)
     return(list(par = pois_par, converged = TRUE))
   }
 
@@ -207,13 +216,15 @@ fit_hawkes_with_filtration <- function(params_init,
   beta_min <- if (dt > 0) 0.1 / dt else 0
 
   obj_fn <- function(par4) {
-    par_list <- as_hawkes_params(par4, kernel)
+    par_list <- as_hawkes_params(par4, kernel, spatial_kernel, spatial_q, spatial_d)
     mu <- par_list$mu
     alpha <- par_list$alpha
     beta <- par_list$beta
     K <- par_list$K
     cc <- par_list[["c"]]
     p <- par_list$p
+    q_spatial <- if (is.null(par_list$spatial_q)) 2.0 else as.numeric(par_list$spatial_q)
+    d_spatial <- if (is.null(par_list$spatial_d)) NA_real_ else as.numeric(par_list$spatial_d)
     if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-1e15)
     if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-1e15)
     if (identical(kernel, "power_law")) {
@@ -241,7 +252,10 @@ fit_hawkes_with_filtration <- function(params_init,
       t_trunc = -1,
       kernel_type = hawkes_kernel_type(kernel),
       cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-      p = if (is.null(p)) 2.0 else as.numeric(p)
+      p = if (is.null(p)) 2.0 else as.numeric(p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     if (!is.finite(loglik)) return(-1e15)
     loglik
@@ -277,8 +291,12 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              treated_params_init = NULL,
                              keep_all_nothing_sim = TRUE,
                              compute_tau = TRUE,
-                             kernel = NULL) {
+                             kernel = NULL,
+                             spatial_kernel = NULL,
+                             spatial_q = NULL,
+                             spatial_d = NULL) {
   kernel <- normalize_hawkes_kernel(kernel, hawkes_params$control)
+  spatial_kernel <- normalize_hawkes_spatial_kernel(spatial_kernel, hawkes_params$control)
   treated_idx <- tilenames(partition) %in% treated_partitions
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
@@ -318,8 +336,9 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       list(mu = max(1e-8, nrow(ctrl_realiz) / dt_fit), alpha = 0,
            beta = dt_fit / 100, K = 0.01, kernel = kernel)
     }
+    ctrl_init <- as_hawkes_params(ctrl_init, kernel, spatial_kernel, spatial_q, spatial_d)
     if (!is.null(treated_params_init)) {
-      treat_init <- as_hawkes_params(treated_params_init, kernel)
+      treat_init <- as_hawkes_params(treated_params_init, kernel, spatial_kernel, spatial_q, spatial_d)
       treat_init <- treat_init[hawkes_param_names(kernel)]
       if (is.null(names(treat_init)) || any(is.na(names(treat_init)))) {
         stop("treated_params_init must be a named list/vector with valid Hawkes parameters")
@@ -341,6 +360,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       }
       treat_init$kernel <- kernel
       if (identical(kernel, "power_law")) treat_init$beta <- treat_init[["c"]]
+      treat_init <- as_hawkes_params(treat_init, kernel, spatial_kernel, spatial_q, spatial_d)
     } else {
       treat_init <- if (identical(kernel, "power_law")) {
         list(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0.01,
@@ -350,6 +370,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         list(mu = max(1e-8, nrow(treat_realiz) / dt_fit), alpha = 0,
              beta = dt_fit / 100, K = 0.01, kernel = kernel)
       }
+      treat_init <- as_hawkes_params(treat_init, kernel, spatial_kernel, spatial_q, spatial_d)
     }
 
     if (isTRUE(control_filtration_aware)) {
@@ -363,7 +384,10 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         maxit = maxit,
         poisson_flag = poisson_flags$control,
         zero_background_region = treated_state_space,
-        kernel = kernel
+        kernel = kernel,
+        spatial_kernel = spatial_kernel,
+        spatial_q = spatial_q,
+        spatial_d = spatial_d
       )$par
 
       # Guard against near-critical/near-zero-baseline filtration fits:
@@ -387,9 +411,12 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
           numeric_integral = FALSE,
           poisson_flag = poisson_flags$control,
           t_trunc = -1,
-          kernel = kernel
+          kernel = kernel,
+          spatial_kernel = spatial_kernel,
+          spatial_q = spatial_q,
+          spatial_d = spatial_d
         )$par
-        control_pp <- as_hawkes_params(as.list(legacy), kernel)
+        control_pp <- as_hawkes_params(as.list(legacy), kernel, spatial_kernel, spatial_q, spatial_d)
       }
     } else {
       # Legacy behavior: control fit uses only post-treatment observed control points.
@@ -405,9 +432,12 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         numeric_integral = FALSE,
         poisson_flag = poisson_flags$control,
         t_trunc = -1,
-        kernel = kernel
+        kernel = kernel,
+        spatial_kernel = spatial_kernel,
+        spatial_q = spatial_q,
+        spatial_d = spatial_d
       )$par
-      control_pp <- as_hawkes_params(as.list(control_pp), kernel)
+      control_pp <- as_hawkes_params(as.list(control_pp), kernel, spatial_kernel, spatial_q, spatial_d)
     }
 
     # Keep treated fitting behavior aligned with the historical (pre-filtration) path.
@@ -423,12 +453,15 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       numeric_integral = FALSE,
       poisson_flag = poisson_flags$treated,
       t_trunc = -1,
-      kernel = kernel
+      kernel = kernel,
+      spatial_kernel = spatial_kernel,
+      spatial_q = spatial_q,
+      spatial_d = spatial_d
     )$par
-    treated_pp <- as_hawkes_params(as.list(treated_pp), kernel)
+    treated_pp <- as_hawkes_params(as.list(treated_pp), kernel, spatial_kernel, spatial_q, spatial_d)
   } else {
-    control_pp <- as_hawkes_params(hawkes_params$control, kernel)
-    treated_pp <- as_hawkes_params(hawkes_params$treated, kernel)
+    control_pp <- as_hawkes_params(hawkes_params$control, kernel, spatial_kernel, spatial_q, spatial_d)
+    treated_pp <- as_hawkes_params(hawkes_params$treated, kernel, spatial_kernel, spatial_q, spatial_d)
   }
 
   is_explosive <- function(pp, k_thr) {

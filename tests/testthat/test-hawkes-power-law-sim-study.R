@@ -151,3 +151,40 @@ test_that("simulation-study ATE fitting supports exponential simulation with pow
   expect_true(all(c("c", "p", "K") %in% names(ate$control_pp)))
   expect_true(is.finite(ate$all_nothing_theory$ATE))
 })
+
+test_that("power-law spatial Hawkes kernel is mean matched to exponential scale", {
+  alpha <- 0.08
+  q <- 2.2
+  d <- PPDisentangle:::hawkes_power_law_spatial_d(alpha, q)
+  exp_mean <- sqrt(pi) / (2 * sqrt(alpha))
+  pl_mean <- sqrt(d) * (q - 1) * sqrt(pi) / 2 * gamma(q - 1.5) / gamma(q)
+
+  expect_true(is.finite(d))
+  expect_equal(pl_mean, exp_mean, tolerance = 1e-8)
+
+  params <- PPDisentangle:::as_hawkes_params(
+    list(mu = 5, alpha = alpha, beta = 1, K = 0.2, kernel = "exponential",
+         spatial_kernel = "power_law", spatial_q = q)
+  )
+  expect_identical(params$spatial_kernel, "power_law")
+  expect_equal(params$spatial_d, d, tolerance = 1e-8)
+})
+
+test_that("power-law spatial Hawkes works through C++ simulation and likelihood", {
+  set.seed(20260710)
+  params <- PPDisentangle:::as_hawkes_params(
+    list(mu = 15, alpha = 0.08, beta = 1.5, K = 0.35,
+         kernel = "exponential", spatial_kernel = "power_law", spatial_q = 2.2)
+  )
+  win <- spatstat.geom::owin(xrange = c(0, 20), yrange = c(0, 20))
+  sim <- sim_hawkes_fast(params, c(0, 5), win)
+  expect_gt(length(sim$t), 0)
+
+  ll <- loglik_hawk_fast(
+    params = params,
+    realiz = data.frame(x = sim$x, y = sim$y, t = sim$t, W = rep(1, length(sim$t))),
+    windowT = c(0, 5),
+    windowS = win
+  )
+  expect_true(is.finite(ll))
+})

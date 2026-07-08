@@ -12,7 +12,10 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
                                double t_trunc = -1.0,
                                int kernel_type = 0,
                                double cc = 1.0,
-                               double p = 2.0) {
+                               double p = 2.0,
+                               int spatial_kernel_type = 0,
+                               double spatial_q = 2.0,
+                               double spatial_d = -1.0) {
 
   int n = t.size();
   double loglik = 0.0;
@@ -20,8 +23,11 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
   double pi = 3.14159265358979323846;
   bool do_trunc = (t_trunc > 0.0);
   bool power_law = (kernel_type == 1);
+  bool spatial_power_law = (spatial_kernel_type == 1);
   if (cc <= 0.0) cc = 1.0;
   if (p <= 1.0) p = 1.000001;
+  if (spatial_q <= 1.5) spatial_q = 1.500001;
+  if (spatial_d <= 0.0) spatial_power_law = false;
 
   double mu_base = mu / areaS;
 
@@ -45,8 +51,16 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
   double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
   if (temporal_norm < 1e-15) temporal_norm = 1e-15;
   double spatial_const = alpha / pi;
+  double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
   double dt_cut = power_law ? R_PosInf : 20.0 / beta;
   if (do_trunc && t_trunc < dt_cut) dt_cut = t_trunc;
+  auto spatial_density = [&](double r2) {
+    if (spatial_power_law) {
+      return spatial_power_const * std::pow(1.0 + r2 / spatial_d, -spatial_q);
+    }
+    if(r2 * alpha > 20.0) return 0.0;
+    return spatial_const * std::exp(-alpha * r2);
+  };
 
   for(int i = 0; i < n; ++i) {
 
@@ -61,10 +75,9 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
       double dy = y[i] - y[j];
       double r2 = dx*dx + dy*dy;
 
-      if(r2 * alpha > 20.0) continue;
-
-      double excitation = temporal_density(dt) * std::exp(-alpha * r2);
-      lambda_i += K * spatial_const * excitation / temporal_norm;
+      double s_density = spatial_density(r2);
+      if(s_density <= 0.0) continue;
+      lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
     }
 
     if(lambda_i <= 1e-15) lambda_i = 1e-15;
@@ -103,7 +116,10 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
                                           double t_trunc = -1.0,
                                           int kernel_type = 0,
                                           double cc = 1.0,
-                                          double p = 2.0) {
+                                          double p = 2.0,
+                                          int spatial_kernel_type = 0,
+                                          double spatial_q = 2.0,
+                                          double spatial_d = -1.0) {
   int n_post = post_t.size();
   int n_parent = parent_t.size();
   if (n_post == 0) return -1e15;
@@ -111,8 +127,11 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
   const double pi = 3.14159265358979323846;
   bool do_trunc = (t_trunc > 0.0);
   bool power_law = (kernel_type == 1);
+  bool spatial_power_law = (spatial_kernel_type == 1);
   if (cc <= 0.0) cc = 1.0;
   if (p <= 1.0) p = 1.000001;
+  if (spatial_q <= 1.5) spatial_q = 1.500001;
+  if (spatial_d <= 0.0) spatial_power_law = false;
   double dt_window = t_end - t_start;
   if (dt_window <= 0.0 || areaS <= 0.0) return -1e15;
 
@@ -135,8 +154,16 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
   double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
   if (temporal_norm < 1e-15) temporal_norm = 1e-15;
   double spatial_const = alpha / pi;
+  double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
   double dt_cut = power_law ? R_PosInf : 20.0 / beta;
   if (do_trunc && t_trunc < dt_cut) dt_cut = t_trunc;
+  auto spatial_density = [&](double r2) {
+    if (spatial_power_law) {
+      return spatial_power_const * std::pow(1.0 + r2 / spatial_d, -spatial_q);
+    }
+    if (r2 * alpha > 20.0) return 0.0;
+    return spatial_const * std::exp(-alpha * r2);
+  };
 
   double loglik = 0.0;
   bool parent_sorted = true;
@@ -159,8 +186,9 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
         double dx = post_x[i] - parent_x[j];
         double dy = post_y[i] - parent_y[j];
         double r2 = dx * dx + dy * dy;
-        if (r2 * alpha > 20.0) continue;
-        lambda_i += K * spatial_const * temporal_density(dt) * std::exp(-alpha * r2) / temporal_norm;
+        double s_density = spatial_density(r2);
+        if (s_density <= 0.0) continue;
+        lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
       }
     } else {
       for (int j = n_parent - 1; j >= 0; --j) {
@@ -170,8 +198,9 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
         double dx = post_x[i] - parent_x[j];
         double dy = post_y[i] - parent_y[j];
         double r2 = dx * dx + dy * dy;
-        if (r2 * alpha > 20.0) continue;
-        lambda_i += K * spatial_const * temporal_density(dt) * std::exp(-alpha * r2) / temporal_norm;
+        double s_density = spatial_density(r2);
+        if (s_density <= 0.0) continue;
+        lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
       }
     }
     if (lambda_i <= 1e-15) lambda_i = 1e-15;

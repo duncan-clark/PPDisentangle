@@ -1085,6 +1085,9 @@ em_style_labelling <- function(pp_data,
   is_biv_etas <- identical(model_type, "etas_bivariate")
   biv_etas_params <- dots$etas_bivariate_params
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
+  hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
+  hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
+  hawkes_spatial_d <- dots$spatial_d
 
   all_names <- if (is_biv_etas) .etas_bivariate_par_names
                else if (is_etas) .etas_par_names
@@ -1158,7 +1161,7 @@ em_style_labelling <- function(pp_data,
   hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
     if (nrow(post_realiz) < 1L) return(-Inf)
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
-    par_obj <- as_hawkes_params(params_vec, hawkes_kernel)
+    par_obj <- as_hawkes_params(params_vec, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
     if (!is.finite(par_obj$mu) || !is.finite(par_obj$alpha) || !is.finite(par_obj$K)) return(-Inf)
     if (par_obj$mu < 0 || par_obj$alpha < 0 || par_obj$K < 0 || par_obj$K >= 1) return(-Inf)
     if (identical(hawkes_kernel, "power_law")) {
@@ -1186,6 +1189,8 @@ em_style_labelling <- function(pp_data,
     parent_x <- c(pre_hist$x, post_realiz$x)
     parent_y <- c(pre_hist$y, post_realiz$y)
     parent_t <- c(pre_hist$t, post_realiz$t)
+    q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+    d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
     loglik <- hawkes_loglik_inhom_filtration_cpp(
       post_t = as.numeric(post_realiz$t),
       post_x = as.numeric(post_realiz$x),
@@ -1205,7 +1210,10 @@ em_style_labelling <- function(pp_data,
       t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
       kernel_type = hawkes_kernel_type(hawkes_kernel),
       cc = if (is.null(par_obj[["c"]])) 1.0 else as.numeric(par_obj[["c"]]),
-      p = if (is.null(par_obj$p)) 2.0 else as.numeric(par_obj$p)
+      p = if (is.null(par_obj$p)) 2.0 else as.numeric(par_obj$p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     if (!is.finite(loglik)) return(-Inf)
     loglik
@@ -1334,8 +1342,8 @@ em_style_labelling <- function(pp_data,
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
       ref_post <- post_data
-      ctrl_params_vec <- unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel)[hawkes_param_names(hawkes_kernel)])
-      treat_params_vec <- unlist(as_hawkes_params(treated_par[[length(treated_par)]], hawkes_kernel)[hawkes_param_names(hawkes_kernel)])
+      ctrl_params_vec <- unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
+      treat_params_vec <- unlist(as_hawkes_params(treated_par[[length(treated_par)]], hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
       metric <- rep(NA_real_, length(labelling_proposals))
       unchanged_idx <- which(flips_per_proposal == 0)
       changed_idx <- which(flips_per_proposal != 0)
@@ -1435,16 +1443,20 @@ em_style_labelling <- function(pp_data,
         post_ctrl <- y[y$inferred_process == "control", ]
         if (hawkes_use_filtration_history && !is_etas && !is_biv_etas) {
           hawkes_conditional_loglik(
-            params_vec = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel)[hawkes_param_names(hawkes_kernel)]),
+            params_vec = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]),
             post_realiz = post_ctrl,
             zero_background_region = treated_state_space,
             pre_hist = select_pre_history_by_label("control")
           )
         } else {
           loglik_hawk_fast(
-            params = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel)[hawkes_param_names(hawkes_kernel)]), realiz = post_ctrl,
+            params = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]), realiz = post_ctrl,
             windowT = time_window, windowS = statespace,
-            zero_background_region = treated_state_space, ...
+            zero_background_region = treated_state_space,
+            spatial_kernel = hawkes_spatial_kernel,
+            spatial_q = hawkes_spatial_q,
+            spatial_d = hawkes_spatial_d,
+            ...
           )
         }
       }, numeric(1))
@@ -1616,7 +1628,7 @@ em_style_labelling <- function(pp_data,
           full_vec <- if (is_etas) {
             as.numeric(unlist(as.list(full_par)[all_names]))
           } else {
-            as.numeric(unlist(as_hawkes_params(full_par, hawkes_kernel)[all_names]))
+            as.numeric(unlist(as_hawkes_params(full_par, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[all_names]))
           }
           names(full_vec) <- all_names
           if (length(fixed_idx) > 0) {

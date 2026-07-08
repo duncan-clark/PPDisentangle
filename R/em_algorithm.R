@@ -70,6 +70,9 @@ adaptive_SEM <- function(pp_data,
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
+  hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
+  hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
+  hawkes_spatial_d <- dots$spatial_d
   loglik_fn <- if (is_biv_etas) loglik_etas_bivariate
                else if (is_etas) loglik_etas
                else loglik_hawk_fast
@@ -194,13 +197,15 @@ adaptive_SEM <- function(pp_data,
   hawkes_bg_var <- if (!is.null(background_rate_var)) background_rate_var else "W"
 
   hawkes_loglik_with_filtration <- function(params, post_realiz, filt_realiz, zero_bg_region) {
-    par_obj <- as_hawkes_params(params, hawkes_kernel)
+    par_obj <- as_hawkes_params(params, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
     mu <- par_obj$mu
     alpha <- par_obj$alpha
     beta <- par_obj$beta
     K <- par_obj$K
     cc <- par_obj[["c"]]
     p <- par_obj$p
+    q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+    d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
     if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-Inf)
     if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-Inf)
     if (identical(hawkes_kernel, "power_law")) {
@@ -273,7 +278,10 @@ adaptive_SEM <- function(pp_data,
       t_trunc = if (!is.null(t_trunc)) t_trunc else -1,
       kernel_type = hawkes_kernel_type(hawkes_kernel),
       cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-      p = if (is.null(p)) 2.0 else as.numeric(p)
+      p = if (is.null(p)) 2.0 else as.numeric(p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     if (!is.finite(loglik)) return(-Inf)
     loglik
@@ -685,13 +693,15 @@ adaptive_SEM <- function(pp_data,
         liks <- sapply(prepared_for_process, function(parts) {
           if (is.null(parts)) return(-Inf)
           if (!is_etas) {
-            par_obj <- as_hawkes_params(params, hawkes_kernel)
+            par_obj <- as_hawkes_params(params, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
             mu <- par_obj$mu
             alpha <- par_obj$alpha
             beta <- par_obj$beta
             K <- par_obj$K
             cc <- par_obj[["c"]]
             p <- par_obj$p
+            q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+            d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
             if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-Inf)
             if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-Inf)
             if (identical(hawkes_kernel, "power_law")) {
@@ -718,7 +728,10 @@ adaptive_SEM <- function(pp_data,
               t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
               kernel_type = hawkes_kernel_type(hawkes_kernel),
               cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-              p = if (is.null(p)) 2.0 else as.numeric(p)
+              p = if (is.null(p)) 2.0 else as.numeric(p),
+              spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+              spatial_q = q_spatial,
+              spatial_d = d_spatial
             )
             if (!is.finite(loglik)) return(-Inf)
             loglik

@@ -15,12 +15,18 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
                                   double t_trunc = -1.0,
                                   int kernel_type = 0,
                                   double cc = 1.0,
-                                  double p = 2.0) {
+                                  double p = 2.0,
+                                  int spatial_kernel_type = 0,
+                                  double spatial_q = 2.0,
+                                  double spatial_d = -1.0) {
 
   bool do_trunc = (t_trunc > 0.0);
   bool power_law = (kernel_type == 1);
+  bool spatial_power_law = (spatial_kernel_type == 1);
   if (cc <= 0.0) cc = 1.0;
   if (p <= 1.0) p = 1.000001;
+  if (spatial_q <= 1.5) spatial_q = 1.500001;
+  if (spatial_d <= 0.0) spatial_power_law = false;
 
   std::vector<double> out_x;
   std::vector<double> out_y;
@@ -50,6 +56,14 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
       return cc * (std::pow(1.0 - u, -1.0 / (p - 1.0)) - 1.0);
     }
     return -std::log(1.0 - u) / beta;
+  };
+  auto spatial_r2_quantile = [&](double u) {
+    if (!spatial_power_law) {
+      return R::rexp(1.0 / alpha);
+    }
+    if (u <= 0.0) return 0.0;
+    if (u >= 1.0) u = 1.0 - 1e-15;
+    return spatial_d * (std::pow(1.0 - u, -1.0 / (spatial_q - 1.0)) - 1.0);
   };
 
   // CDF normalisation for the triggering-time law. With truncation the
@@ -84,7 +98,7 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
       double dt = temporal_quantile(u);
       double new_t = pt + dt;
 
-      double r2 = R::rexp(1.0/alpha);
+      double r2 = spatial_r2_quantile(R::runif(0.0, 1.0));
       double dist = std::sqrt(r2);
       double angle = R::runif(0.0, 2.0 * 3.14159265358979323846);
 

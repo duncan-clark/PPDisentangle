@@ -50,6 +50,7 @@ library(data.table)
 library(parallel)
 library(doParallel)
 normalize_hawkes_kernel <- getFromNamespace("normalize_hawkes_kernel", "PPDisentangle")
+normalize_hawkes_spatial_kernel <- getFromNamespace("normalize_hawkes_spatial_kernel", "PPDisentangle")
 as_hawkes_params <- getFromNamespace("as_hawkes_params", "PPDisentangle")
 
 time_start_global <- proc.time()[3]
@@ -234,6 +235,8 @@ MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 SCENARIO_ID <- env_chr("PP_SCENARIO_ID", "baseline_hawkes_exp")
 SIM_KERNEL <- normalize_hawkes_kernel(env_chr("PP_SIM_KERNEL", "exponential"))
 FIT_KERNEL <- normalize_hawkes_kernel(env_chr("PP_FIT_KERNEL", SIM_KERNEL))
+SIM_SPATIAL_KERNEL <- normalize_hawkes_spatial_kernel(env_chr("PP_SIM_SPATIAL_KERNEL", "exponential"))
+FIT_SPATIAL_KERNEL <- normalize_hawkes_spatial_kernel(env_chr("PP_FIT_SPATIAL_KERNEL", SIM_SPATIAL_KERNEL))
 CONTROL_K <- env_num("PP_CONTROL_K", 0.8, min_value = 0)
 TREATED_K <- env_num("PP_TREATED_K", 0.2, min_value = 0)
 if (CONTROL_K >= 1 || TREATED_K >= 1) {
@@ -244,20 +247,26 @@ HAWKES_ALPHA <- env_num("PP_HAWKES_ALPHA", 0.01, min_value = 1e-12)
 HAWKES_BETA <- env_num("PP_HAWKES_BETA", 10, min_value = 1e-12)
 HAWKES_POWER_C <- env_num("PP_HAWKES_POWER_C", 0.1, min_value = 1e-12)
 HAWKES_POWER_P <- env_num("PP_HAWKES_POWER_P", 2, min_value = 1.000001)
+HAWKES_SPATIAL_POWER_Q <- env_num("PP_HAWKES_SPATIAL_POWER_Q", 2, min_value = 1.500001)
 MU_SCALE <- env_num("PP_MU_SCALE", 1, min_value = 1e-8)
 TARGET_POINTS <- env_num("PP_TARGET_POINTS", NA_real_, min_value = 1)
 RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% c("1", "true", "yes", "y")
 DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 2000L, 1L)
 DECAY_ANNULUS_WIDTH <- env_num("PP_DECAY_ANNULUS_WIDTH", 1, min_value = 1e-8)
 DECAY_FLIP_CELL <- env_int("PP_DECAY_FLIP_CELL", NA_integer_, 1L)
-make_hawkes_params_for_kernel <- function(mu, K, kernel) {
+make_hawkes_params_for_kernel <- function(mu, K, kernel, spatial_kernel = "exponential") {
   if (identical(normalize_hawkes_kernel(kernel), "power_law")) {
-    list(mu = mu, alpha = HAWKES_ALPHA, c = HAWKES_POWER_C, p = HAWKES_POWER_P,
-         beta = HAWKES_POWER_C, K = K, kernel = "power_law")
+    out <- list(mu = mu, alpha = HAWKES_ALPHA, c = HAWKES_POWER_C, p = HAWKES_POWER_P,
+                beta = HAWKES_POWER_C, K = K, kernel = "power_law")
   } else {
-    list(mu = mu, alpha = HAWKES_ALPHA, beta = HAWKES_BETA, K = K,
-         kernel = "exponential")
+    out <- list(mu = mu, alpha = HAWKES_ALPHA, beta = HAWKES_BETA, K = K,
+                kernel = "exponential")
   }
+  out$spatial_kernel <- normalize_hawkes_spatial_kernel(spatial_kernel)
+  if (identical(out$spatial_kernel, "power_law")) {
+    out$spatial_q <- HAWKES_SPATIAL_POWER_Q
+  }
+  as_hawkes_params(out, out$kernel, out$spatial_kernel)
 }
 expected_points_per_mu_analytic <- function(k_control, k_treated) {
   # Expected total event count per unit mu under the sim-study design:
@@ -409,6 +418,9 @@ log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=",
 log_msg("Scenario=", SCENARIO_ID,
         " | sim_kernel=", SIM_KERNEL,
         " | fit_kernel=", FIT_KERNEL,
+        " | sim_spatial_kernel=", SIM_SPATIAL_KERNEL,
+        " | fit_spatial_kernel=", FIT_SPATIAL_KERNEL,
+        " | spatial_q=", HAWKES_SPATIAL_POWER_Q,
         " | treatment_assignment=", TREATMENT_ASSIGNMENT,
         " | control_K=", CONTROL_K,
         " | treated_K=", TREATED_K,
@@ -502,7 +514,7 @@ export_globals <- function(cl) {
     "SEM_PARAM_UPDATE_CADENCE", "SEM_PROPOSAL_UPDATE_CADENCE",
     "SEM_PARAM_REFIT_CADENCE", "SEM_N_PROPS", "SEM_CHANGE_FACTOR", "SEM_STALENESS_TRIGGER_EVERY",
     "SEM_INCLUDE_STARTING", "SEM_UPDATE_STARTING", "SEM_UPDATE_CONTROL_PARAMS",
-    "SIM_FILTRATION_AWARE", "FIT_KERNEL"
+    "SIM_FILTRATION_AWARE", "FIT_KERNEL", "FIT_SPATIAL_KERNEL", "HAWKES_SPATIAL_POWER_Q"
   ), envir = .GlobalEnv)
 }
 
@@ -517,10 +529,10 @@ export_ate_globals <- function(cl) {
 # ------------------------------------------------------------------
 # 1. Define true Hawkes parameters
 # ------------------------------------------------------------------
-hawkes_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, SIM_KERNEL)
-hawkes_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, SIM_KERNEL)
-hawkes_fit_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, FIT_KERNEL)
-hawkes_fit_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, FIT_KERNEL)
+hawkes_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, SIM_KERNEL, SIM_SPATIAL_KERNEL)
+hawkes_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, SIM_KERNEL, SIM_SPATIAL_KERNEL)
+hawkes_fit_par_1 <- make_hawkes_params_for_kernel(TRUE_MU, CONTROL_K, FIT_KERNEL, FIT_SPATIAL_KERNEL)
+hawkes_fit_par_2 <- make_hawkes_params_for_kernel(TRUE_MU, TREATED_K, FIT_KERNEL, FIT_SPATIAL_KERNEL)
 
 partition <- quadrats(X = OMEGA, nx = NX, ny = NY)
 
@@ -726,7 +738,9 @@ if (!pilot_only_mode) {
           hawkes_params_control = hawkes_fit_par_1,
           hawkes_params_treated = NULL,
           change_factor = 1, filtration = pre, proximity_weight = 0,
-          kernel = FIT_KERNEL
+          kernel = FIT_KERNEL,
+          spatial_kernel = FIT_SPATIAL_KERNEL,
+          spatial_q = HAWKES_SPATIAL_POWER_Q
         )
         pre$inferred_process <- "control"
         rbind(pre, tmp)
@@ -796,6 +810,8 @@ run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
     N_iter = SEM_N_ITER, verbose = FALSE,
     hawkes_use_filtration_history = SIM_FILTRATION_AWARE,
     kernel = FIT_KERNEL,
+    spatial_kernel = FIT_SPATIAL_KERNEL,
+    spatial_q = HAWKES_SPATIAL_POWER_Q,
     adaptive_control = local_tuning
   )
 }
@@ -1099,9 +1115,9 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
   dt_fit <- END_TIME - TREATMENT_TIME
   if (!is.finite(dt_fit) || dt_fit <= 0) dt_fit <- 1
   if (nrow(ctrl_realiz) < 2) {
-    return(make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL))
+    return(make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL, FIT_SPATIAL_KERNEL))
   }
-  ctrl_init <- make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL)
+  ctrl_init <- make_hawkes_params_for_kernel(max(1e-8, nrow(ctrl_realiz) / dt_fit), 0.01, FIT_KERNEL, FIT_SPATIAL_KERNEL)
   if (isTRUE(ATE_CONTROL_FILTRATION_AWARE)) {
     fit_ctrl <- fit_hawkes_with_filtration_fn(
       params_init = ctrl_init,
@@ -1112,7 +1128,9 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       maxit = ATE_MAXIT,
       poisson_flag = FALSE,
       zero_background_region = treated_state_space,
-      kernel = FIT_KERNEL
+      kernel = FIT_KERNEL,
+      spatial_kernel = FIT_SPATIAL_KERNEL,
+      spatial_q = HAWKES_SPATIAL_POWER_Q
     )$par
     empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / dt_fit else Inf
     fitted_rate <- as.numeric(fit_ctrl$mu) / max(1e-6, 1 - as.numeric(fit_ctrl$K))
@@ -1132,9 +1150,11 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
         numeric_integral = FALSE,
         poisson_flag = FALSE,
         t_trunc = -1,
-        kernel = FIT_KERNEL
+        kernel = FIT_KERNEL,
+        spatial_kernel = FIT_SPATIAL_KERNEL,
+        spatial_q = HAWKES_SPATIAL_POWER_Q
       )$par
-      fit_ctrl <- as_hawkes_params(as.list(legacy), FIT_KERNEL)
+      fit_ctrl <- as_hawkes_params(as.list(legacy), FIT_KERNEL, FIT_SPATIAL_KERNEL, HAWKES_SPATIAL_POWER_Q)
     }
   } else {
     fit_ctrl <- fit_hawkes_fn(
@@ -1149,9 +1169,11 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       numeric_integral = FALSE,
       poisson_flag = FALSE,
       t_trunc = -1,
-      kernel = FIT_KERNEL
+      kernel = FIT_KERNEL,
+      spatial_kernel = FIT_SPATIAL_KERNEL,
+      spatial_q = HAWKES_SPATIAL_POWER_Q
     )$par
-    fit_ctrl <- as_hawkes_params(as.list(fit_ctrl), FIT_KERNEL)
+    fit_ctrl <- as_hawkes_params(as.list(fit_ctrl), FIT_KERNEL, FIT_SPATIAL_KERNEL, HAWKES_SPATIAL_POWER_Q)
   }
   fit_ctrl
 }
@@ -1263,6 +1285,8 @@ ATE_env$ATE_COMPUTE_TAU <- ATE_COMPUTE_TAU
 ATE_env$ATE_CONTROL_FILTRATION_AWARE <- ATE_CONTROL_FILTRATION_AWARE
 ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_fit_par_1
 ATE_env$FIT_KERNEL <- FIT_KERNEL
+ATE_env$FIT_SPATIAL_KERNEL <- FIT_SPATIAL_KERNEL
+ATE_env$HAWKES_SPATIAL_POWER_Q <- HAWKES_SPATIAL_POWER_Q
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -1291,7 +1315,9 @@ task_function <- function(task) {
         poisson_flags = list(control = FALSE, treated = FALSE),
         keep_all_nothing_sim = FALSE,
         compute_tau = ATE_COMPUTE_TAU,
-        kernel = FIT_KERNEL
+        kernel = FIT_KERNEL,
+        spatial_kernel = FIT_SPATIAL_KERNEL,
+        spatial_q = HAWKES_SPATIAL_POWER_Q
       ),
       timeout = MAX_TIME, onTimeout = "error"
     ),
