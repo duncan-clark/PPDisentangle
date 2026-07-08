@@ -117,6 +117,7 @@ message(sprintf(
 ))
 
 scenario_filter <- get_arg_val("--scenario-set", Sys.getenv("PP_ROBUSTNESS_SCENARIO_SET", "all"))
+if (!nzchar(scenario_filter)) scenario_filter <- "all"
 replot_basename <- get_arg_val("--replot", Sys.getenv("PP_ROBUSTNESS_REPLOT", ""))
 if (!nzchar(replot_basename)) replot_basename <- NULL
 run_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -756,7 +757,7 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
         label_summary, acc_col, lbl_col,
         title = "Signal-to-noise scaling: label recovery",
         subtitle = sprintf(
-          "K fixed at (0.8, 0.2); mu scale in %s with expected point count held fixed.",
+          "K fixed at (0.8, 0.2); mu scale in %s.",
           format_mu_scale_grid(mu_scales)
         ),
         ylab = ylab_acc
@@ -1139,6 +1140,7 @@ tex_lines <- c(
     "% Run: ", latex_escape(basename(paste0(output_basename, "_summary.rds"))),
     " | scenario families: ", scenario_table
   ),
+  "% Missing figure PDFs render as placeholders until the production run completes.",
   "",
   "\\ifdefined\\robustnessstandalone",
   "\\documentclass[11pt]{article}",
@@ -1170,7 +1172,18 @@ tex_lines <- c(
   "  \\providecommand{\\robustness@figdir}{plots/sim_study/robustness/}",
   "\\fi",
   "\\providecommand{\\RobustnessIncludeFig}[1]{%",
-  "  \\includegraphics[width=\\textwidth]{\\robustness@figdir #1}%",
+  "  \\IfFileExists{\\robustness@figdir #1}{%",
+  "    \\includegraphics[width=\\textwidth]{\\robustness@figdir #1}%",
+  "  }{%",
+  "    \\fbox{\\begin{minipage}{0.95\\textwidth}%",
+  "      \\vspace{0.12\\textheight}%",
+  "      \\centering",
+  "      {\\large\\itshape Placeholder figure}\\\\[0.75em]",
+  "      {\\begingroup\\catcode`\\_=12\\relax\\ttfamily #1\\endgroup}\\\\[0.75em]",
+  "      {\\footnotesize Awaiting robustness simulation output}%",
+  "      \\vspace{0.12\\textheight}%",
+  "    \\end{minipage}}%",
+  "  }%",
   "}",
   "\\makeatother",
   "",
@@ -1194,7 +1207,7 @@ tex_lines <- c(
     "Mis-specified temporal kernels",
     "app:robustness-kernel",
     c(
-      "Assumption~\\ref{ass:G3} and the identification discussion in \\cref{sec:identification} treat the triggering kernel as part of the causal specification: misspecification changes both fit and the transmitted spillover geometry. We therefore simulate from exponential and power-law temporal kernels and fit exponential models, covering all four sim/fit pairings at $K=(0.8,0.2)$ with random $50\\%$ treatment assignment and the same $\\mu$-calibration scheme as above.",
+      "Assumption~\\ref{ass:G3} and the identification discussion in \\cref{sec:identification} treat the triggering kernel as part of the causal specification: misspecification changes both fit and the transmitted spillover geometry. We therefore simulate from exponential and power-law temporal kernels and fit exponential or power-law models, covering all four sim/fit pairings at $K=(0.8,0.2)$ with random $50\\%$ treatment assignment and the same $\\mu$-calibration scheme as above.",
       "Power-law temporal decay generates heavier tails than the fitted exponential, so this exercise is a structured check on whether SEM labelling and plug-in ATE estimation remain stable when the true memory of the process is longer than the fitted kernel assumes.",
       "\\Cref{fig:robustness-kernel-label,fig:robustness-kernel-ate,fig:robustness-kernel-support} report label recovery, all-or-nothing ATE error, and off-support contrast accuracy across the four sim/fit kernel pairings."
     ),
@@ -1226,7 +1239,7 @@ tex_lines <- c(
     "app:robustness-snr",
     c(
       sprintf(
-        "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $K=(0.8,0.2)$ and the random assignment design fixed, we scale the background rate through a multiplier $\\mu_{\\mathrm{scale}}\\in%s$ while recalibrating $\\mu$ so the expected point count remains fixed. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
+        "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $K=(0.8,0.2)$ and the random assignment design fixed, we vary a background-rate multiplier $\\mu_{\\mathrm{scale}}\\in%s$ while calibrating $\\mu$ from a common target abundance; realized point counts therefore vary across the grid. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
         format_mu_scale_grid(mu_scales, for_tex = TRUE)
       ),
       "\\Cref{fig:robustness-snr-label,fig:robustness-snr-ate,fig:robustness-snr-support} trace label recovery, ATE error, and off-support contrast accuracy across this signal-to-noise grid."
@@ -1234,7 +1247,7 @@ tex_lines <- c(
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_label, "fig:robustness-snr-label",
               sprintf(
-                "Signal-to-noise sensitivity for label recovery at $K=(0.8, 0.2)$ with $\\mu$ scale in %s while holding expected point count fixed.",
+                "Signal-to-noise sensitivity for label recovery at $K=(0.8, 0.2)$ with $\\mu$ scale in %s.",
                 format_mu_scale_grid(mu_scales, for_tex = TRUE)
               )),
       tex_fig(ROBUSTNESS_FIG_STEMS$snr_ate, "fig:robustness-snr-ate",
@@ -1248,13 +1261,13 @@ tex_lines <- c(
     "app:robustness-decay",
     c(
       "Assumption~\\ref{ass:G3} requires that a single latent label flip has localized influence on the intensity path. We validate this forward-simulation property directly under true Hawkes parameters, separate from the estimation experiments above. In each replicate we sample one post-treatment event in a treated cell, flip only its latent label (control $\\leftrightarrow$ treated), and simulate the two resulting catalogues under the same parameter values. Spatial decay is measured by the mean absolute count difference $|\\Delta N|$ in distance annuli around the flipped event; temporal decay uses the same flip but bins offspring by lag since the flip time.",
-      "Three $K$-separation scenarios are shown: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$ under exponential sim/fit kernels for the spatial panel, and the same scenarios plus a power-law temporal kernel at $K=(0.8,0.2)$ for the temporal panel. \\Cref{fig:robustness-decay,fig:robustness-decay-temporal} confirm geometric decay in space and algebraic decay in time for the exponential specification, with slower temporal persistence under power-law triggering."
+      "Three exponential-kernel $K$-separation scenarios are shown in the spatial panel: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. The temporal panel overlays $K_t\\in\\{0.2,0.5\\}$ under exponential triggering with an additional power-law temporal kernel at $K=(0.8,0.2)$. \\Cref{fig:robustness-decay,fig:robustness-decay-temporal} confirm geometric decay in space and algebraic decay in time for the exponential specification, with slower temporal persistence under power-law triggering."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_spatial, "fig:robustness-decay",
               "Forward-simulation spatial decay validation for three exponential-kernel $K$-separation scenarios: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. One event in a cell receives a latent label flip; curves show mean $|\\Delta N|$ per spatial annulus around the flip point."),
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_temporal, "fig:robustness-decay-temporal",
-              "Forward-simulation temporal decay validation for the same three scenarios. Control and treated $K$ differ in each case; one event in a cell receives a latent label flip and curves show mean $|\\Delta N|$ per lag bin since the flip time. Power-law refers to the temporal triggering kernel.")
+              "Forward-simulation temporal decay validation for $K_c=0.8$ with $K_t\\in\\{0.2,0.5\\}$ (exponential) and $K_t=0.2$ (power-law temporal kernel). One event in a cell receives a latent label flip and curves show mean $|\\Delta N|$ per lag bin since the flip time.")
     )
   ),
   "",
