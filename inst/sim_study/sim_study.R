@@ -248,6 +248,52 @@ HAWKES_BETA <- env_num("PP_HAWKES_BETA", 10, min_value = 1e-12)
 HAWKES_POWER_C <- env_num("PP_HAWKES_POWER_C", 0.1, min_value = 1e-12)
 HAWKES_POWER_P <- env_num("PP_HAWKES_POWER_P", 2, min_value = 1.000001)
 HAWKES_SPATIAL_POWER_Q <- env_num("PP_HAWKES_SPATIAL_POWER_Q", 2, min_value = 1.500001)
+compute_hawkes_temporal_trunc <- function(c_param, p_param, rel_level = 0.05) {
+  c_param <- suppressWarnings(as.numeric(c_param))
+  p_param <- suppressWarnings(as.numeric(p_param))
+  rel_level <- suppressWarnings(as.numeric(rel_level))
+  if (!is.finite(c_param) || !is.finite(p_param) || !is.finite(rel_level) ||
+      c_param <= 0 || p_param <= 0 || rel_level <= 0 || rel_level >= 1) {
+    return(NULL)
+  }
+  # Solve ((t + c) / c)^(-p) = rel_level for t.
+  t_cut <- c_param * ((rel_level)^(-1 / p_param) - 1)
+  if (!is.finite(t_cut) || t_cut <= 0) return(NULL)
+  as.numeric(t_cut)
+}
+hawkes_t_trunc_raw <- Sys.getenv("PP_HAWKES_T_TRUNC", "")
+HAWKES_T_TRUNC_USER <- if (nzchar(hawkes_t_trunc_raw)) {
+  suppressWarnings(as.numeric(hawkes_t_trunc_raw))
+} else {
+  NA_real_
+}
+HAWKES_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("PP_HAWKES_T_TRUNC_REL", "0.05")))
+if (!is.finite(HAWKES_T_TRUNC_REL) || is.na(HAWKES_T_TRUNC_REL) ||
+    HAWKES_T_TRUNC_REL <= 0 || HAWKES_T_TRUNC_REL >= 1) {
+  HAWKES_T_TRUNC_REL <- 0.05
+}
+resolve_hawkes_t_trunc <- function(fit_kernel) {
+  if (!identical(normalize_hawkes_kernel(fit_kernel), "power_law")) {
+    return(list(value = NULL, source = "disabled"))
+  }
+  if (is.finite(HAWKES_T_TRUNC_USER) && !is.na(HAWKES_T_TRUNC_USER) && HAWKES_T_TRUNC_USER > 0) {
+    return(list(value = as.numeric(HAWKES_T_TRUNC_USER), source = "env"))
+  }
+  trunc <- compute_hawkes_temporal_trunc(HAWKES_POWER_C, HAWKES_POWER_P, HAWKES_T_TRUNC_REL)
+  if (is.null(trunc)) {
+    return(list(value = NULL, source = "none"))
+  }
+  list(
+    value = trunc,
+    source = sprintf(
+      "auto(c=%.4g,p=%.4g,rel=%.3f)",
+      HAWKES_POWER_C, HAWKES_POWER_P, HAWKES_T_TRUNC_REL
+    )
+  )
+}
+hawkes_t_trunc_cfg <- resolve_hawkes_t_trunc(FIT_KERNEL)
+HAWKES_T_TRUNC <- hawkes_t_trunc_cfg$value
+HAWKES_T_TRUNC_SOURCE <- hawkes_t_trunc_cfg$source
 MU_SCALE <- env_num("PP_MU_SCALE", 1, min_value = 1e-8)
 TARGET_POINTS <- env_num("PP_TARGET_POINTS", NA_real_, min_value = 1)
 RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% c("1", "true", "yes", "y")
@@ -429,6 +475,14 @@ log_msg("Scenario=", SCENARIO_ID,
         " | target_points=", ifelse(is.finite(TARGET_POINTS), TARGET_POINTS, NA),
         " | expected_points_per_mu=", signif(EXPECTED_POINTS_PER_MU, 6),
         " | true_mu=", signif(TRUE_MU, 6))
+log_msg(
+  "Hawkes t_trunc: ",
+  if (is.null(HAWKES_T_TRUNC)) {
+    "disabled"
+  } else {
+    sprintf("%.4g (%s)", HAWKES_T_TRUNC, HAWKES_T_TRUNC_SOURCE)
+  }
+)
 log_msg("Output (canonical): ", SAVE_DIR)
 
 # ------------------------------------------------------------------
@@ -812,6 +866,7 @@ run_sem_core <- function(job, tuning = NULL, sem_inner_iter_override = NULL) {
     kernel = FIT_KERNEL,
     spatial_kernel = FIT_SPATIAL_KERNEL,
     spatial_q = HAWKES_SPATIAL_POWER_Q,
+    t_trunc = HAWKES_T_TRUNC,
     adaptive_control = local_tuning
   )
 }
@@ -1070,9 +1125,16 @@ label_recovery_metrics <- function(labellings_obj, kept_idx = NULL) {
     do.call(rbind, .)
 }
 
+normalize_reported_labelling <- function(x) {
+  x <- as.character(x)
+  x[x %in% c("SEM_full", "SEM_adaptive")] <- "SEM"
+  x
+}
+
 summarize_label_recovery <- function(label_recovery_df) {
   if (is.null(label_recovery_df) || nrow(label_recovery_df) < 1L) return(NULL)
   label_recovery_df %>%
+    mutate(method = normalize_reported_labelling(.data$method)) %>%
     group_by(.data$method) %>%
     summarize(
       n_kept = n(),
@@ -1130,7 +1192,8 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       zero_background_region = treated_state_space,
       kernel = FIT_KERNEL,
       spatial_kernel = FIT_SPATIAL_KERNEL,
-      spatial_q = HAWKES_SPATIAL_POWER_Q
+      spatial_q = HAWKES_SPATIAL_POWER_Q,
+      t_trunc = HAWKES_T_TRUNC
     )$par
     empirical_rate <- if (dt_fit > 0) nrow(ctrl_realiz) / dt_fit else Inf
     fitted_rate <- as.numeric(fit_ctrl$mu) / max(1e-6, 1 - as.numeric(fit_ctrl$K))
@@ -1149,7 +1212,7 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
         density_approx = FALSE,
         numeric_integral = FALSE,
         poisson_flag = FALSE,
-        t_trunc = -1,
+        t_trunc = HAWKES_T_TRUNC,
         kernel = FIT_KERNEL,
         spatial_kernel = FIT_SPATIAL_KERNEL,
         spatial_q = HAWKES_SPATIAL_POWER_Q
@@ -1168,7 +1231,7 @@ estimate_control_params_from_labeling <- function(post_data, filt_data) {
       density_approx = FALSE,
       numeric_integral = FALSE,
       poisson_flag = FALSE,
-      t_trunc = -1,
+      t_trunc = HAWKES_T_TRUNC,
       kernel = FIT_KERNEL,
       spatial_kernel = FIT_SPATIAL_KERNEL,
       spatial_q = HAWKES_SPATIAL_POWER_Q
@@ -1287,6 +1350,7 @@ ATE_env$TRUE_CONTROL_HAWKES_INIT <- hawkes_fit_par_1
 ATE_env$FIT_KERNEL <- FIT_KERNEL
 ATE_env$FIT_SPATIAL_KERNEL <- FIT_SPATIAL_KERNEL
 ATE_env$HAWKES_SPATIAL_POWER_Q <- HAWKES_SPATIAL_POWER_Q
+ATE_env$HAWKES_T_TRUNC <- HAWKES_T_TRUNC
 ATE_env$TREATMENT_TIME <- TREATMENT_TIME
 ATE_env$END_TIME <- END_TIME
 ATE_env$MAX_TIME <- MAX_TIME
@@ -1317,7 +1381,8 @@ task_function <- function(task) {
         compute_tau = ATE_COMPUTE_TAU,
         kernel = FIT_KERNEL,
         spatial_kernel = FIT_SPATIAL_KERNEL,
-        spatial_q = HAWKES_SPATIAL_POWER_Q
+        spatial_q = HAWKES_SPATIAL_POWER_Q,
+        t_trunc = HAWKES_T_TRUNC
       ),
       timeout = MAX_TIME, onTimeout = "error"
     ),
@@ -1783,6 +1848,7 @@ support_contrast_df <- if (!is.null(support_contrast_df_all) && nrow(support_con
 }
 support_contrast_summary <- if (!is.null(support_contrast_df) && nrow(support_contrast_df) > 0) {
   support_contrast_df %>%
+    mutate(labelling = normalize_reported_labelling(.data$labelling)) %>%
     group_by(.data$labelling, .data$contrast_family) %>%
     summarize(
       n = n(),
@@ -2564,6 +2630,9 @@ sim_study_results <- list(
     HAWKES_BETA = HAWKES_BETA,
     HAWKES_POWER_C = HAWKES_POWER_C,
     HAWKES_POWER_P = HAWKES_POWER_P,
+    HAWKES_T_TRUNC = HAWKES_T_TRUNC,
+    HAWKES_T_TRUNC_SOURCE = HAWKES_T_TRUNC_SOURCE,
+    HAWKES_T_TRUNC_REL = HAWKES_T_TRUNC_REL,
     MU_SCALE = MU_SCALE,
     RUN_DECAY_VALIDATION = RUN_DECAY_VALIDATION,
     DECAY_VALIDATION_REPS = DECAY_VALIDATION_REPS,

@@ -127,7 +127,8 @@ fit_hawkes_with_filtration <- function(params_init,
                                        kernel = NULL,
                                        spatial_kernel = NULL,
                                        spatial_q = NULL,
-                                       spatial_d = NULL) {
+                                       spatial_d = NULL,
+                                       t_trunc = NULL) {
   if (!inherits(windowS, "owin")) windowS <- as.owin(windowS)
   spatial_d_input <- spatial_d
   params_init_list <- as_hawkes_params(params_init, kernel, spatial_kernel, spatial_q, spatial_d)
@@ -214,6 +215,7 @@ fit_hawkes_with_filtration <- function(params_init,
   min_trigger_sd <- 0.001 * sqrt(total_area)
   alpha_max <- 1 / min_trigger_sd^2
   beta_min <- if (dt > 0) 0.1 / dt else 0
+  t_trunc_fit <- if (!is.null(t_trunc)) as.numeric(t_trunc) else -1.0
 
   obj_fn <- function(par4) {
     par_list <- as_hawkes_params(par4, kernel, spatial_kernel, spatial_q, spatial_d)
@@ -249,7 +251,7 @@ fit_hawkes_with_filtration <- function(params_init,
       t_start = t_start_fit,
       t_end = t_end_fit,
       adjust_factor = adjust_factor_fit,
-      t_trunc = -1,
+      t_trunc = t_trunc_fit,
       kernel_type = hawkes_kernel_type(kernel),
       cc = if (is.null(cc)) 1.0 else as.numeric(cc),
       p = if (is.null(p)) 2.0 else as.numeric(p),
@@ -294,7 +296,8 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
                              kernel = NULL,
                              spatial_kernel = NULL,
                              spatial_q = NULL,
-                             spatial_d = NULL) {
+                             spatial_d = NULL,
+                             t_trunc = NULL) {
   kernel <- normalize_hawkes_kernel(kernel, hawkes_params$control)
   spatial_kernel <- normalize_hawkes_spatial_kernel(spatial_kernel, hawkes_params$control)
   treated_idx <- tilenames(partition) %in% treated_partitions
@@ -387,7 +390,8 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         kernel = kernel,
         spatial_kernel = spatial_kernel,
         spatial_q = spatial_q,
-        spatial_d = spatial_d
+        spatial_d = spatial_d,
+        t_trunc = t_trunc
       )$par
 
       # Guard against near-critical/near-zero-baseline filtration fits:
@@ -410,7 +414,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
           density_approx = FALSE,
           numeric_integral = FALSE,
           poisson_flag = poisson_flags$control,
-          t_trunc = -1,
+          t_trunc = t_trunc,
           kernel = kernel,
           spatial_kernel = spatial_kernel,
           spatial_q = spatial_q,
@@ -431,7 +435,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
         density_approx = FALSE,
         numeric_integral = FALSE,
         poisson_flag = poisson_flags$control,
-        t_trunc = -1,
+        t_trunc = t_trunc,
         kernel = kernel,
         spatial_kernel = spatial_kernel,
         spatial_q = spatial_q,
@@ -452,7 +456,7 @@ ATE_estim_hawkes <- function(statespace, partition, observed_data, treated_parti
       density_approx = FALSE,
       numeric_integral = FALSE,
       poisson_flag = poisson_flags$treated,
-      t_trunc = -1,
+      t_trunc = t_trunc,
       kernel = kernel,
       spatial_kernel = spatial_kernel,
       spatial_q = spatial_q,

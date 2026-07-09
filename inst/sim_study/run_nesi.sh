@@ -63,7 +63,7 @@ while [[ "$#" -gt 0 ]]; do
             PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-1}"
             PP_ATE_N_TAU_SIMS="${PP_ATE_N_TAU_SIMS:-1}"
             PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
-            PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
+            PP_DECAY_REPS="${PP_DECAY_REPS:-2000}"
             # PP_SEM_WORKERS intentionally not capped here; runtime default
             # below sizes it from the allocation (min of sims and CPUs).
             shift ;;
@@ -125,12 +125,18 @@ if [ -n "$PP_MODE" ]; then
     esac
 fi
 
+# Robustness: inner adaptive labeling carries most of the method; keep outer SEM minimal.
+if [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
+    PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-1}"
+    PP_HAWKES_T_TRUNC_REL="${PP_HAWKES_T_TRUNC_REL:-0.05}"
+fi
+
 # Quick robustness: full appendix grid + all figure stems for robustness_standalone.pdf.
 if [ -n "$PP_MODE" ] && [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
     mode_norm_quick="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
     if [ "$mode_norm_quick" = "quick" ]; then
         PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
-        PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
+        PP_DECAY_REPS="${PP_DECAY_REPS:-2000}"
         PP_REFRESH_DECAY="${PP_REFRESH_DECAY:-1}"
         PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
         PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-50}"
@@ -205,7 +211,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PKG_ROOT
+    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PP_HAWKES_T_TRUNC PP_HAWKES_T_TRUNC_REL PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -289,6 +295,7 @@ else
 fi
 export PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_WORKERS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE
 export PP_ATE_WORKERS PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY
+export PP_HAWKES_T_TRUNC PP_HAWKES_T_TRUNC_REL
 export PP_POST_TIME_MULTIPLIER
 export PP_POST_TIME_MULTIPLIERS
 
@@ -312,6 +319,10 @@ if [ -z "${PP_ATE_WORKERS:-}" ]; then
 fi
 echo "Worker defaults resolved: PP_SEM_WORKERS=$PP_SEM_WORKERS PP_ATE_WORKERS=$PP_ATE_WORKERS (runtime CPUs=$RUNTIME_CPUS)"
 
+if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
+    export PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-1}"
+fi
+
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
     export PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-200}"
@@ -325,7 +336,7 @@ if [ "$mode_norm_runtime" = "quick" ]; then
     export PP_ATE_N_TAU_I="${PP_ATE_N_TAU_I:-1}"
     if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
         export PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
-        export PP_DECAY_REPS="${PP_DECAY_REPS:-200}"
+        export PP_DECAY_REPS="${PP_DECAY_REPS:-2000}"
         export PP_REFRESH_DECAY="${PP_REFRESH_DECAY:-1}"
         export PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
     fi
@@ -343,6 +354,7 @@ if [ "$mode_norm_runtime" = "quick" ]; then
         echo "  PP_TARGET_POINTS=${PP_TARGET_POINTS:-<default>}"
         echo "  PP_DECAY_REPS=${PP_DECAY_REPS:-<default>} PP_REFRESH_DECAY=${PP_REFRESH_DECAY:-<default>}"
         echo "  PP_ATE_COMPUTE_TAU=${PP_ATE_COMPUTE_TAU:-<default>} (0 skips estimated tau_i in ATE stage)"
+        echo "  PP_HAWKES_T_TRUNC=${PP_HAWKES_T_TRUNC:-auto} PP_HAWKES_T_TRUNC_REL=${PP_HAWKES_T_TRUNC_REL:-0.05} (power-law fit only)"
         echo "  scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-all families for robustness_standalone.pdf}"
     fi
     echo ""
