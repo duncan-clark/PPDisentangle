@@ -413,27 +413,96 @@ run_temporal_decay_validation_scenario <- function(
   )
 }
 
-make_hawkes_params_from_cfg <- function(cfg, k, sim_kernel) {
+hawkes_exponential_spatial_mean <- function(alpha) {
+  alpha <- as.numeric(alpha)[1]
+  if (!is.finite(alpha) || alpha <= 0) return(NA_real_)
+  sqrt(pi) / (2 * sqrt(alpha))
+}
+
+hawkes_power_law_spatial_mean <- function(spatial_d, q) {
+  spatial_d <- as.numeric(spatial_d)[1]
+  q <- as.numeric(q)[1]
+  if (!is.finite(spatial_d) || spatial_d <= 0 || !is.finite(q) || q <= 1.5) return(NA_real_)
+  sqrt(spatial_d) * (q - 1) * sqrt(pi) / 2 * gamma(q - 1.5) / gamma(q)
+}
+
+hawkes_power_law_spatial_d_for_mean <- function(target_mean, q) {
+  target_mean <- as.numeric(target_mean)[1]
+  q <- as.numeric(q)[1]
+  if (!is.finite(target_mean) || target_mean <= 0 || !is.finite(q) || q <= 1.5) return(NA_real_)
+  factor <- (q - 1) * sqrt(pi) / 2 * gamma(q - 1.5) / gamma(q)
+  if (!is.finite(factor) || factor <= 0) return(NA_real_)
+  (target_mean / factor)^2
+}
+
+hawkes_exponential_temporal_mean <- function(beta) {
+  beta <- as.numeric(beta)[1]
+  if (!is.finite(beta) || beta <= 0) return(NA_real_)
+  1 / beta
+}
+
+hawkes_power_law_temporal_mean <- function(cc, p) {
+  cc <- as.numeric(cc)[1]
+  p <- as.numeric(p)[1]
+  if (!is.finite(cc) || cc <= 0 || !is.finite(p) || p <= 2) return(Inf)
+  cc / (p - 2)
+}
+
+hawkes_power_law_c_for_mean <- function(target_mean, p) {
+  target_mean <- as.numeric(target_mean)[1]
+  p <- as.numeric(p)[1]
+  if (!is.finite(target_mean) || target_mean <= 0 || !is.finite(p) || p <= 2) return(NA_real_)
+  target_mean * (p - 2)
+}
+
+make_hawkes_params_from_cfg <- function(
+    cfg,
+    k,
+    sim_kernel = "exponential",
+    sim_spatial_kernel = "exponential",
+    spatial_q = NULL,
+    spatial_d = NULL,
+    power_c = NULL,
+    power_p = NULL) {
   mu <- cfg$TRUE_MU
-  if (identical(normalize_hawkes_kernel(sim_kernel), "power_law")) {
-    list(
+  alpha <- cfg$HAWKES_ALPHA
+  as_hawkes <- getFromNamespace("as_hawkes_params", "PPDisentangle")
+  normalize_spatial <- getFromNamespace("normalize_hawkes_spatial_kernel", "PPDisentangle")
+  sim_kernel <- normalize_hawkes_kernel(sim_kernel)
+  sim_spatial_kernel <- normalize_spatial(sim_spatial_kernel)
+
+  if (identical(sim_kernel, "power_law")) {
+    cc <- if (!is.null(power_c) && is.finite(power_c)) as.numeric(power_c) else cfg$HAWKES_POWER_C
+    pp <- if (!is.null(power_p) && is.finite(power_p)) as.numeric(power_p) else cfg$HAWKES_POWER_P
+    out <- list(
       mu = mu,
-      alpha = cfg$HAWKES_ALPHA,
-      c = cfg$HAWKES_POWER_C,
-      p = cfg$HAWKES_POWER_P,
-      beta = cfg$HAWKES_POWER_C,
+      alpha = alpha,
+      c = cc,
+      p = pp,
+      beta = cc,
       K = k,
       kernel = "power_law"
     )
   } else {
-    list(
+    out <- list(
       mu = mu,
-      alpha = cfg$HAWKES_ALPHA,
+      alpha = alpha,
       beta = cfg$HAWKES_BETA,
       K = k,
       kernel = "exponential"
     )
   }
+  out$spatial_kernel <- sim_spatial_kernel
+  if (identical(sim_spatial_kernel, "power_law")) {
+    out$spatial_q <- if (!is.null(spatial_q) && is.finite(spatial_q)) {
+      as.numeric(spatial_q)
+    } else if (!is.null(cfg$HAWKES_SPATIAL_POWER_Q)) {
+      as.numeric(cfg$HAWKES_SPATIAL_POWER_Q)
+    } else {
+      2
+    }
+  }
+  as_hawkes(out, out$kernel, out$spatial_kernel, out$spatial_q, spatial_d)
 }
 
 run_decay_from_cfg <- function(
@@ -519,12 +588,27 @@ refresh_temporal_decay_for_spec <- function(
     decay_reps,
     showcase_id,
     decay_label,
+    sim_spatial_kernel = "exponential",
+    spatial_q = NULL,
+    spatial_d = NULL,
+    power_c = NULL,
+    power_p = NULL,
     base_seed = 123L) {
   if (!file.exists(rds_path)) stop(sprintf("RDS not found: %s", rds_path))
   res <- readRDS(rds_path)
   cfg <- res$config
-  hawkes_par_1 <- make_hawkes_params_from_cfg(cfg, control_k, sim_kernel)
-  hawkes_par_2 <- make_hawkes_params_from_cfg(cfg, treated_k, sim_kernel)
+  hawkes_par_1 <- make_hawkes_params_from_cfg(
+    cfg, control_k, sim_kernel,
+    sim_spatial_kernel = sim_spatial_kernel,
+    spatial_q = spatial_q, spatial_d = spatial_d,
+    power_c = power_c, power_p = power_p
+  )
+  hawkes_par_2 <- make_hawkes_params_from_cfg(
+    cfg, treated_k, sim_kernel,
+    sim_spatial_kernel = sim_spatial_kernel,
+    spatial_q = spatial_q, spatial_d = spatial_d,
+    power_c = power_c, power_p = power_p
+  )
   out <- run_temporal_decay_from_cfg(
     cfg = cfg,
     res = res,
@@ -541,6 +625,9 @@ refresh_temporal_decay_for_spec <- function(
   summary_df$control_k <- control_k
   summary_df$treated_k <- treated_k
   summary_df$sim_kernel <- sim_kernel
+  summary_df$sim_spatial_kernel <- sim_spatial_kernel
+  if (!is.null(spatial_q)) summary_df$spatial_q <- spatial_q
+  if (!is.null(power_p)) summary_df$power_p <- power_p
   summary_df
 }
 
@@ -570,12 +657,27 @@ refresh_decay_for_spec <- function(
     decay_reps,
     showcase_id,
     decay_label,
+    sim_spatial_kernel = "exponential",
+    spatial_q = NULL,
+    spatial_d = NULL,
+    power_c = NULL,
+    power_p = NULL,
     base_seed = 123L) {
   if (!file.exists(rds_path)) stop(sprintf("RDS not found: %s", rds_path))
   res <- readRDS(rds_path)
   cfg <- res$config
-  hawkes_par_1 <- make_hawkes_params_from_cfg(cfg, control_k, sim_kernel)
-  hawkes_par_2 <- make_hawkes_params_from_cfg(cfg, treated_k, sim_kernel)
+  hawkes_par_1 <- make_hawkes_params_from_cfg(
+    cfg, control_k, sim_kernel,
+    sim_spatial_kernel = sim_spatial_kernel,
+    spatial_q = spatial_q, spatial_d = spatial_d,
+    power_c = power_c, power_p = power_p
+  )
+  hawkes_par_2 <- make_hawkes_params_from_cfg(
+    cfg, treated_k, sim_kernel,
+    sim_spatial_kernel = sim_spatial_kernel,
+    spatial_q = spatial_q, spatial_d = spatial_d,
+    power_c = power_c, power_p = power_p
+  )
   out <- run_decay_from_cfg(
     cfg = cfg,
     res = res,
@@ -592,5 +694,8 @@ refresh_decay_for_spec <- function(
   summary_df$control_k <- control_k
   summary_df$treated_k <- treated_k
   summary_df$sim_kernel <- sim_kernel
+  summary_df$sim_spatial_kernel <- sim_spatial_kernel
+  if (!is.null(spatial_q)) summary_df$spatial_q <- spatial_q
+  if (!is.null(power_p)) summary_df$power_p <- power_p
   summary_df
 }

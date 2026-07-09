@@ -552,31 +552,45 @@ refresh_decay_summaries <- function(manifest_df, reps, out_dir) {
 }
 
 default_spatial_decay_showcase_specs <- function() {
+  # Three spatial kernels at fixed K=(0.8,0.2):
+  # 1) exponential (Gaussian radial factor)
+  # 2) mean-matched power-law (same expected distance, heavier tails)
+  # 3) very fat-tailed power-law (smaller q => larger mean distance)
   data.frame(
-    showcase_id = c("k02_exp", "k05_exp", "k07_exp"),
+    showcase_id = c("spatial_exp", "spatial_pl_matched", "spatial_pl_fat"),
     decay_label = c(
-      "K_c=0.8, K_t=0.2 (exp)",
-      "K_c=0.8, K_t=0.5 (exp)",
-      "K_c=0.8, K_t=0.7 (exp)"
+      "Exponential spatial",
+      "Power-law spatial (mean-matched)",
+      "Fat-tailed spatial (larger mean distance)"
     ),
     control_k = ROBUSTNESS_CONTROL_K,
-    treated_k = c(0.2, 0.5, 0.7),
+    treated_k = ROBUSTNESS_TREATED_K_DEFAULT,
     sim_kernel = c("exponential", "exponential", "exponential"),
+    sim_spatial_kernel = c("exponential", "power_law", "power_law"),
+    spatial_q = c(NA_real_, 2.0, 1.7),
+    match_spatial_mean = c(FALSE, TRUE, FALSE),
     stringsAsFactors = FALSE
   )
 }
 
 default_temporal_decay_showcase_specs <- function() {
+  # Three temporal kernels at fixed K=(0.8,0.2):
+  # 1) exponential
+  # 2) mean-matched power-law (same expected lag, heavier tails; needs p>2)
+  # 3) very fat-tailed power-law (p close to 2 => much larger mean lag)
   data.frame(
-    showcase_id = c("k02_exp", "k05_exp", "k02_power"),
+    showcase_id = c("temporal_exp", "temporal_pl_matched", "temporal_pl_fat"),
     decay_label = c(
-      "K_c=0.8, K_t=0.2 (exp)",
-      "K_c=0.8, K_t=0.5 (exp)",
-      "K_c=0.8, K_t=0.2 (power-law)"
+      "Exponential temporal",
+      "Power-law temporal (mean-matched)",
+      "Fat-tailed temporal (larger mean lag)"
     ),
     control_k = ROBUSTNESS_CONTROL_K,
-    treated_k = c(0.2, 0.5, 0.2),
-    sim_kernel = c("exponential", "exponential", "power_law"),
+    treated_k = ROBUSTNESS_TREATED_K_DEFAULT,
+    sim_kernel = c("exponential", "power_law", "power_law"),
+    sim_spatial_kernel = c("exponential", "exponential", "exponential"),
+    power_p = c(NA_real_, 3.0, 2.2),
+    match_temporal_mean = c(FALSE, TRUE, FALSE),
     stringsAsFactors = FALSE
   )
 }
@@ -600,10 +614,28 @@ refresh_decay_showcase <- function(manifest_df, specs, reps, out_dir) {
   template_rds <- pick_decay_template_rds(manifest_df, out_dir)
   message(sprintf("[robustness] decay showcase refresh (%d specs, %d reps) from %s",
                   nrow(specs), reps, basename(template_rds)))
+  res0 <- readRDS(template_rds)
+  cfg0 <- res0$config
+  target_spatial_mean <- hawkes_exponential_spatial_mean(cfg0$HAWKES_ALPHA)
   bind_rows(lapply(seq_len(nrow(specs)), function(i) {
     spec <- specs[i, , drop = FALSE]
     message(sprintf("[robustness] decay showcase %d/%d %s",
                     i, nrow(specs), spec$decay_label))
+    spatial_kernel <- if ("sim_spatial_kernel" %in% names(spec)) {
+      as.character(spec$sim_spatial_kernel[[1]])
+    } else {
+      "exponential"
+    }
+    spatial_q <- if ("spatial_q" %in% names(spec)) as.numeric(spec$spatial_q[[1]]) else NA_real_
+    spatial_d <- NULL
+    if (identical(spatial_kernel, "power_law") && is.finite(target_spatial_mean) && is.finite(spatial_q)) {
+      if (isTRUE(as.logical(spec$match_spatial_mean[[1]]))) {
+        spatial_d <- hawkes_power_law_spatial_d_for_mean(target_spatial_mean, spatial_q)
+      } else {
+        # Fat-tailed: keep heavier tails and deliberately inflate mean distance.
+        spatial_d <- hawkes_power_law_spatial_d_for_mean(3 * target_spatial_mean, spatial_q)
+      }
+    }
     refresh_decay_for_spec(
       rds_path = template_rds,
       control_k = spec$control_k,
@@ -611,7 +643,10 @@ refresh_decay_showcase <- function(manifest_df, specs, reps, out_dir) {
       sim_kernel = spec$sim_kernel,
       decay_reps = reps,
       showcase_id = spec$showcase_id,
-      decay_label = spec$decay_label
+      decay_label = spec$decay_label,
+      sim_spatial_kernel = spatial_kernel,
+      spatial_q = if (is.finite(spatial_q)) spatial_q else NULL,
+      spatial_d = spatial_d
     )
   }))
 }
@@ -620,10 +655,24 @@ refresh_temporal_decay_showcase <- function(manifest_df, specs, reps, out_dir) {
   template_rds <- pick_decay_template_rds(manifest_df, out_dir)
   message(sprintf("[robustness] temporal decay showcase refresh (%d specs, %d reps) from %s",
                   nrow(specs), reps, basename(template_rds)))
+  res0 <- readRDS(template_rds)
+  cfg0 <- res0$config
+  target_temporal_mean <- hawkes_exponential_temporal_mean(cfg0$HAWKES_BETA)
   bind_rows(lapply(seq_len(nrow(specs)), function(i) {
     spec <- specs[i, , drop = FALSE]
     message(sprintf("[robustness] temporal decay showcase %d/%d %s",
                     i, nrow(specs), spec$decay_label))
+    power_p <- if ("power_p" %in% names(spec)) as.numeric(spec$power_p[[1]]) else NA_real_
+    power_c <- NULL
+    if (identical(as.character(spec$sim_kernel[[1]]), "power_law") &&
+        is.finite(target_temporal_mean) && is.finite(power_p) && power_p > 2) {
+      if (isTRUE(as.logical(spec$match_temporal_mean[[1]]))) {
+        power_c <- hawkes_power_law_c_for_mean(target_temporal_mean, power_p)
+      } else {
+        # Fat-tailed: keep heavier tails and deliberately inflate mean lag.
+        power_c <- hawkes_power_law_c_for_mean(3 * target_temporal_mean, power_p)
+      }
+    }
     refresh_temporal_decay_for_spec(
       rds_path = template_rds,
       control_k = spec$control_k,
@@ -631,7 +680,9 @@ refresh_temporal_decay_showcase <- function(manifest_df, specs, reps, out_dir) {
       sim_kernel = spec$sim_kernel,
       decay_reps = reps,
       showcase_id = spec$showcase_id,
-      decay_label = spec$decay_label
+      decay_label = spec$decay_label,
+      power_c = power_c,
+      power_p = if (is.finite(power_p)) power_p else NULL
     )
   }))
 }
@@ -954,17 +1005,17 @@ canonical_spatial_kernel_pair_levels <- function() {
 
 spatial_decay_showcase_label_levels <- function() {
   c(
-    "K_c=0.8, K_t=0.2 (exp)",
-    "K_c=0.8, K_t=0.5 (exp)",
-    "K_c=0.8, K_t=0.7 (exp)"
+    "Exponential spatial",
+    "Power-law spatial (mean-matched)",
+    "Fat-tailed spatial (larger mean distance)"
   )
 }
 
 temporal_decay_showcase_label_levels <- function() {
   c(
-    "K_c=0.8, K_t=0.2 (exp)",
-    "K_c=0.8, K_t=0.5 (exp)",
-    "K_c=0.8, K_t=0.2 (power-law)"
+    "Exponential temporal",
+    "Power-law temporal (mean-matched)",
+    "Fat-tailed temporal (larger mean lag)"
   )
 }
 
@@ -996,88 +1047,16 @@ make_decay_validation_plot <- function(showcase_df, decay_reps_used = NA_integer
     labs(
       x = "Distance from flipped event",
       y = "Mean |Delta N| per annulus",
-      color = "Scenario",
+      color = "Spatial kernel",
       title = "Forward-simulation spatial decay validation (true parameters)",
       subtitle = paste0(
-        "Single latent label flip; three exponential-kernel K-separation scenarios (spatial kernel shared). ",
+        "Single latent label flip at K=(0.8, 0.2). Exponential vs mean-matched power-law ",
+        "(same expected distance) vs fat-tailed power-law (larger mean distance). ",
         "Decay reps per scenario: ", reps_txt, "."
       )
     ) +
     theme_minimal() +
     theme(legend.position = "bottom")
-}
-
-prepare_decay_annulus_plot_df <- function(showcase_df, max_distance = 35) {
-  decay_plot_df <- prepare_decay_showcase_plot_df(showcase_df, max_distance = max_distance)
-  if (is.null(decay_plot_df) || nrow(decay_plot_df) < 1L) return(NULL)
-  out <- decay_plot_df %>%
-    dplyr::arrange(.data$decay_label, .data$d_mid) %>%
-    dplyr::group_by(.data$decay_label) %>%
-    dplyr::mutate(
-      r_inner = dplyr::if_else(
-        is.finite(.data$d_left),
-        pmax(0, as.numeric(.data$d_left)),
-        pmax(0, as.numeric(.data$d_mid) - 0.5)
-      ),
-      r_outer = dplyr::lead(.data$r_inner, default = NA_real_)
-    ) %>%
-    dplyr::ungroup()
-  out$r_outer <- ifelse(
-    is.finite(out$r_outer),
-    out$r_outer,
-    out$r_inner + pmax(1, stats::median(diff(sort(unique(out$r_inner))), na.rm = TRUE))
-  )
-  out <- out %>%
-    dplyr::filter(is.finite(.data$r_inner), is.finite(.data$r_outer), .data$r_outer > .data$r_inner) %>%
-    dplyr::mutate(
-      facet_label = sprintf("K[t]==%.1f", as.numeric(.data$treated_k)),
-      theta_min = 0,
-      theta_max = 2 * pi
-    )
-  if (nrow(out) < 1L) return(NULL)
-  out
-}
-
-make_decay_validation_annulus_plot <- function(showcase_df, decay_reps_used = NA_integer_) {
-  annulus_df <- prepare_decay_annulus_plot_df(showcase_df)
-  if (is.null(annulus_df) || nrow(annulus_df) < 1L) return(NULL)
-  reps_txt <- if (is.finite(decay_reps_used)) as.character(decay_reps_used) else "stored"
-  ggplot(
-    annulus_df,
-    aes(
-      xmin = .data$theta_min,
-      xmax = .data$theta_max,
-      ymin = .data$r_inner,
-      ymax = .data$r_outer,
-      fill = .data$mean_abs_delta
-    )
-  ) +
-    geom_rect(color = NA) +
-    coord_polar(theta = "x", start = 0, clip = "off") +
-    facet_wrap(~ .data$facet_label, nrow = 1, labeller = label_parsed) +
-    scale_fill_viridis_c(
-      option = "C",
-      direction = -1,
-      name = expression(mean~"|"*Delta*N*"|")
-    ) +
-    scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) +
-    labs(
-      title = "Spatial decay as concentric annuli around the flipped event",
-      subtitle = paste0(
-        "Three exponential-kernel K-separation scenarios (K_c=0.8); colour intensity fades with distance as |Delta N| decays. ",
-        "Decay reps per scenario: ", reps_txt, "."
-      )
-    ) +
-    theme_minimal() +
-    theme(
-      axis.title = element_blank(),
-      axis.text = element_blank(),
-      axis.ticks = element_blank(),
-      panel.grid.major = element_line(color = "grey90", linewidth = 0.2),
-      panel.grid.minor = element_blank(),
-      legend.position = "bottom",
-      strip.text = element_text(size = 11)
-    )
 }
 
 prepare_temporal_decay_showcase_plot_df <- function(showcase_df) {
@@ -1110,12 +1089,12 @@ make_temporal_decay_validation_plot <- function(showcase_df, decay_reps_used = N
     labs(
       x = "Lag since flipped event",
       y = "Mean |Delta N| per time bin",
-      color = "Scenario",
+      color = "Temporal kernel",
       title = "Forward-simulation temporal decay validation (true parameters)",
       subtitle = paste0(
-        "Single latent label flip on one event in a treated cell (control/treated K differ by scenario). ",
-        "Offspring counted by lag since flip time. Decay reps per scenario: ",
-        reps_txt, "."
+        "Single latent label flip at K=(0.8, 0.2). Exponential vs mean-matched power-law ",
+        "(same expected lag) vs fat-tailed power-law (larger mean lag). ",
+        "Decay reps per scenario: ", reps_txt, "."
       )
     ) +
     theme_minimal() +
@@ -1582,13 +1561,6 @@ if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
   decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_decay <- make_decay_validation_plot(decay_showcase_summary, decay_reps_used)
   plot_files$decay <- save_plot_pair(p_decay, "robustness_decay_validation", width = 8.5, height = 5.2)
-  p_decay_annuli <- make_decay_validation_annulus_plot(decay_showcase_summary, decay_reps_used)
-  plot_files$decay_annuli <- save_plot_pair(
-    p_decay_annuli,
-    "robustness_decay_validation_annuli",
-    width = 10.5,
-    height = 4.6
-  )
 }
 
 if (!is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_summary) > 0 &&
@@ -1622,7 +1594,6 @@ ROBUSTNESS_FIG_STEMS <- list(
   snr_label = "robustness_snr_scale_label_recovery",
   snr_support = "robustness_snr_scale_support_contrasts",
   decay_spatial = "robustness_decay_validation",
-  decay_spatial_annuli = "robustness_decay_validation_annuli",
   decay_temporal = "robustness_temporal_decay_validation"
 )
 
@@ -1825,15 +1796,13 @@ tex_lines <- c(
     "app:robustness-decay",
     c(
       "Assumption~\\ref{ass:G3} requires that a single latent label flip has localized influence on the intensity path. We validate this forward-simulation property directly under true Hawkes parameters, separate from the estimation experiments above. In each replicate we sample one post-treatment event in a treated cell, flip only its latent label (control $\\leftrightarrow$ treated), and simulate the two resulting catalogues under the same parameter values. Spatial decay is measured by the mean absolute count difference $|\\Delta N|$ in distance annuli around the flipped event; temporal decay uses the same flip but bins offspring by lag since the flip time.",
-      "Three exponential-kernel $K$-separation scenarios are shown in the spatial panel: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. The temporal panel overlays $K_t\\in\\{0.2,0.5\\}$ under exponential triggering with an additional power-law temporal kernel at $K=(0.8,0.2)$. \\Cref{fig:robustness-decay,fig:robustness-decay-annuli,fig:robustness-decay-temporal} confirm geometric decay in space and algebraic decay in time for the exponential specification, with slower temporal persistence under power-law triggering."
+      "Both panels fix $K=(0.8,0.2)$ and compare three kernels: exponential, a mean-matched power-law (same expected triggering distance or lag, heavier tails), and a deliberately fat-tailed power-law with larger mean range. \\Cref{fig:robustness-decay,fig:robustness-decay-temporal} confirm faster geometric decay under the exponential specification and slower persistence under power-law and fat-tailed kernels."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_spatial, "fig:robustness-decay",
-              "Forward-simulation spatial decay validation for three exponential-kernel $K$-separation scenarios: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. One event in a cell receives a latent label flip; curves show mean $|\\Delta N|$ per spatial annulus around the flip point."),
-      tex_fig(ROBUSTNESS_FIG_STEMS$decay_spatial_annuli, "fig:robustness-decay-annuli",
-              "Concentric-annulus view of the same spatial decay diagnostic, faceted by treated branching ratio $K_t\\in\\{0.2,0.5,0.7\\}$ at $K_c=0.8$. Ring colour encodes mean $|\\Delta N|$ and fades with distance from the flipped event."),
+              "Forward-simulation spatial decay validation at $K=(0.8,0.2)$ for exponential, mean-matched power-law, and fat-tailed spatial kernels. One event receives a latent label flip; curves show mean $|\\Delta N|$ per spatial annulus around the flip point."),
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_temporal, "fig:robustness-decay-temporal",
-              "Forward-simulation temporal decay validation for $K_c=0.8$ with $K_t\\in\\{0.2,0.5\\}$ (exponential) and $K_t=0.2$ (power-law temporal kernel). One event in a cell receives a latent label flip and curves show mean $|\\Delta N|$ per lag bin since the flip time.")
+              "Forward-simulation temporal decay validation at $K=(0.8,0.2)$ for exponential, mean-matched power-law, and fat-tailed temporal kernels. One event receives a latent label flip; curves show mean $|\\Delta N|$ per lag bin since the flip time.")
     )
   ),
   "",
