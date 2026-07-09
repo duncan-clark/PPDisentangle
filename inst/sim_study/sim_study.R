@@ -1567,6 +1567,11 @@ if (!is.null(results_df) && nrow(results_df) > 0) {
   log_msg("No valid ATE results (all tasks timed out or errored).")
 }
 
+all_nothing_dtaite_per_unit <- function(control_pp, treated_pp, n_units = partition$n) {
+  (as.numeric(treated_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(treated_pp$K))) -
+     as.numeric(control_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(control_pp$K)))) / n_units
+}
+
 TRUE_CTRL_TAU_I <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_I", "3")))
 if (!is.finite(TRUE_CTRL_TAU_I) || is.na(TRUE_CTRL_TAU_I) || TRUE_CTRL_TAU_I < 1L) TRUE_CTRL_TAU_I <- 3L
 TRUE_CTRL_TAU_SIMS <- suppressWarnings(as.integer(Sys.getenv("PP_TRUECTRL_TAU_SIMS", "5")))
@@ -1640,11 +1645,6 @@ expected_count_per_tile_hawkes <- function(z, control_pp, treated_pp) {
   control_rate <- as.numeric(control_pp$mu) / max(1e-8, 1 - as.numeric(control_pp$K))
   treated_rate <- as.numeric(treated_pp$mu) / max(1e-8, 1 - as.numeric(treated_pp$K))
   TIME_INT * (n_control * control_rate + n_treated * treated_rate) / partition$n
-}
-
-all_nothing_dtaite_per_unit <- function(control_pp, treated_pp, n_units = partition$n) {
-  (as.numeric(treated_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(treated_pp$K))) -
-     as.numeric(control_pp$mu) * TIME_INT * (1 / max(1e-8, 1 - as.numeric(control_pp$K)))) / n_units
 }
 
 make_support_contrasts <- function() {
