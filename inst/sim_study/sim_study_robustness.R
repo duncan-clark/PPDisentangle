@@ -37,7 +37,7 @@ ROBUSTNESS_CONTROL_K <- 0.8
 ROBUSTNESS_TREATED_K_DEFAULT <- 0.2
 
 # SNR grid: background-rate multiplier with mu recalibrated toward target_points.
-DEFAULT_MU_SCALES <- c(0.5, 1, 1.5)
+DEFAULT_MU_SCALES <- c(0.25, 0.5, 1, 1.5, 2)
 DEFAULT_MU_SCALES_STR <- paste(DEFAULT_MU_SCALES, collapse = ",")
 format_mu_scale_grid <- function(scales = DEFAULT_MU_SCALES, for_tex = FALSE) {
   vals <- vapply(scales, function(x) {
@@ -336,24 +336,71 @@ load_label_summary_from_manifest <- function(manifest_df, out_dir) {
     left_join(manifest_df, by = "scenario_id")
 }
 
-rebuild_class_metrics_from_rds <- function(res) {
-  if (!is.null(res$class_metrics) && nrow(res$class_metrics) > 0L) {
-    return(res$class_metrics)
-  }
+# Label-recovery plots use a looser high-mu guard than ATE reporting.
+# Spatial power-law fits often inflate control mu for oracle/naive above the
+# default 2x threshold even when labels themselves are well-defined.
+LABEL_MU_FAIL_MULTIPLIER <- {
+  raw <- suppressWarnings(as.numeric(Sys.getenv("PP_LABEL_MU_FAIL_MULTIPLIER", "5")))
+  if (!is.finite(raw) || raw < 1) 5 else raw
+}
+
+rebuild_class_metrics_from_rds <- function(res, mu_fail_multiplier = LABEL_MU_FAIL_MULTIPLIER) {
   lr <- res$label_recovery_prefilter
+  if (is.null(lr) || nrow(lr) < 1L) {
+    # Fall back to stored post-filter metrics only if prefilter is unavailable.
+    if (!is.null(res$class_metrics) && nrow(res$class_metrics) > 0L) {
+      return(res$class_metrics)
+    }
+    return(NULL)
+  }
+
   fs <- res$fit_status
-  if (is.null(lr) || nrow(lr) < 1L || is.null(fs) || nrow(fs) < 1L) return(NULL)
+  true_mu <- NA_real_
+  cfg <- res$config
+  if (!is.null(cfg)) {
+    true_mu <- suppressWarnings(as.numeric(cfg$TRUE_MU %||% cfg$true_mu %||% NA_real_))
+    if (!is.finite(true_mu) && !is.null(cfg$hawkes_par_1$mu)) {
+      true_mu <- suppressWarnings(as.numeric(cfg$hawkes_par_1$mu))
+    }
+  }
+  mu_mult <- suppressWarnings(as.numeric(mu_fail_multiplier))
+  if (!is.finite(mu_mult) || mu_mult < 1) mu_mult <- 5
+
   lr_kept <- lapply(unique(lr$method), function(method_nm) {
     fit_label <- if (identical(method_nm, "SEM_adaptive")) "SEM_full" else method_nm
-    kept_sims <- fs %>%
-      filter(.data$labelling == fit_label, .data$include_result) %>%
-      pull(.data$sim_id)
+    method_fs <- if (!is.null(fs) && nrow(fs) > 0L) {
+      fs %>% filter(.data$labelling == fit_label)
+    } else {
+      NULL
+    }
+    if (is.null(method_fs) || nrow(method_fs) < 1L) {
+      return(lr %>% filter(.data$method == method_nm))
+    }
+
+    keep_mask <- rep(TRUE, nrow(method_fs))
+    if ("crazy_fit" %in% names(method_fs)) {
+      crazy <- method_fs$crazy_fit
+      crazy[is.na(crazy)] <- FALSE
+      keep_mask <- keep_mask & !crazy
+    }
+    if (is.finite(true_mu) && all(c("control_mu", "treated_mu") %in% names(method_fs))) {
+      thr <- mu_mult * true_mu
+      mu_ok <- is.finite(method_fs$control_mu) & is.finite(method_fs$treated_mu) &
+        method_fs$control_mu <= thr & method_fs$treated_mu <= thr
+      keep_mask <- keep_mask & mu_ok
+    } else if ("include_result" %in% names(method_fs)) {
+      incl <- method_fs$include_result
+      incl[is.na(incl)] <- FALSE
+      keep_mask <- keep_mask & incl
+    }
+    kept_sims <- unique(method_fs$sim_id[keep_mask])
     if (length(kept_sims) < 1L) return(NULL)
     lr %>% filter(.data$method == method_nm, .data$sim_id %in% kept_sims)
   })
   lr_all <- bind_rows(Filter(Negate(is.null), lr_kept))
   if (nrow(lr_all) < 1L) return(NULL)
   lr_all %>%
+    mutate(method = normalize_labelling_method(.data$method)) %>%
     group_by(.data$method) %>%
     summarize(
       n_kept = n(),
@@ -367,7 +414,7 @@ rebuild_class_metrics_from_rds <- function(res) {
     )
 }
 
-rebuild_support_contrast_summary_from_rds <- function(res) {
+rebuild_support_contrast_summary_from_rds <- function(res, mu_fail_multiplier = LABEL_MU_FAIL_MULTIPLIER) {
   cfg <- res$config
   if (is.null(cfg) || is.null(cfg$hawkes_par_1) || is.null(cfg$hawkes_par_2)) return(NULL)
   ctrl_true <- cfg$hawkes_par_1
@@ -377,42 +424,67 @@ rebuild_support_contrast_summary_from_rds <- function(res) {
   denom <- r_c_true - r_t_true
   if (!is.finite(denom) || abs(denom) < 1e-8) return(NULL)
 
-  row_chunks <- list()
   global_ref <- if (!is.null(res$all_nothing_ATE)) res$all_nothing_ATE else NA_real_
-
-  tc <- res$results_df_true_control
-  if (!is.null(tc) && nrow(tc) > 0L && is.finite(global_ref)) {
-    row_chunks[[length(row_chunks) + 1L]] <- tc %>%
-      mutate(
-        psi_truth = global_ref,
-        psi_estimate = .data$all_nothing_true_control,
-        contrast_family = "global_1_0"
-      )
-  }
-
-  sc <- res$support_contrast_df
+  specs <- res$support_contrast_specs
   rf <- res$results_flat
-  if (!is.null(sc) && nrow(sc) > 0L && !is.null(rf) && length(rf) > 0L) {
-    other <- sc %>% filter(.data$contrast_family != "global_1_0")
-    if (nrow(other) > 0L) {
-      r_t_fit <- vapply(other$task_idx, function(k) {
-        tp <- if (k >= 1L && k <= length(rf)) rf[[k]]$treated_pp else NULL
-        if (is.null(tp)) return(NA_real_)
-        as.numeric(tp$mu) / max(1e-8, 1 - as.numeric(tp$K))
-      }, numeric(1))
-      row_chunks[[length(row_chunks) + 1L]] <- other %>%
-        mutate(
-          r_t_fit = r_t_fit,
-          psi_estimate = .data$psi_truth * (r_c_true - .data$r_t_fit) / denom
-        )
-    }
-  }
+  tasks <- res$tasks
+  fs <- res$fit_status
+  if (is.null(rf) || length(rf) < 1L || is.null(tasks) || length(tasks) < 1L) return(NULL)
+  if (is.null(specs) || nrow(specs) < 1L) return(NULL)
 
-  df <- bind_rows(row_chunks)
+  true_mu <- suppressWarnings(as.numeric(cfg$TRUE_MU %||% cfg$true_mu %||% ctrl_true$mu))
+  mu_mult <- suppressWarnings(as.numeric(mu_fail_multiplier))
+  if (!is.finite(mu_mult) || mu_mult < 1) mu_mult <- 5
+  thr <- if (is.finite(true_mu)) mu_mult * true_mu else Inf
+
+  task_ok <- vapply(seq_along(tasks), function(k) {
+    if (!is.null(fs) && nrow(fs) > 0L && "task_idx" %in% names(fs)) {
+      row <- fs[fs$task_idx == k, , drop = FALSE]
+      if (nrow(row) >= 1L) {
+        if ("crazy_fit" %in% names(row) && isTRUE(row$crazy_fit[[1]])) return(FALSE)
+        ctrl_mu <- suppressWarnings(as.numeric(row$control_mu[[1]]))
+        treat_mu <- suppressWarnings(as.numeric(row$treated_mu[[1]]))
+        if (!is.finite(ctrl_mu) || !is.finite(treat_mu)) return(FALSE)
+        return(ctrl_mu <= thr && treat_mu <= thr)
+      }
+    }
+    r <- rf[[k]]
+    if (is.null(r) || is.null(r$treated_pp) || is.null(r$control_pp)) return(FALSE)
+    ctrl_mu <- suppressWarnings(as.numeric(r$control_pp$mu))
+    treat_mu <- suppressWarnings(as.numeric(r$treated_pp$mu))
+    if (!is.finite(ctrl_mu) || !is.finite(treat_mu)) return(FALSE)
+    ctrl_mu <= thr && treat_mu <= thr
+  }, logical(1))
+
+  kept_idx <- which(task_ok)
+  if (length(kept_idx) < 1L) return(NULL)
+
+  # Productivity-rescaled plug-in contrasts under true control + fitted treated.
+  # Skip SEM_adaptive (SEM_full is the reported SEM labelling).
+  row_chunks <- lapply(kept_idx, function(k) {
+    lab <- tasks[[k]]$labelling_name
+    if (identical(lab, "SEM_adaptive")) return(NULL)
+    r <- rf[[k]]
+    tp <- r$treated_pp
+    if (is.null(tp)) return(NULL)
+    r_t_fit <- as.numeric(tp$mu) / max(1e-8, 1 - as.numeric(tp$K))
+    if (!is.finite(r_t_fit)) return(NULL)
+    scale <- (r_c_true - r_t_fit) / denom
+    data.frame(
+      labelling = lab,
+      contrast_family = specs$contrast_family,
+      psi_truth = specs$psi_truth,
+      psi_estimate = specs$psi_truth * scale,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  df <- bind_rows(Filter(Negate(is.null), row_chunks))
   if (is.null(df) || nrow(df) < 1L) return(NULL)
 
   df %>%
     mutate(
+      labelling = normalize_labelling_method(.data$labelling),
       abs_error = abs(.data$psi_estimate - .data$psi_truth),
       pct_error = ifelse(
         is.finite(.data$psi_truth) & abs(.data$psi_truth) > 1e-8,
@@ -594,15 +666,78 @@ normalize_labelling_method <- function(x) {
   x
 }
 
+collapse_sem_labelling_rows <- function(df, label_col = NULL) {
+  if (is.null(df) || nrow(df) < 1L) return(df)
+  if (is.null(label_col)) label_col <- safe_label_col(df)
+  if (is.null(label_col) || !(label_col %in% names(df))) return(df)
+
+  key_cols <- intersect(
+    c(
+      label_col, "scenario_id", "contrast_family", "scenario_family", "control_k",
+      "treated_k", "k_delta", "mu_scale", "sim_kernel", "fit_kernel",
+      "sim_spatial_kernel", "fit_spatial_kernel", "treatment_assignment", "target_points"
+    ),
+    names(df)
+  )
+  if (length(key_cols) < 1L) return(df)
+
+  out <- df %>%
+    mutate(!!label_col := normalize_labelling_method(.data[[label_col]]))
+  if (nrow(out) == nrow(dplyr::distinct(out, dplyr::across(dplyr::all_of(key_cols))))) {
+    out[[label_col]] <- factor(out[[label_col]], levels = core_labelling_levels)
+    return(out)
+  }
+
+  count_col <- if ("n" %in% names(out)) {
+    "n"
+  } else if ("n_kept" %in% names(out)) {
+    "n_kept"
+  } else {
+    NULL
+  }
+  mean_cols <- intersect(
+    c(
+      "mean_accuracy", "mean_balanced_accuracy", "mean_precision_treated",
+      "mean_recall_treated", "mean_specificity_control", "mean_f1_treated",
+      "mean_psi_estimate", "mean_psi_truth", "mean_abs_error", "mean_pct_error",
+      "all_nothing_theory", "tau_1_estim", "ATE_total", "ATE_treatment",
+      "ATE_spillover", "ATE_naive", "mean_all_nothing_true_control",
+      "tau_1_true_control", "true_all_nothing_ATE", "true_tau_1"
+    ),
+    names(out)
+  )
+  passthrough_cols <- setdiff(
+    names(out),
+    c(key_cols, count_col, mean_cols)
+  )
+
+  collapsed <- out %>%
+    group_by(dplyr::across(dplyr::all_of(key_cols))) %>%
+    summarize(
+      dplyr::across(dplyr::any_of(count_col), ~ sum(.x, na.rm = TRUE)),
+      dplyr::across(dplyr::any_of(mean_cols), ~ {
+        if (!is.null(count_col) && count_col %in% names(cur_data_all())) {
+          w <- cur_data_all()[[count_col]]
+          if (sum(w, na.rm = TRUE) > 0) {
+            return(stats::weighted.mean(.x, w, na.rm = TRUE))
+          }
+        }
+        mean(.x, na.rm = TRUE)
+      }),
+      dplyr::across(dplyr::any_of(passthrough_cols), ~ dplyr::first(.x)),
+      .groups = "drop"
+    )
+  collapsed[[label_col]] <- factor(collapsed[[label_col]], levels = core_labelling_levels)
+  collapsed
+}
+
 subset_core_labelling <- function(df, label_col = NULL) {
   if (is.null(df) || nrow(df) < 1L) return(df[0, , drop = FALSE])
   if (is.null(label_col)) label_col <- safe_label_col(df)
   if (is.null(label_col) || !(label_col %in% names(df))) return(df[0, , drop = FALSE])
   out <- df %>% filter(.data[[label_col]] %in% core_labelling_ids)
   if (nrow(out) < 1L) return(out)
-  out[[label_col]] <- normalize_labelling_method(out[[label_col]])
-  out[[label_col]] <- factor(out[[label_col]], levels = core_labelling_levels)
-  out
+  collapse_sem_labelling_rows(out, label_col)
 }
 
 apply_core_labelling_subset <- function(df) {
@@ -682,7 +817,10 @@ if ((is.null(decay_temporal_showcase_summary) || nrow(decay_temporal_showcase_su
 label_summary <- if (!is.null(replot_basename)) {
   rebuilt <- load_label_summary_from_manifest(manifest, out_dir)
   if (!is.null(rebuilt) && nrow(rebuilt) > 0L) {
-    message("[robustness] label recovery rebuilt from per-scenario RDS")
+    message(sprintf(
+      "[robustness] label recovery rebuilt from per-scenario RDS (label mu filter=%.1fx)",
+      LABEL_MU_FAIL_MULTIPLIER
+    ))
     rebuilt
   } else {
     read_summary_csv("_label_recovery_summary.csv")
@@ -694,7 +832,10 @@ label_summary <- if (!is.null(replot_basename)) {
 support_summary <- if (!is.null(replot_basename)) {
   rebuilt <- load_support_summary_from_manifest(manifest, out_dir)
   if (!is.null(rebuilt) && nrow(rebuilt) > 0L) {
-    message("[robustness] support contrast summary rebuilt (true control parameters)")
+    message(sprintf(
+      "[robustness] support contrast summary rebuilt (true control; label mu filter=%.1fx)",
+      LABEL_MU_FAIL_MULTIPLIER
+    ))
     rebuilt
   } else {
     read_summary_csv("_support_contrast_summary.csv")
@@ -866,6 +1007,79 @@ make_decay_validation_plot <- function(showcase_df, decay_reps_used = NA_integer
     theme(legend.position = "bottom")
 }
 
+prepare_decay_annulus_plot_df <- function(showcase_df, max_distance = 35) {
+  decay_plot_df <- prepare_decay_showcase_plot_df(showcase_df, max_distance = max_distance)
+  if (is.null(decay_plot_df) || nrow(decay_plot_df) < 1L) return(NULL)
+  out <- decay_plot_df %>%
+    dplyr::arrange(.data$decay_label, .data$d_mid) %>%
+    dplyr::group_by(.data$decay_label) %>%
+    dplyr::mutate(
+      r_inner = dplyr::if_else(
+        is.finite(.data$d_left),
+        pmax(0, as.numeric(.data$d_left)),
+        pmax(0, as.numeric(.data$d_mid) - 0.5)
+      ),
+      r_outer = dplyr::lead(.data$r_inner, default = NA_real_)
+    ) %>%
+    dplyr::ungroup()
+  out$r_outer <- ifelse(
+    is.finite(out$r_outer),
+    out$r_outer,
+    out$r_inner + pmax(1, stats::median(diff(sort(unique(out$r_inner))), na.rm = TRUE))
+  )
+  out <- out %>%
+    dplyr::filter(is.finite(.data$r_inner), is.finite(.data$r_outer), .data$r_outer > .data$r_inner) %>%
+    dplyr::mutate(
+      facet_label = sprintf("K[t]==%.1f", as.numeric(.data$treated_k)),
+      theta_min = 0,
+      theta_max = 2 * pi
+    )
+  if (nrow(out) < 1L) return(NULL)
+  out
+}
+
+make_decay_validation_annulus_plot <- function(showcase_df, decay_reps_used = NA_integer_) {
+  annulus_df <- prepare_decay_annulus_plot_df(showcase_df)
+  if (is.null(annulus_df) || nrow(annulus_df) < 1L) return(NULL)
+  reps_txt <- if (is.finite(decay_reps_used)) as.character(decay_reps_used) else "stored"
+  ggplot(
+    annulus_df,
+    aes(
+      xmin = .data$theta_min,
+      xmax = .data$theta_max,
+      ymin = .data$r_inner,
+      ymax = .data$r_outer,
+      fill = .data$mean_abs_delta
+    )
+  ) +
+    geom_rect(color = NA) +
+    coord_polar(theta = "x", start = 0, clip = "off") +
+    facet_wrap(~ .data$facet_label, nrow = 1, labeller = label_parsed) +
+    scale_fill_viridis_c(
+      option = "C",
+      direction = -1,
+      name = expression(mean~"|"*Delta*N*"|")
+    ) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) +
+    labs(
+      title = "Spatial decay as concentric annuli around the flipped event",
+      subtitle = paste0(
+        "Three exponential-kernel K-separation scenarios (K_c=0.8); colour intensity fades with distance as |Delta N| decays. ",
+        "Decay reps per scenario: ", reps_txt, "."
+      )
+    ) +
+    theme_minimal() +
+    theme(
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid.major = element_line(color = "grey90", linewidth = 0.2),
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      strip.text = element_text(size = 11)
+    )
+}
+
 prepare_temporal_decay_showcase_plot_df <- function(showcase_df) {
   if (is.null(showcase_df) || nrow(showcase_df) < 1L) return(NULL)
   x_col <- if ("t_mid" %in% names(showcase_df)) "t_mid" else "d_mid"
@@ -995,9 +1209,9 @@ make_spatial_kernel_mismatch_bar_plot <- function(df, y_col, lbl_col, title, sub
 plot_files <- list()
 if (!is.null(label_summary) && nrow(label_summary) > 0) {
   lbl_col <- safe_label_col(label_summary)
-  acc_col <- safe_metric_col(label_summary, c("mean_balanced_accuracy", "mean_accuracy", "accuracy"))
+  acc_col <- safe_metric_col(label_summary, c("mean_accuracy", "mean_balanced_accuracy", "accuracy"))
   if (!is.null(lbl_col) && !is.null(acc_col)) {
-    ylab_acc <- gsub("_", " ", acc_col)
+    ylab_acc <- "Mean raw accuracy"
     plot_files$k_separation_label_recovery <- save_plot_pair(
       make_k_separation_line_plot(
         label_summary, "k_delta", acc_col, lbl_col,
@@ -1158,9 +1372,35 @@ make_support_plot <- function(df, family, title, stem, subtitle, keep_kernel_pai
 prepare_k_separation_support_line_df <- function(df) {
   if (is.null(df) || nrow(df) < 1L) return(NULL)
   lbl_col <- safe_label_col(df)
-  if (is.null(lbl_col) || !"k_delta" %in% names(df) || !"mean_abs_error" %in% names(df)) return(NULL)
+  if (is.null(lbl_col) || !"k_delta" %in% names(df)) return(NULL)
   out <- df %>%
-    filter(.data$scenario_family == "k_separation", is.finite(.data$mean_abs_error))
+    filter(.data$scenario_family == "k_separation")
+  if (nrow(out) < 1L) return(NULL)
+  if (!"mean_pct_error" %in% names(out)) out$mean_pct_error <- NA_real_
+  global_ref <- out %>%
+    filter(.data$contrast_family == "global_1_0") %>%
+    distinct(.data$scenario_id, .data$mean_psi_truth) %>%
+    rename(global_ate_truth = .data$mean_psi_truth)
+  out <- out %>%
+    left_join(global_ref, by = "scenario_id") %>%
+    mutate(
+      mean_pct_error = ifelse(
+        is.finite(.data$mean_pct_error),
+        .data$mean_pct_error,
+        ifelse(
+          is.finite(.data$mean_psi_truth) & abs(.data$mean_psi_truth) > 1e-8,
+          100 * .data$mean_abs_error / abs(.data$mean_psi_truth),
+          ifelse(
+            .data$contrast_family == "single_cell_flip" &
+              is.finite(.data$global_ate_truth) & abs(.data$global_ate_truth) > 1e-8,
+            100 * .data$mean_abs_error / abs(.data$global_ate_truth),
+            NA_real_
+          )
+        )
+      )
+    ) %>%
+    select(-.data$global_ate_truth) %>%
+    filter(is.finite(.data$mean_pct_error))
   if (nrow(out) < 1L) return(NULL)
   out$contrast_display <- support_contrast_display_labels[out$contrast_family]
   out$contrast_display <- factor(
@@ -1181,7 +1421,7 @@ make_k_separation_support_line_plot <- function(df, title, stem, subtitle) {
     support_plot_df,
     aes(
       x = .data$k_delta,
-      y = .data$mean_abs_error,
+      y = .data$mean_pct_error,
       color = .data[[lbl_col]],
       group = .data[[lbl_col]]
     )
@@ -1191,7 +1431,7 @@ make_k_separation_support_line_plot <- function(df, title, stem, subtitle) {
     facet_wrap(~ .data$contrast_display, scales = "free_y") +
     labs(
       x = expression(abs(K[treated] - K[control])),
-      y = "Mean absolute error",
+      y = "Mean percentage error (%)",
       color = "Labelling",
       title = title,
       subtitle = subtitle
@@ -1307,7 +1547,7 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       support_summary,
       title = "K-separation: off-support allocation contrasts",
       stem = "robustness_k_separation_support_contrasts",
-      subtitle = "Mean absolute error in plug-in contrast estimates vs K separation; all estimates use true control parameters with fitted treated parameters. Colored lines are oracle, naive, and SEM labellings; facet y-axes are free because contrast magnitudes differ."
+      subtitle = "Mean percentage error in plug-in contrast estimates vs K separation; all estimates use true control parameters with fitted treated parameters. Colored lines are oracle, naive, and SEM labellings; facet y-axes are free because contrast magnitudes differ."
     )
     plot_files$snr_scale_support <- make_snr_scale_support_plot(
       support_summary,
@@ -1342,6 +1582,13 @@ if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
   decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_decay <- make_decay_validation_plot(decay_showcase_summary, decay_reps_used)
   plot_files$decay <- save_plot_pair(p_decay, "robustness_decay_validation", width = 8.5, height = 5.2)
+  p_decay_annuli <- make_decay_validation_annulus_plot(decay_showcase_summary, decay_reps_used)
+  plot_files$decay_annuli <- save_plot_pair(
+    p_decay_annuli,
+    "robustness_decay_validation_annuli",
+    width = 10.5,
+    height = 4.6
+  )
 }
 
 if (!is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_summary) > 0 &&
@@ -1375,6 +1622,7 @@ ROBUSTNESS_FIG_STEMS <- list(
   snr_label = "robustness_snr_scale_label_recovery",
   snr_support = "robustness_snr_scale_support_contrasts",
   decay_spatial = "robustness_decay_validation",
+  decay_spatial_annuli = "robustness_decay_validation_annuli",
   decay_temporal = "robustness_temporal_decay_validation"
 )
 
@@ -1466,7 +1714,7 @@ tex_lines <- c(
   "",
   "The main simulation in \\cref{sec:simulation_study} uses one baseline parameterisation---control $K_c=0.8$, treated $K_t=0.2$---and random treatment assignment. This subsection reports a structured robustness suite designed around the finite-sample assumptions in \\cref{sec:finite-sample-theory} and the identification discussion in \\cref{sec:identification}. Unless stated otherwise, all scenarios use the same window $[0,100]\\times[0,100]$, treatment time $t^\\star=10$, end time $T=110$, a $10\\times10$ cell tessellation, exponential temporal triggering with $(\\alpha,\\beta)=(0.01,10)$, and exponential models at fit time. Treatment lowers the branching ratio relative to control and is assigned to $50\\%$ of cells.",
   "",
-  "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: balanced accuracy of the oracle, naive, and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean absolute error in plug-in expected-count contrasts under (i) flipping a single cell relative to the observed assignment and (ii) a random $50\\%$ relabelling of cells, plus (iii) the all-or-nothing DTAITE. All contrast estimates fix control parameters at truth and use fitted treated parameters from each labelling, matching \\cref{fig:simulation-results-true-control}. The first two contrasts are local perturbations of the observed design; the third probes extrapolation to an unsupported allocation (SEM fits with explosive parameter estimates are excluded throughout).",
+  "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: raw accuracy of the oracle, naive, and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean percentage error in plug-in expected-count contrasts under (i) flipping a single cell relative to the observed assignment and (ii) a random $50\\%$ relabelling of cells, plus (iii) the all-or-nothing DTAITE. All contrast estimates fix control parameters at truth and use fitted treated parameters from each labelling, matching \\cref{fig:simulation-results-true-control}. The first two contrasts are local perturbations of the observed design; the third probes extrapolation to an unsupported allocation (SEM fits with explosive parameter estimates are excluded throughout).",
   "",
   "The branching-ratio grid, temporal and spatial kernel misspecification checks, assignment designs, signal-to-noise scalings, and single-flip decay diagnostics below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Figures are reported in \\cref{app:robustness-k-separation,app:robustness-kernel,app:robustness-spatial-kernel,app:robustness-high-count,app:robustness-snr,app:robustness-decay}.",
   "",
@@ -1497,13 +1745,13 @@ tex_lines <- c(
     "app:robustness-k-separation",
     c(
       "The main study in \\cref{sec:simulation_study} fixes a large separation between control and treated branching ratios, with treatment lowering the branching ratio from $K_c=0.8$ to $K_t=0.2$. Here we stress-test performance as that separation shrinks. Throughout, control and treated processes share $(\\alpha,\\beta)=(0.01,10)$ and exponential temporal triggering; treatment is assigned independently to $50\\%$ of cells. The control branching ratio is fixed at $K_c=0.8$ and the treated ratio varies over $K_t\\in\\{0.1,0.2,0.3,0.4,0.5,0.6,0.7\\}$, always below control. For each pair $(K_c,K_t)$ the background rate $\\mu$ is recalibrated so the expected post-treatment point count remains fixed; small $K_c-K_t$ therefore isolates weak component separation at comparable event abundance.",
-      "\\Cref{fig:robustness-k-separation-label,fig:robustness-k-separation-support} report balanced labelling accuracy and mean absolute error in three off-support allocation contrasts: a single-cell flip from the observed assignment, a random $50\\%$ relabelling of cells, and the all-or-nothing DTAITE. All contrast estimates use true control parameters with fitted treated parameters (as in \\cref{fig:simulation-results-true-control}). These diagnostics are directly motivated by the finite-sample theory: label recovery feeds the E-step surrogates in Assumptions~\\ref{ass:G4}--\\ref{ass:G8}, while off-support contrasts probe the regime-stable extrapolations in \\cref{sec:identification}."
+      "\\Cref{fig:robustness-k-separation-label,fig:robustness-k-separation-support} report raw labelling accuracy and mean percentage error in three off-support allocation contrasts: a single-cell flip from the observed assignment, a random $50\\%$ relabelling of cells, and the all-or-nothing DTAITE. All contrast estimates use true control parameters with fitted treated parameters (as in \\cref{fig:simulation-results-true-control}). These diagnostics are directly motivated by the finite-sample theory: label recovery feeds the E-step surrogates in Assumptions~\\ref{ass:G4}--\\ref{ass:G8}, while off-support contrasts probe the regime-stable extrapolations in \\cref{sec:identification}."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$k_separation_label, "fig:robustness-k-separation-label",
               "K-separation sensitivity for label recovery. Control $K=0.8$; treated $K \\in \\{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7\\}$ with treatment lowering $K$; $\\mu$ is calibrated to hold expected point count fixed."),
       tex_fig(ROBUSTNESS_FIG_STEMS$k_separation_support, "fig:robustness-k-separation-support",
-              "K-separation off-support allocation contrast accuracy (mean absolute error) vs $|K_{\\mathrm{treated}}-K_{\\mathrm{control}}|$, faceted by contrast type with free $y$-axes. All estimates use true control parameters with fitted treated parameters. Colored lines are oracle, naive, and SEM labelling.")
+              "K-separation off-support allocation contrast accuracy (mean percentage error) vs $|K_{\\mathrm{treated}}-K_{\\mathrm{control}}|$, faceted by contrast type with free $y$-axes. All estimates use true control parameters with fitted treated parameters. Colored lines are oracle, naive, and SEM labelling.")
     )
   ),
   tex_subsubsection(
@@ -1541,7 +1789,7 @@ tex_lines <- c(
     "app:robustness-high-count",
     c(
       "The baseline design randomises treated cells. Many applications instead concentrate treatment on historically active locations---for example, when a policy targets high-activity areas while the intervention reduces subsequent productivity. To mimic this structure, we simulate a reference pre-treatment catalogue from the control Hawkes law on $[0,t^\\star]$, count points per cell, and assign treatment to the $50\\%$ of cells with the largest reference counts. The post-treatment law uses $K_c=0.8$ and $K_t=0.2$, so treated cells are less self-exciting than controls even though they were selected for prior activity.",
-      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-support} summarise labelling accuracy and off-support allocation contrast accuracy under this assignment mechanism, including the all-or-nothing DTAITE."
+      "This scenario is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. \\Cref{fig:robustness-high-count-label,fig:robustness-high-count-support} summarise raw labelling accuracy and off-support allocation contrast accuracy under this assignment mechanism, including the all-or-nothing DTAITE."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_label, "fig:robustness-high-count-label",
@@ -1577,11 +1825,13 @@ tex_lines <- c(
     "app:robustness-decay",
     c(
       "Assumption~\\ref{ass:G3} requires that a single latent label flip has localized influence on the intensity path. We validate this forward-simulation property directly under true Hawkes parameters, separate from the estimation experiments above. In each replicate we sample one post-treatment event in a treated cell, flip only its latent label (control $\\leftrightarrow$ treated), and simulate the two resulting catalogues under the same parameter values. Spatial decay is measured by the mean absolute count difference $|\\Delta N|$ in distance annuli around the flipped event; temporal decay uses the same flip but bins offspring by lag since the flip time.",
-      "Three exponential-kernel $K$-separation scenarios are shown in the spatial panel: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. The temporal panel overlays $K_t\\in\\{0.2,0.5\\}$ under exponential triggering with an additional power-law temporal kernel at $K=(0.8,0.2)$. \\Cref{fig:robustness-decay,fig:robustness-decay-temporal} confirm geometric decay in space and algebraic decay in time for the exponential specification, with slower temporal persistence under power-law triggering."
+      "Three exponential-kernel $K$-separation scenarios are shown in the spatial panel: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. The temporal panel overlays $K_t\\in\\{0.2,0.5\\}$ under exponential triggering with an additional power-law temporal kernel at $K=(0.8,0.2)$. \\Cref{fig:robustness-decay,fig:robustness-decay-annuli,fig:robustness-decay-temporal} confirm geometric decay in space and algebraic decay in time for the exponential specification, with slower temporal persistence under power-law triggering."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_spatial, "fig:robustness-decay",
               "Forward-simulation spatial decay validation for three exponential-kernel $K$-separation scenarios: $K_c=0.8$ with $K_t\\in\\{0.2,0.5,0.7\\}$. One event in a cell receives a latent label flip; curves show mean $|\\Delta N|$ per spatial annulus around the flip point."),
+      tex_fig(ROBUSTNESS_FIG_STEMS$decay_spatial_annuli, "fig:robustness-decay-annuli",
+              "Concentric-annulus view of the same spatial decay diagnostic, faceted by treated branching ratio $K_t\\in\\{0.2,0.5,0.7\\}$ at $K_c=0.8$. Ring colour encodes mean $|\\Delta N|$ and fades with distance from the flipped event."),
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_temporal, "fig:robustness-decay-temporal",
               "Forward-simulation temporal decay validation for $K_c=0.8$ with $K_t\\in\\{0.2,0.5\\}$ (exponential) and $K_t=0.2$ (power-law temporal kernel). One event in a cell receives a latent label flip and curves show mean $|\\Delta N|$ per lag bin since the flip time.")
     )
