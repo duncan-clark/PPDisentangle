@@ -129,6 +129,7 @@ Companion data archive for the PPDisentangle software repository.
 | Component | Path | Role |
 |-----------|------|------|
 | Main simulation | `sim_study/paper/main_5228509/` | Paper simulation figures |
+| Illustrative realisation | `.../simulated_hawkes_hawkes_process.pdf` | `fig:pp_realiz` |
 | Robustness appendix | `sim_study/paper/robustness_7568933/` | Appendix robustness figures |
 | Oklahoma application | `oklahoma/for_paper.rds` | Application figures/tables |
 
@@ -142,12 +143,13 @@ PPDisentangle-output/
       main_5228509/
         time_sweep_5228509_summary_FOR_PAPER.rds
         time_sweep_5228509_tmp*.rds
+        simulated_hawkes_hawkes_process.pdf
       robustness_7568933/
         robustness_7568933_*.rds
         robustness_7568933_*_summary.csv
         robustness_7568933_manifest.csv
     generated/
-      figures/
+      figures/   # results_* + simulated_hawkes_*.pdf
       robustness/figures/
       robustness/simulation_robustness_appendix.tex
   oklahoma/
