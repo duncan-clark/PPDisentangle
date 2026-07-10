@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 #
 # Builds publication boxplots + optional parameter tables from the time-sweep summary.
-# Default input: ../PPDisentangle-output/sim_study/time_sweep_5228509_summary.rds
+# Default input: ../PPDisentangle-output/sim_study/paper/main_5228509/time_sweep_5228509_summary_FOR_PAPER.rds
 # Default outputs:
 #   ../PPDisentangle-output/sim_study/generated/figures/*.pdf|.png
 #   ../PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
@@ -18,8 +18,10 @@ suppressPackageStartupMessages({
 # ---------------------------------------------------------------------
 DEFAULT_TARGET_MULTIPLIERS <- c(0.1, 0.5, 1.0)
 DEFAULT_Y_QUANTILES <- c(0.02, 0.98)  # for robust y-limits
-# Default summary from time sweep (written under PPDisentangle-output/sim_study/ by the sweep pipeline)
-DEFAULT_SUMMARY_RDS <- "time_sweep_5228509_summary.rds"
+# Default summary from time sweep (archived under sim_study/paper/main_5228509/)
+DEFAULT_SUMMARY_RDS <- file.path(
+  "paper", "main_5228509", "time_sweep_5228509_summary_FOR_PAPER.rds"
+)
 # Default figure/table basenames under PPDisentangle-output/sim_study/generated/.
 DEFAULT_STEM_TRUE_CONTROL <- "results_true_control"
 DEFAULT_STEM_ESTIMATED_CONTROL <- "results_estimated_control"
@@ -64,6 +66,12 @@ default_sim_tex_dir <- function(repo_root = NULL) {
 default_rds_search_dir <- function(repo_root = NULL) {
   root <- if (is.null(repo_root)) find_repo_root() else repo_root
   source_paths(root)
+  paper_main <- normalizePath(
+    pp_output_path("sim_study", "paper", "main_5228509", repo_root = root),
+    winslash = "/",
+    mustWork = FALSE
+  )
+  if (dir.exists(paper_main)) return(paper_main)
   normalizePath(
     pp_output_path("sim_study", repo_root = root),
     winslash = "/",

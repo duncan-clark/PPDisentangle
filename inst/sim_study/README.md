@@ -40,6 +40,18 @@ Override the output root with `PPDISENTANGLE_OUTPUT_ROOT`. See [`../OUTPUT.md`](
 
 ## Publication outputs
 
+Paper-canonical main run: **`time_sweep_5228509`** (`*_summary_FOR_PAPER.rds` +
+raw horizon `tmp*.rds`). Robustness appendix: **`robustness_7568933`**.
+
+To regenerate all paper figures from a Zenodo unpack, see
+[`../zenodo/README.md`](../zenodo/README.md):
+
+```bash
+Rscript inst/zenodo/reproduce_paper_figures.R
+```
+
+(`robustness_standalone.pdf` is a local preview only and is not part of Zenodo.)
+
 The publication plotting helper reads a time-sweep summary from
 `PPDisentangle-output/sim_study/` and writes paper figures/tables to
 `PPDisentangle-output/sim_study/generated/`:

@@ -65,6 +65,10 @@ pp_nesi_fetch_sim_study() {
   rsync -avz --progress --human-readable \
     "${PP_NESI_SSH}:${remote}/time_sweep_${job_id}_"* \
     "${local_dir}/" 2>/dev/null || true
+  # Robustness suite: scenario RDS/CSV/logs + shared summaries
+  rsync -avz --progress --human-readable \
+    "${PP_NESI_SSH}:${remote}/robustness_${job_id}_"* \
+    "${local_dir}/" 2>/dev/null || true
   rsync -avz --progress --human-readable \
     "${PP_NESI_SSH}:${remote}/generated/" \
     "${local_dir}/generated/" 2>/dev/null || true
