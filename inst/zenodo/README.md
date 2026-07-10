@@ -8,6 +8,7 @@ live **outside** the git repo (Zenodo deposit).
 | Component | Path under `PPDisentangle-output/` |
 |-----------|--------------------------------------|
 | Main simulation | `sim_study/paper/main_5228509/` |
+| Illustrative Hawkes realisation | `.../simulated_hawkes_hawkes_process.pdf` (`fig:pp_realiz`) |
 | Robustness appendix | `sim_study/paper/robustness_7568933/` |
 | Oklahoma | `oklahoma/for_paper.rds` |
 

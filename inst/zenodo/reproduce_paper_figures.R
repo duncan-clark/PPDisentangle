@@ -99,6 +99,22 @@ if (!skip_main) {
       "--rds-search-dir", file.path(sim_dir, "paper", "main_5228509")
     )
   )
+
+  # Frozen illustrative realisation used by revision.tex fig:pp_realiz.
+  # Not regenerated from the time-sweep; copy from the paper archive into generated/.
+  hawkes_src <- file.path(sim_dir, "paper", "main_5228509", "simulated_hawkes_hawkes_process.pdf")
+  hawkes_dst <- file.path(sim_dir, "generated", "figures", "simulated_hawkes_hawkes_process.pdf")
+  if (!file.exists(hawkes_src)) {
+    stop(
+      "Missing illustrative Hawkes realisation PDF:\n  ", hawkes_src,
+      "\nExpected in the Zenodo paper/main_5228509/ archive.",
+      call. = FALSE
+    )
+  }
+  dir.create(dirname(hawkes_dst), recursive = TRUE, showWarnings = FALSE)
+  ok <- file.copy(hawkes_src, hawkes_dst, overwrite = TRUE)
+  if (!isTRUE(ok)) stop("Failed to copy ", hawkes_src, " -> ", hawkes_dst, call. = FALSE)
+  message("Copied illustrative figure: ", hawkes_dst)
 }
 
 if (!skip_robustness) {

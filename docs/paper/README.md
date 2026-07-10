@@ -25,6 +25,11 @@ Outputs:
 Copy the PDFs to `plots/sim_study/robustness/` on Overleaf (paths used by
 `\RobustnessIncludeFig{...}` in `revision.tex`).
 
+Main simulation figures (including the illustrative realisation
+`simulated_hawkes_hawkes_process.pdf`) live under
+`PPDisentangle-output/sim_study/generated/figures/` and should be copied to
+`plots/sim_study/` on Overleaf.
+
 Other generated assets:
 
 ```bash

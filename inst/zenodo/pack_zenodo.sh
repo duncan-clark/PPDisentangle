@@ -87,6 +87,7 @@ rsync -a \
   --include='time_sweep_5228509_tmp*.rds' \
   --include='time_sweep_5228509_all_nothing_grouped_data*' \
   --include='time_sweep_5228509_core_true_control_pub*' \
+  --include='simulated_hawkes_hawkes_process.pdf' \
   --exclude='*' \
   "$MAIN_DIR/" "$DEST/sim_study/paper/main_5228509/"
 
