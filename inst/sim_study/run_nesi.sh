@@ -18,6 +18,12 @@ PP_POST_TIME_MULTIPLIER="${PP_POST_TIME_MULTIPLIER:-1}"
 PP_POST_TIME_MULTIPLIERS="${PP_POST_TIME_MULTIPLIERS:-}"
 PP_POST_TIME_MULTIPLIERS_B64="${PP_POST_TIME_MULTIPLIERS_B64:-}"
 PP_RUN_ROBUSTNESS="${PP_RUN_ROBUSTNESS:-0}"
+PP_RUN_STRUCTURED_ROBUSTNESS="${PP_RUN_STRUCTURED_ROBUSTNESS:-0}"
+PP_SKIP_STRUCTURED_ROBUSTNESS="${PP_SKIP_STRUCTURED_ROBUSTNESS:-0}"
+PP_STRUCTURED_STUDY="${PP_STRUCTURED_STUDY:-both}"
+PP_STRUCTURED_PILOT_ONLY="${PP_STRUCTURED_PILOT_ONLY:-0}"
+PP_STRUCTURED_TRUTH_SIMS="${PP_STRUCTURED_TRUTH_SIMS:-}"
+PP_STRUCTURED_FORWARD_SIMS="${PP_STRUCTURED_FORWARD_SIMS:-}"
 PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-}"
 PP_ROBUSTNESS_SCENARIO_WORKERS="${PP_ROBUSTNESS_SCENARIO_WORKERS:-}"
 PP_K_VALUES="${PP_K_VALUES:-}"
@@ -30,6 +36,14 @@ PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-}"
 PP_SEM_PROPOSAL_UPDATE_CADENCE="${PP_SEM_PROPOSAL_UPDATE_CADENCE:-}"
 PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-}"
 PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-}"
+PP_STRUCTURED_USE_SEM_INNER="${PP_STRUCTURED_USE_SEM_INNER:-0}"
+PP_STRUCTURED_USE_SEM_OUTER="${PP_STRUCTURED_USE_SEM_OUTER:-0}"
+PP_STRUCTURED_USE_SEM_PROPS="${PP_STRUCTURED_USE_SEM_PROPS:-0}"
+PP_STRUCTURED_USE_SEM_LABELLINGS="${PP_STRUCTURED_USE_SEM_LABELLINGS:-0}"
+if [ -n "${PP_SEM_INNER_ITER:-}" ]; then PP_STRUCTURED_USE_SEM_INNER=1; fi
+if [ -n "${PP_SEM_OUTER_ITER:-}" ]; then PP_STRUCTURED_USE_SEM_OUTER=1; fi
+if [ -n "${PP_SEM_N_PROPS:-}" ]; then PP_STRUCTURED_USE_SEM_PROPS=1; fi
+if [ -n "${PP_SEM_N_LABELLINGS:-}" ]; then PP_STRUCTURED_USE_SEM_LABELLINGS=1; fi
 HAVE_SIMS_ARG=0
 
 while [[ "$#" -gt 0 ]]; do
@@ -39,13 +53,37 @@ while [[ "$#" -gt 0 ]]; do
         --cpus) PP_CPUS="$2"; shift 2 ;;
         --sem-workers) PP_SEM_WORKERS="$2"; shift 2 ;;
         --ate-workers) PP_ATE_WORKERS="$2"; shift 2 ;;
-        --sem-inner) PP_SEM_INNER_ITER="$2"; shift 2 ;;
+        --sem-inner)
+            PP_SEM_INNER_ITER="$2"
+            PP_STRUCTURED_USE_SEM_INNER=1
+            shift 2 ;;
         --sem-param-cadence) PP_SEM_PARAM_UPDATE_CADENCE="$2"; shift 2 ;;
         --sem-proposal-cadence) PP_SEM_PROPOSAL_UPDATE_CADENCE="$2"; shift 2 ;;
         --sem-refit-cadence) PP_SEM_PARAM_REFIT_CADENCE="$2"; shift 2 ;;
         --ate-compute-tau) PP_ATE_COMPUTE_TAU="$2"; shift 2 ;;
         --skip-ate-tau) PP_ATE_COMPUTE_TAU="0"; shift ;;
         --robustness) PP_RUN_ROBUSTNESS=1; shift ;;
+        --skip-structured) PP_SKIP_STRUCTURED_ROBUSTNESS=1; shift ;;
+        --structured-robustness)
+            PP_RUN_STRUCTURED_ROBUSTNESS=1
+            PP_RUN_ROBUSTNESS=0
+            shift ;;
+        --structured-inspect)
+            PP_RUN_STRUCTURED_ROBUSTNESS=1
+            PP_RUN_ROBUSTNESS=0
+            PP_TEST="--test"
+            if [ "$HAVE_SIMS_ARG" -eq 0 ]; then PP_SIMS=1; fi
+            PP_STRUCTURED_TRUTH_SIMS="${PP_STRUCTURED_TRUTH_SIMS:-2}"
+            PP_STRUCTURED_FORWARD_SIMS="${PP_STRUCTURED_FORWARD_SIMS:-2}"
+            PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-5}"
+            PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-1}"
+            PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-1}"
+            PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-1}"
+            shift ;;
+        --structured-study) PP_STRUCTURED_STUDY="$2"; shift 2 ;;
+        --pilot-only) PP_STRUCTURED_PILOT_ONLY=1; shift ;;
+        --truth-sims) PP_STRUCTURED_TRUTH_SIMS="$2"; shift 2 ;;
+        --forward-sims) PP_STRUCTURED_FORWARD_SIMS="$2"; shift 2 ;;
         --robustness-inspect)
             PP_RUN_ROBUSTNESS=1
             PP_TEST="--test"
@@ -70,10 +108,11 @@ while [[ "$#" -gt 0 ]]; do
         --robustness-quick-probe)
             # Quick-mode timing probe: one scenario per family (3 total), full quick SEM/ATE knobs.
             PP_RUN_ROBUSTNESS=1
+            PP_SKIP_STRUCTURED_ROBUSTNESS=1
             PP_MODE="${PP_MODE:-quick}"
             if [ "$HAVE_SIMS_ARG" -eq 0 ]; then PP_SIMS=32; fi
             PP_CPUS="${PP_CPUS:-100}"
-            PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-k_separation,high_count_assignment,snr_scale}"
+            PP_ROBUSTNESS_SCENARIO_SET="${PP_ROBUSTNESS_SCENARIO_SET:-k_separation,pretreatment_assignment,snr_scale}"
             PP_K_VALUES="${PP_K_VALUES:-0.3}"
             PP_MU_SCALES="${PP_MU_SCALES:-1}"
             PP_TARGET_POINTS="${PP_TARGET_POINTS:-2500}"
@@ -85,12 +124,20 @@ while [[ "$#" -gt 0 ]]; do
         --k-values) PP_K_VALUES="$2"; shift 2 ;;
         --mu-scales) PP_MU_SCALES="$2"; shift 2 ;;
         --target-points) PP_TARGET_POINTS="$2"; shift 2 ;;
+        --time|--walltime) PP_SB_TIME="$2"; shift 2 ;;
         --post-time-multiplier) PP_POST_TIME_MULTIPLIER="$2"; shift 2 ;;
         --post-time-multipliers) PP_POST_TIME_MULTIPLIERS="$2"; shift 2 ;;
         --test) PP_TEST="--test"; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
+
+# A full robustness request includes the effect-modification and geometry
+# transport studies. Keep --structured-robustness for targeted reruns and
+# --skip-structured for grid-only timing probes.
+if [ "$PP_RUN_ROBUSTNESS" = "1" ] && [ "$PP_SKIP_STRUCTURED_ROBUSTNESS" != "1" ]; then
+    PP_RUN_STRUCTURED_ROBUSTNESS=1
+fi
 
 # Normalize optional sweep list to avoid accidental whitespace artifacts.
 if [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
@@ -131,7 +178,7 @@ if [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
     PP_HAWKES_T_TRUNC_REL="${PP_HAWKES_T_TRUNC_REL:-0.05}"
 fi
 
-# Quick robustness: full appendix grid + all figure stems for robustness_standalone.pdf.
+# Quick robustness: full appendix grid + all figure stems for robustness.pdf.
 if [ -n "$PP_MODE" ] && [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
     mode_norm_quick="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
     if [ "$mode_norm_quick" = "quick" ]; then
@@ -141,6 +188,8 @@ if [ -n "$PP_MODE" ] && [ "$PP_RUN_ROBUSTNESS" = "1" ]; then
         PP_ATE_COMPUTE_TAU="${PP_ATE_COMPUTE_TAU:-0}"
         PP_SEM_PARAM_UPDATE_CADENCE="${PP_SEM_PARAM_UPDATE_CADENCE:-50}"
         PP_SEM_PARAM_REFIT_CADENCE="${PP_SEM_PARAM_REFIT_CADENCE:-3}"
+        PP_STRUCTURED_TRUTH_SIMS="${PP_STRUCTURED_TRUTH_SIMS:-100}"
+        PP_STRUCTURED_FORWARD_SIMS="${PP_STRUCTURED_FORWARD_SIMS:-50}"
     fi
 fi
 
@@ -178,7 +227,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     MEM_MAX_GB="${PP_MEM_MAX_GB:-200}"
     MEM_MIN_GB="${PP_MEM_MIN_GB:-8}"
     if [ -n "$PP_TEST" ]; then
-        SB_TIME="00:20:00"
+        SB_TIME="${PP_SB_TIME:-00:20:00}"
         TEST_MEM_GB=$(( CPUS * 2 ))
         [ "$TEST_MEM_GB" -lt 32 ] && TEST_MEM_GB=32
         [ "$TEST_MEM_GB" -gt 64 ] && TEST_MEM_GB=64
@@ -188,7 +237,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         [ "$MEM_GB" -lt "$MEM_MIN_GB" ] && MEM_GB="$MEM_MIN_GB"
         [ "$MEM_GB" -gt "$MEM_MAX_GB" ] && MEM_GB="$MEM_MAX_GB"
         SB_MEM="${MEM_GB}G"
-        SB_TIME="72:00:00"
+        # Default 72h; override with --time / --walltime or PP_SB_TIME (e.g. 48:00:00).
+        SB_TIME="${PP_SB_TIME:-72:00:00}"
     fi
 
     EXTRA_SBATCH=""
@@ -211,7 +261,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
     else
         PP_POST_TIME_MULTIPLIERS_B64=""
     fi
-    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PP_HAWKES_T_TRUNC PP_HAWKES_T_TRUNC_REL PKG_ROOT
+    export PP_SIMS PP_CPUS PP_TEST PP_MODE PP_RUN_ROBUSTNESS PP_RUN_STRUCTURED_ROBUSTNESS PP_STRUCTURED_STUDY PP_STRUCTURED_PILOT_ONLY PP_STRUCTURED_TRUTH_SIMS PP_STRUCTURED_FORWARD_SIMS PP_ROBUSTNESS_SCENARIO_SET PP_ROBUSTNESS_SCENARIO_WORKERS PP_K_VALUES PP_MU_SCALES PP_TARGET_POINTS PP_SEM_INNER_ITER PP_SEM_OUTER_ITER PP_SEM_N_PROPS PP_SEM_N_LABELLINGS PP_LABEL_PROPOSALS PP_SEM_PARAM_UPDATE_CADENCE PP_SEM_PROPOSAL_UPDATE_CADENCE PP_SEM_PARAM_REFIT_CADENCE PP_SEM_WORKERS PP_ATE_WORKERS PP_ATE_COMPUTE_TAU PP_ATE_N_SIMS PP_ATE_N_TAU_SIMS PP_ATE_N_TAU_I PP_DECAY_REPS PP_REFRESH_DECAY PP_POST_TIME_MULTIPLIER PP_POST_TIME_MULTIPLIERS PP_POST_TIME_MULTIPLIERS_B64 PP_HAWKES_T_TRUNC PP_HAWKES_T_TRUNC_REL PP_STRUCTURED_USE_SEM_INNER PP_STRUCTURED_USE_SEM_OUTER PP_STRUCTURED_USE_SEM_PROPS PP_STRUCTURED_USE_SEM_LABELLINGS PKG_ROOT
     JOB_ID=$(sbatch --parsable \
         --cpus-per-task="$CPUS" \
         --mem="$SB_MEM" \
@@ -245,6 +295,7 @@ echo "Job $SLURM_JOB_ID | $(date)"
 echo "Sims: $PP_SIMS | CPUs: $SLURM_CPUS_PER_TASK"
 echo "Mode: ${PP_MODE:-manual}"
 echo "Robustness run: ${PP_RUN_ROBUSTNESS}"
+echo "Structured robustness run: ${PP_RUN_STRUCTURED_ROBUSTNESS} (${PP_STRUCTURED_STUDY})"
 echo "Robustness scenario set: ${PP_ROBUSTNESS_SCENARIO_SET:-<default>}"
 echo "Robustness scenario workers: ${PP_ROBUSTNESS_SCENARIO_WORKERS:-<auto>}"
 echo "Robustness K values: ${PP_K_VALUES:-<default>}"
@@ -326,6 +377,7 @@ fi
 mode_norm_runtime="$(echo "${PP_MODE:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$mode_norm_runtime" = "quick" ]; then
     export PP_SEM_INNER_ITER="${PP_SEM_INNER_ITER:-200}"
+    PP_STRUCTURED_USE_SEM_INNER=1
     export PP_SEM_OUTER_ITER="${PP_SEM_OUTER_ITER:-3}"
     export PP_SEM_N_PROPS="${PP_SEM_N_PROPS:-20}"
     export PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-10}"
@@ -355,7 +407,7 @@ if [ "$mode_norm_runtime" = "quick" ]; then
         echo "  PP_DECAY_REPS=${PP_DECAY_REPS:-<default>} PP_REFRESH_DECAY=${PP_REFRESH_DECAY:-<default>}"
         echo "  PP_ATE_COMPUTE_TAU=${PP_ATE_COMPUTE_TAU:-<default>} (0 skips estimated tau_i in ATE stage)"
         echo "  PP_HAWKES_T_TRUNC=${PP_HAWKES_T_TRUNC:-auto} PP_HAWKES_T_TRUNC_REL=${PP_HAWKES_T_TRUNC_REL:-0.05} (power-law fit only)"
-        echo "  scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-all families for robustness_standalone.pdf}"
+        echo "  scenario_set=${PP_ROBUSTNESS_SCENARIO_SET:-all families for robustness.pdf}"
     fi
     echo ""
 fi
@@ -511,6 +563,39 @@ echo "Verifying PPDisentangle is visible in runtime library paths..."
 "$RSCRIPT_BIN" -e 'user_lib <- Sys.getenv("R_LIBS_USER", ""); if (nzchar(user_lib)) { libs <- strsplit(user_lib, .Platform$path.sep, fixed = TRUE)[[1]]; libs <- libs[nzchar(libs)]; if (length(libs) > 0L) .libPaths(c(libs, .libPaths())) }; cat(".libPaths()=", paste(.libPaths(), collapse=" | "), "\n", sep=""); if (!requireNamespace("PPDisentangle", quietly = TRUE)) stop("PPDisentangle not visible after install."); library(PPDisentangle); cat("PPDisentangle load check OK.\n")'
 echo ""
 
+run_structured_robustness() {
+    local structured_args=(--sims "$PP_SIMS" --study "$PP_STRUCTURED_STUDY")
+    if [ -n "${SLURM_JOB_ID:-}" ]; then
+        structured_args+=(--output "structured_${SLURM_JOB_ID}")
+    fi
+    if [ -n "${PP_TEST:-}" ]; then structured_args+=(--test); fi
+    if [ "${PP_STRUCTURED_PILOT_ONLY:-0}" = "1" ]; then structured_args+=(--pilot-only); fi
+    if [ -n "${PP_STRUCTURED_TRUTH_SIMS:-}" ]; then
+        structured_args+=(--truth-sims "$PP_STRUCTURED_TRUTH_SIMS")
+    fi
+    if [ -n "${PP_STRUCTURED_FORWARD_SIMS:-}" ]; then
+        structured_args+=(--forward-sims "$PP_STRUCTURED_FORWARD_SIMS")
+    fi
+    if [ -n "${PP_TARGET_POINTS:-}" ]; then
+        structured_args+=(--target-points "$PP_TARGET_POINTS")
+    fi
+    if [ "${PP_STRUCTURED_USE_SEM_INNER:-0}" = "1" ] && [ -n "${PP_SEM_INNER_ITER:-}" ]; then
+        structured_args+=(--sem-inner "$PP_SEM_INNER_ITER")
+    fi
+    if [ "${PP_STRUCTURED_USE_SEM_OUTER:-0}" = "1" ] && [ -n "${PP_SEM_OUTER_ITER:-}" ]; then
+        structured_args+=(--sem-outer "$PP_SEM_OUTER_ITER")
+    fi
+    if [ "${PP_STRUCTURED_USE_SEM_PROPS:-0}" = "1" ] && [ -n "${PP_SEM_N_PROPS:-}" ]; then
+        structured_args+=(--sem-props "$PP_SEM_N_PROPS")
+    fi
+    if [ "${PP_STRUCTURED_USE_SEM_LABELLINGS:-0}" = "1" ] && [ -n "${PP_SEM_N_LABELLINGS:-}" ]; then
+        structured_args+=(--sem-labellings "$PP_SEM_N_LABELLINGS")
+    fi
+    echo ""
+    echo "=== Structured robustness: effect modification + geometry transport ==="
+    "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_structured_robustness.R" "${structured_args[@]}" 2>&1
+}
+
 if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
     ROBUSTNESS_ARGS=(--sims "$PP_SIMS")
     if [ -n "${PP_TEST:-}" ]; then
@@ -532,6 +617,17 @@ if [ "${PP_RUN_ROBUSTNESS:-0}" = "1" ]; then
         ROBUSTNESS_ARGS+=(--target-points "$PP_TARGET_POINTS")
     fi
     "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_robustness.R" "${ROBUSTNESS_ARGS[@]}" 2>&1
+    if [ "${PP_RUN_STRUCTURED_ROBUSTNESS:-0}" = "1" ]; then
+        run_structured_robustness
+        # Rebuild the combined overview and appendix after the structured tables
+        # and figures exist. This is plotting only; no SEM scenarios are rerun.
+        if [ -n "${SLURM_JOB_ID:-}" ]; then
+            "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_robustness.R" \
+                --replot "robustness_${SLURM_JOB_ID}" 2>&1
+        fi
+    fi
+elif [ "${PP_RUN_STRUCTURED_ROBUSTNESS:-0}" = "1" ]; then
+    run_structured_robustness
 elif [ -n "${PP_POST_TIME_MULTIPLIERS:-}" ]; then
     "$RSCRIPT_BIN" "$PKG_ROOT/inst/sim_study/sim_study_time_sweep.R" \
       --sims "$PP_SIMS" \

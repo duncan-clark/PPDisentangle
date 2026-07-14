@@ -319,6 +319,7 @@ fit_etas <- function(params_init,
                      init_decluster = FALSE,
                      ...) {
   dots <- list(...)
+  dots$precomp <- NULL
   if (inherits(params_init, "list")) params_init <- unlist(params_init)
 
   all_names <- .etas_par_names  # mu, A, alpha_m, c, p, D, gamma, q
@@ -387,6 +388,11 @@ fit_etas <- function(params_init,
   finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
   if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
   realiz <- realiz[order(realiz$t), , drop = FALSE]
+  etas_precomp <- precompute_loglik_args(
+    realiz,
+    windowS,
+    if ("zero_background_region" %in% names(dots)) dots$zero_background_region else NULL
+  )
 
   # Transform initial values to optimisation scale
   opt_init <- free_init
@@ -415,6 +421,10 @@ fit_etas <- function(params_init,
       windowT = windowT,
       windowS = windowS,
       m0      = m0,
+      precomp = list(
+        active_area = etas_precomp$active_area,
+        in_zero_bg = etas_precomp$in_zero_bg_all
+      ),
       t_trunc = t_trunc
     ),
     dots

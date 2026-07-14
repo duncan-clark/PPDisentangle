@@ -604,6 +604,163 @@ count_points_by_partition <- function(df, partition) {
   counts
 }
 
+simulate_assignment_reference_counts <- function() {
+  set.seed(stage_seed(0L, 0L, 84L))
+  reference <- sim_hawkes(
+    params = hawkes_par_1,
+    windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
+    optimized = TRUE
+  )
+  count_points_by_partition(data.frame(x = reference$x, y = reference$y), partition)
+}
+
+simulate_assignment_reference_points <- function() {
+  set.seed(stage_seed(0L, 0L, 84L))
+  reference <- sim_hawkes(
+    params = hawkes_par_1,
+    windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
+    optimized = TRUE
+  )
+  data.frame(x = reference$x, y = reference$y)
+}
+
+# Pretreatment Voronoi geometry with random tile-level treatment, projected
+# onto the analysis grid via cell centroids. Uses the first n_seeds events
+# from the reference catalogue as Dirichlet generators (~100 Voronoi areas).
+assign_voronoi_random <- function(n_treated, n_seeds = 100L) {
+  n_cells <- partition$n
+  n_seeds <- as.integer(n_seeds)
+  if (!is.finite(n_seeds) || n_seeds < 2L) n_seeds <- 100L
+  out <- rep("control", n_cells)
+  ref_df <- simulate_assignment_reference_points()
+  counts <- count_points_by_partition(ref_df, partition)
+
+  # Fallback if the reference catalogue is empty.
+  if (is.null(ref_df) || nrow(ref_df) < 1L) {
+    set.seed(stage_seed(0L, 0L, 42L))
+    out[sample(seq_len(n_cells), n_treated)] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  # First n_seeds pretreatment events (time order from the simulator).
+  n_take <- min(n_seeds, nrow(ref_df))
+  seed_df <- ref_df[seq_len(n_take), , drop = FALSE]
+  seeds <- spatstat.geom::ppp(
+    x = seed_df$x,
+    y = seed_df$y,
+    window = OMEGA,
+    check = FALSE
+  )
+  seeds <- spatstat.geom::unique.ppp(seeds)
+  if (seeds$n < 2L) {
+    set.seed(stage_seed(0L, 0L, 42L))
+    out[sample(seq_len(n_cells), n_treated)] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  vor <- spatstat.geom::dirichlet(seeds)
+  n_tiles <- vor$n
+  n_tile_treated <- as.integer(round(n_tiles * TREAT_PROP))
+  n_tile_treated <- max(1L, min(n_tiles - 1L, n_tile_treated))
+  set.seed(stage_seed(0L, 0L, 87L))
+  treated_tiles <- sample.int(n_tiles, n_tile_treated)
+
+  tile_windows <- lapply(seq_len(n_tiles), function(j) as.owin(vor[j]))
+  for (i in seq_len(n_cells)) {
+    wi <- as.owin(partition[i])
+    cx <- mean(wi$xrange)
+    cy <- mean(wi$yrange)
+    for (j in treated_tiles) {
+      if (isTRUE(spatstat.geom::inside.owin(cx, cy, tile_windows[[j]]))) {
+        out[[i]] <- "treated"
+        break
+      }
+    }
+  }
+
+  # Match the usual exact treated-cell count used by other assignment rules.
+  treated_now <- which(out == "treated")
+  if (length(treated_now) > n_treated) {
+    set.seed(stage_seed(0L, 0L, 88L))
+    drop <- sample(treated_now, length(treated_now) - n_treated)
+    out[drop] <- "control"
+  } else if (length(treated_now) < n_treated) {
+    rem <- which(out == "control")
+    set.seed(stage_seed(0L, 0L, 88L))
+    add <- sample(rem, n_treated - length(treated_now))
+    out[add] <- "treated"
+  }
+
+  list(processes = out, counts = counts)
+}
+
+# Rook adjacency on the regular cell grid via tile centroids.
+partition_rook_neighbors <- function(partition) {
+  n <- partition$n
+  cents <- matrix(NA_real_, n, 2L)
+  for (i in seq_len(n)) {
+    wi <- as.owin(partition[i])
+    cents[i, ] <- c(mean(wi$xrange), mean(wi$yrange))
+  }
+  xs <- sort(unique(round(cents[, 1L], 8L)))
+  ys <- sort(unique(round(cents[, 2L], 8L)))
+  dx <- if (length(xs) > 1L) min(diff(xs)) else Inf
+  dy <- if (length(ys) > 1L) min(diff(ys)) else Inf
+  tol <- 0.15 * min(dx, dy)
+  lapply(seq_len(n), function(i) {
+    ddx <- abs(cents[, 1L] - cents[i, 1L])
+    ddy <- abs(cents[, 2L] - cents[i, 2L])
+    which(
+      (ddx < tol & abs(ddy - dy) < tol) |
+        (ddy < tol & abs(ddx - dx) < tol)
+    )
+  })
+}
+
+# Grow a contiguous treated region from the hottest seed cell.
+grow_contiguous_high_count <- function(counts, n_treated, neighbors) {
+  n <- length(counts)
+  set.seed(stage_seed(0L, 0L, 85L))
+  seed <- which.max(counts + stats::runif(n) * 1e-9)
+  selected <- seed
+  while (length(selected) < n_treated) {
+    frontier <- setdiff(unique(unlist(neighbors[selected], use.names = FALSE)), selected)
+    if (length(frontier) < 1L) {
+      rem <- setdiff(seq_len(n), selected)
+      pick <- rem[which.max(counts[rem] + stats::runif(length(rem)) * 1e-9)]
+    } else {
+      pick <- frontier[which.max(counts[frontier] + stats::runif(length(frontier)) * 1e-9)]
+    }
+    selected <- c(selected, pick)
+  }
+  selected
+}
+
+# Logistic propensity on log(1 + pretreatment counts), calibrated to ~n_treated,
+# then sample exactly n_treated cells without replacement.
+sample_count_propensity <- function(counts, n_treated, slope = 2) {
+  n <- length(counts)
+  x <- log1p(pmax(counts, 0))
+  sx <- stats::sd(x)
+  if (!is.finite(sx) || sx < 1e-12) {
+    set.seed(stage_seed(0L, 0L, 85L))
+    return(sample(seq_len(n), n_treated))
+  }
+  x <- as.numeric(scale(x))
+  target <- as.numeric(n_treated)
+  f <- function(a) sum(stats::plogis(a + slope * x)) - target
+  lo <- f(-40)
+  hi <- f(40)
+  a <- if (is.finite(lo) && is.finite(hi) && lo * hi < 0) {
+    stats::uniroot(f, c(-40, 40))$root
+  } else {
+    0
+  }
+  pi <- pmax(stats::plogis(a + slope * x), 1e-12)
+  set.seed(stage_seed(0L, 0L, 85L))
+  sample(seq_len(n), n_treated, prob = pi)
+}
+
 make_partition_processes <- function(mode) {
   mode <- tolower(trimws(mode))
   n_treated <- as.integer(round(partition$n * TREAT_PROP))
@@ -617,14 +774,7 @@ make_partition_processes <- function(mode) {
   }
 
   if (mode %in% c("lowest_count", "lowest_counts", "lowest_points", "lowest_count_50pct")) {
-    set.seed(stage_seed(0L, 0L, 84L))
-    reference <- sim_hawkes(
-      params = hawkes_par_1,
-      windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
-      optimized = TRUE
-    )
-    reference_df <- data.frame(x = reference$x, y = reference$y)
-    counts <- count_points_by_partition(reference_df, partition)
+    counts <- simulate_assignment_reference_counts()
     set.seed(stage_seed(0L, 0L, 85L))
     tie_break <- stats::runif(length(counts))
     treated_cells <- order(counts, tie_break)[seq_len(n_treated)]
@@ -633,19 +783,40 @@ make_partition_processes <- function(mode) {
   }
 
   if (mode %in% c("highest_count", "highest_counts", "highest_points", "highest_count_50pct")) {
-    set.seed(stage_seed(0L, 0L, 84L))
-    reference <- sim_hawkes(
-      params = hawkes_par_1,
-      windowT = c(0, TREATMENT_TIME), windowS = OMEGA,
-      optimized = TRUE
-    )
-    reference_df <- data.frame(x = reference$x, y = reference$y)
-    counts <- count_points_by_partition(reference_df, partition)
+    counts <- simulate_assignment_reference_counts()
     set.seed(stage_seed(0L, 0L, 85L))
     tie_break <- stats::runif(length(counts))
     treated_cells <- order(-counts, tie_break)[seq_len(n_treated)]
     out[treated_cells] <- "treated"
     return(list(processes = out, counts = counts))
+  }
+
+  if (mode %in% c(
+    "count_propensity", "count_propensity_50pct", "propensity", "propensity_50pct"
+  )) {
+    counts <- simulate_assignment_reference_counts()
+    treated_cells <- sample_count_propensity(counts, n_treated)
+    out[treated_cells] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  if (mode %in% c(
+    "contiguous_aoi", "contiguous_aoi_50pct",
+    "contiguous_high_count", "contiguous_high_count_50pct"
+  )) {
+    counts <- simulate_assignment_reference_counts()
+    treated_cells <- grow_contiguous_high_count(
+      counts, n_treated, partition_rook_neighbors(partition)
+    )
+    out[treated_cells] <- "treated"
+    return(list(processes = out, counts = counts))
+  }
+
+  if (mode %in% c(
+    "voronoi_random", "voronoi_random_50pct",
+    "voronoi", "pretreatment_voronoi_random"
+  )) {
+    return(assign_voronoi_random(n_treated))
   }
 
   stop(sprintf("Unknown PP_TREATMENT_ASSIGNMENT value: %s", mode))
@@ -1714,37 +1885,38 @@ expected_count_per_tile_hawkes <- function(z, control_pp, treated_pp) {
 }
 
 make_support_contrasts <- function() {
-  z_obs <- partition_processes == "treated"
+  n_cells <- partition$n
+  n_treated_50 <- as.integer(round(n_cells * TREAT_PROP))
+  n_treated_50 <- max(1L, min(n_cells - 1L, n_treated_50))
   set.seed(stage_seed(5L, 0L, 1L))
-  random_flip_idx <- sample(seq_along(z_obs), size = floor(length(z_obs) / 2))
-  z_random_50_flip <- z_obs
-  z_random_50_flip[random_flip_idx] <- !z_random_50_flip[random_flip_idx]
-  global_all_treated <- rep(TRUE, length(z_obs))
-  global_all_control <- rep(FALSE, length(z_obs))
+  z_random_50 <- rep(FALSE, n_cells)
+  z_random_50[sample(seq_len(n_cells), n_treated_50)] <- TRUE
+  global_all_treated <- rep(TRUE, n_cells)
+  global_all_control <- rep(FALSE, n_cells)
 
-  single_flip_rows <- lapply(seq_along(z_obs), function(j) {
-    z_flip <- z_obs
-    z_flip[j] <- !z_flip[j]
+  single_cell_rows <- lapply(seq_len(n_cells), function(j) {
+    z_single <- rep(FALSE, n_cells)
+    z_single[j] <- TRUE
     data.frame(
-      contrast_id = paste0("single_cell_flip_", j),
+      contrast_id = paste0("single_cell_vs_all_control_", j),
       contrast_family = "single_cell_flip",
       cell_id = j,
-      hamming_distance_from_zobs = sum(z_flip != z_obs),
-      psi_truth = expected_count_per_tile_hawkes(z_flip, hawkes_par_1, hawkes_par_2) -
-        expected_count_per_tile_hawkes(z_obs, hawkes_par_1, hawkes_par_2),
+      hamming_distance_from_zobs = NA_integer_,
+      psi_truth = expected_count_per_tile_hawkes(z_single, hawkes_par_1, hawkes_par_2) -
+        expected_count_per_tile_hawkes(global_all_control, hawkes_par_1, hawkes_par_2),
       stringsAsFactors = FALSE
     )
   })
 
   rbind(
-    do.call(rbind, single_flip_rows),
+    do.call(rbind, single_cell_rows),
     data.frame(
-      contrast_id = "random_50pct_flip_vs_zobs",
+      contrast_id = "random_50pct_vs_all_control",
       contrast_family = "random_50pct_flip",
       cell_id = NA_integer_,
-      hamming_distance_from_zobs = sum(z_random_50_flip != z_obs),
-      psi_truth = expected_count_per_tile_hawkes(z_random_50_flip, hawkes_par_1, hawkes_par_2) -
-        expected_count_per_tile_hawkes(z_obs, hawkes_par_1, hawkes_par_2),
+      hamming_distance_from_zobs = NA_integer_,
+      psi_truth = expected_count_per_tile_hawkes(z_random_50, hawkes_par_1, hawkes_par_2) -
+        expected_count_per_tile_hawkes(global_all_control, hawkes_par_1, hawkes_par_2),
       stringsAsFactors = FALSE
     ),
     data.frame(
@@ -1780,28 +1952,25 @@ estimate_support_contrast_for_task <- function(k, spec_row) {
       stringsAsFactors = FALSE
     ))
   }
-  z_obs <- partition_processes == "treated"
+  n_cells <- length(partition_processes)
   z_a <- switch(
     spec_row$contrast_family,
     single_cell_flip = {
-      z <- z_obs
-      z[spec_row$cell_id] <- !z[spec_row$cell_id]
+      z <- rep(FALSE, n_cells)
+      z[as.integer(spec_row$cell_id)] <- TRUE
       z
     },
     random_50pct_flip = {
+      n_treated_50 <- as.integer(round(n_cells * TREAT_PROP))
+      n_treated_50 <- max(1L, min(n_cells - 1L, n_treated_50))
       set.seed(stage_seed(5L, 0L, 1L))
-      idx <- sample(seq_along(z_obs), size = floor(length(z_obs) / 2))
-      z <- z_obs
-      z[idx] <- !z[idx]
+      z <- rep(FALSE, n_cells)
+      z[sample(seq_len(n_cells), n_treated_50)] <- TRUE
       z
     },
-    global_1_0 = rep(TRUE, length(z_obs))
+    global_1_0 = rep(TRUE, n_cells)
   )
-  z_b <- if (identical(spec_row$contrast_family, "global_1_0")) {
-    rep(FALSE, length(z_obs))
-  } else {
-    z_obs
-  }
+  z_b <- rep(FALSE, n_cells)
   data.frame(
     task_idx = k,
     sim_id = ((k - 1L) %% SIM_SIZE) + 1L,
@@ -1909,12 +2078,12 @@ run_decay_validation <- function() {
                 linetype = "dashed", linewidth = 0.8, inherit.aes = FALSE)} +
     scale_y_log10() +
     labs(
-      title = "Decay validation from a single-point label flip",
+      title = "Allocation-influence decay from a single-cell flip",
       subtitle = paste0(
-        "Forward simulation only: one event in a cell is relabelled and offspring are compared. ",
-        "Dashed lines show slope-only exp(-alpha d^2) references."
+        "Forward simulation only: one treated cell flipped to control under CRN; ",
+        "mean |Delta N| per distance annulus."
       ),
-      x = "Distance from flipped event (unit-width annuli)",
+      x = "Distance from flipped cell (unit-width annuli)",
       y = "Mean |Delta N| per annulus",
       color = "Reference slope"
     ) +

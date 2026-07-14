@@ -102,25 +102,46 @@ double etas_loglik_inhom_cpp(NumericVector t,
 
     double lambda_i = mu_base * W_val[i];
 
-    for (int j = 0; j < i; ++j) {
-      double dt = t[i] - t[j];
-      if (dt <= 0.0) continue;
-      if (do_trunc && dt > t_trunc) continue;
+    if (do_trunc) {
+      for (int j = i - 1; j >= 0; --j) {
+        double dt = t[i] - t[j];
+        if (dt > t_trunc) break;
 
-      // Magnitude-dependent quantities for parent j
-      double kappa_j = kappa_factor[j];
-      double d_j = d_parent[j];
+        // Magnitude-dependent quantities for parent j
+        double kappa_j = kappa_factor[j];
+        double d_j = d_parent[j];
 
-      // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
-      double temporal = std::pow(1.0 + dt / cc, -p);
+        // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
+        double temporal = std::pow(1.0 + dt / cc, -p);
 
-      // Power-law spatial factor: (1 + r^2/d_j)^{-q} / d_j
-      double dx = x[i] - x[j];
-      double dy = y[i] - y[j];
-      double r2 = dx * dx + dy * dy;
-      double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
+        // Power-law spatial factor: (1 + r^2/d_j)^{-q} / d_j
+        double dx = x[i] - x[j];
+        double dy = y[i] - y[j];
+        double r2 = dx * dx + dy * dy;
+        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
 
-      lambda_i += base_const * kappa_j * temporal * spatial;
+        lambda_i += base_const * kappa_j * temporal * spatial;
+      }
+    } else {
+      for (int j = 0; j < i; ++j) {
+        double dt = t[i] - t[j];
+        if (dt <= 0.0) continue;
+
+        // Magnitude-dependent quantities for parent j
+        double kappa_j = kappa_factor[j];
+        double d_j = d_parent[j];
+
+        // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
+        double temporal = std::pow(1.0 + dt / cc, -p);
+
+        // Power-law spatial factor: (1 + r^2/d_j)^{-q} / d_j
+        double dx = x[i] - x[j];
+        double dy = y[i] - y[j];
+        double r2 = dx * dx + dy * dy;
+        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
+
+        lambda_i += base_const * kappa_j * temporal * spatial;
+      }
     }
 
     if (lambda_i <= 1e-15) lambda_i = 1e-15;

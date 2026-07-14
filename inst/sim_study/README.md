@@ -50,7 +50,7 @@ To regenerate all paper figures from a Zenodo unpack, see
 Rscript inst/zenodo/reproduce_paper_figures.R
 ```
 
-(`robustness_standalone.pdf` is a local preview only and is not part of Zenodo.)
+(`robustness.pdf` is a local preview only and is not part of Zenodo.)
 
 The publication plotting helper reads a time-sweep summary from
 `PPDisentangle-output/sim_study/` and writes paper figures/tables to
@@ -70,15 +70,29 @@ PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
 
 ## Robustness suite
 
-The robustness launcher runs grids over K separation, signal-to-noise,
-kernel misspecification, off-support allocation contrasts (including the
+The robustness launcher runs the complete robustness suite in one job: grids
+over K separation, signal-to-noise,
+a $4\times 4$ spatiotemporal kernel misspecification matrix
+(temporal × spatial, each exponential or power-law, under sim and fit),
+pretreatment-informed treatment assignment
+(highest count, lowest count, count propensity, contiguous AOI, Voronoi random),
+off-support allocation contrasts (including the
 all-or-nothing DTAITE as the global contrast), label recovery,
-and the forward-simulation decay diagnostic. It writes per-scenario result
-objects plus summary CSV/RDS files and paper-ready figures/LaTeX fragments.
+the forward-simulation decay diagnostics, binary-covariate effect modification,
+and transport across balanced allocation geometries. It writes per-scenario
+result objects plus structured-study results, summary CSV/RDS files, and
+paper-ready figures/LaTeX fragments.
 
 **K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with μ calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
 
 **SNR grid (default):** `μ_scale ∈ {0.25, 0.5, 1, 1.5, 2}` at fixed `K = (0.8, 0.2)`. Override with `PP_MU_SCALES` or `--mu-scales`.
+
+**Pretreatment assignment family (`pretreatment_assignment`):** five rules at
+`K = (0.8, 0.2)`, each treating 50% of cells from a reference pre-treatment
+catalogue — `highest_count_50pct`, `lowest_count_50pct`,
+`count_propensity_50pct`, `contiguous_aoi_50pct`, `voronoi_random_50pct`
+(`PP_TREATMENT_ASSIGNMENT` / scenario column `treatment_assignment`).
+Legacy `--scenario-set high_count_assignment` is aliased to this family.
 
 ```bash
 Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
@@ -88,23 +102,39 @@ Default generated assets:
 
 ```text
 PPDisentangle-output/sim_study/generated/robustness/figures/
-  robustness_k_separation_label_recovery.{pdf,png}
-  robustness_k_separation_support_contrasts.{pdf,png}
-  robustness_kernel_mismatch_label_recovery.{pdf,png}
-  robustness_kernel_mismatch_support_contrasts.{pdf,png}
-  robustness_high_count_assignment_label_recovery.{pdf,png}
-  robustness_high_count_assignment_support_contrasts.{pdf,png}
-  robustness_snr_scale_label_recovery.{pdf,png}
-  robustness_snr_scale_support_contrasts.{pdf,png}
+  robustness_all_scenarios_label_recovery.{pdf,png}
+  robustness_parameter_sweep_support_contrasts.{pdf,png}
+  robustness_spatiotemporal_kernel_mismatch_heatmap.{pdf,png}
+  robustness_pretreatment_assignment_support_contrasts.{pdf,png}
   robustness_decay_validation.{pdf,png}
   robustness_temporal_decay_validation.{pdf,png}
 PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
 ```
 
-Each scenario family reports label recovery (mean raw accuracy) and off-support contrast accuracy
-for oracle, naive, and SEM only (matching the main simulation study).
-The rightmost contrast (or facet) in the support figures is the all-or-nothing
-DTAITE; standalone absolute ATE error figures are not generated.
+Effect modification and geometry transport are automatically run after the
+standard scenario grid by `--robustness`. They can still be rerun independently
+for inspection or debugging:
+
+```bash
+Rscript inst/sim_study/sim_study_structured_robustness.R --study both --sims 32
+Rscript inst/sim_study/sim_study_structured_robustness.R --study both --pilot-only
+bash inst/sim_study/run_nesi.sh --structured-inspect
+bash inst/sim_study/run_nesi.sh --structured-robustness --structured-study both --sims 32
+```
+
+Use `--skip-structured` only for a deliberate grid-only timing probe.
+
+They add two composite figures:
+
+```text
+generated/robustness/figures/robustness_effect_modification.{pdf,png}
+generated/robustness/figures/robustness_geometry_transport.{pdf,png}
+generated/robustness/structured/*.rds
+```
+
+Label recovery is summarised once across all scenarios (naive vs SEM). Bias support
+figures report naive vs SEM only (oracle omitted) for the all-or-nothing DTAITE.
+Standalone absolute ATE error figures are not generated.
 
 Copy `simulation_robustness_appendix.tex` and `figures/*.pdf` to
 `plots/sim_study/robustness/` on Overleaf, then
@@ -115,7 +145,7 @@ Local PDF preview:
 
 ```bash
 cd PPDisentangle-output/sim_study/generated/robustness
-pdflatex -jobname=robustness_standalone '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
 Small NeSI inspection run, intended to finish quickly enough to inspect before
@@ -125,21 +155,34 @@ an overnight run:
 bash inst/sim_study/run_nesi.sh --robustness-inspect
 ```
 
-Quick-mode timing probe (3 scenarios, full quick SEM/ATE knobs — extrapolate ×5
-for the full 15-scenario appendix):
+Quick-mode timing probe (one scenario from each of three standard families;
+use this only for grid timing, not as the complete appendix):
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness-quick-probe
 ```
 
-Full NeSI robustness run:
+Full NeSI robustness run (33 standard scenarios followed by both structured
+studies, then a combined replot). Recommended resources: **64 CPUs / 48h /
+128G** (better backfill than 100-core requests):
 
 ```bash
-bash inst/sim_study/run_nesi.sh --robustness --mode long --sims 32 --target-points 2500
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 48:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau
 ```
 
-Quick NeSI run for the full `robustness_standalone.pdf` appendix (all 15 scenarios,
-lighter SEM/ATE, 200 decay reps, no estimated `tau_i`):
+Larger-node alternative (100 CPUs / default 72h wall):
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness --mode long \
+  --sims 32 --cpus 100 --target-points 2500 --skip-ate-tau
+```
+
+Quick NeSI run for the full `robustness.pdf` appendix (33 standard scenarios,
+both structured studies with reduced forward Monte Carlo, no estimated
+`tau_i`):
 
 ```bash
 bash inst/nesi/submit.sh sim_study \
@@ -152,15 +195,15 @@ After fetch, replot and compile locally:
 ```bash
 Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<JOBID>
 cd PPDisentangle-output/sim_study/generated/robustness
-pdflatex -jobname=robustness_standalone '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
 Partial timing probe (subset only — not sufficient for the full PDF):
 
 ```bash
 bash inst/sim_study/run_nesi.sh --robustness --mode quick \
-  --scenario-set high_count_assignment,snr_scale --target-points 2500 \
-  --sims 32 --cpus 100 --ate-workers 32 --skip-ate-tau
+  --scenario-set pretreatment_assignment,snr_scale --target-points 2500 \
+  --sims 32 --cpus 100 --ate-workers 32 --skip-ate-tau --skip-structured
 ```
 
 ## OOM during ATE estimation
