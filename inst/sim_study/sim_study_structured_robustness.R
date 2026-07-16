@@ -833,7 +833,7 @@ make_effect_figure <- function(res) {
         .data$target,
         levels = c("psi_global", "psi_flip_plus", "psi_flip_minus"),
         labels = c(
-          "All-or-nothing DTAITE",
+          "All-or-nothing DAITE",
           "Single X=+1 cell flip",
           "Single X=-1 cell flip"
         )
@@ -852,9 +852,9 @@ make_effect_figure <- function(res) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "B  Estimated DTAITE bias",
+      title = "B  Estimated DAITE bias",
       x = "True h",
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
@@ -889,9 +889,9 @@ make_geometry_figure <- function(res) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "B  Estimated all-or-nothing DTAITE bias by estimation-regime coarseness",
+      title = "B  Estimated all-or-nothing DAITE bias by estimation-regime coarseness",
       x = "Coarseness C(z) of the estimation regime",
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
@@ -991,7 +991,7 @@ config <- list(
   observed_design_seed_geometry = base_seed + 202L,
   conditioning = "replication-specific truth and estimates conditional on the same pre-treatment history",
   effect_design = "32x3 realizations; one effect-aware SEM + naive/oracle heterogeneous fits per realization",
-  geometry_design = "simulate, SEM, and fit under each coarseness-path allocation; evaluate fixed all-or-nothing DTAITE",
+  geometry_design = "simulate, SEM, and fit under each coarseness-path allocation; evaluate fixed all-or-nothing DAITE",
   grid = c(10L, 10L), treatment_time = treatment_time,
   observation_window = c(0, end_time), control_params = control_params,
   treated_params = treated_params, sem_control = sem_control

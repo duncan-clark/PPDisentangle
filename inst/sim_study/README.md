@@ -164,6 +164,12 @@ use this only for grid timing, not as the complete appendix):
 bash inst/sim_study/run_nesi.sh --robustness-quick-probe
 ```
 
+K-separation and SNR scenarios hold expected catalogue size at
+`PP_TARGET_POINTS` by calibrating the **post-treatment horizon** (fixed
+`mu = mu_anchor * mu_scale`), not by rescaling `mu` alone. Other families still
+calibrate `mu` at the default window. New scenario IDs include `_acaltime` so
+they do not collide with older mu-calibrated RDS files under `--resume-from`.
+
 Full NeSI robustness run (42 unified scenarios). Recommended resources:
 **64 CPUs / 24h / 128G**:
 
@@ -172,6 +178,25 @@ PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
   --robustness --mode long \
   --sims 32 --cpus 64 --time 24:00:00 \
   --target-points 2500 --sem-inner 2000 --skip-ate-tau
+```
+
+Refit only the time-calibrated families (12 scenarios: 7 K + 5 SNR), or reuse
+the previous production job for everything else:
+
+```bash
+# k_separation + snr_scale only
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 12:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --scenario-set k_separation,snr_scale
+
+# full grid; resume non-tcal scenarios from the prior completed job
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --resume-from robustness_7762623
 ```
 
 Larger-node alternative (100 CPUs / default 72h wall):

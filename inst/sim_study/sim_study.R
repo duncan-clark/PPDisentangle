@@ -230,6 +230,7 @@ SEM_UPDATE_CONTROL_PARAMS <- tolower(Sys.getenv("PP_SEM_UPDATE_CONTROL_PARAMS", 
 
 TREAT_PROP <- 0.5
 TREATMENT_ASSIGNMENT <- env_chr("PP_TREATMENT_ASSIGNMENT", "random")
+# Recomputed after abundance calibration if the post-treatment horizon changes.
 MAX_TIME   <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
 
 SCENARIO_ID <- env_chr("PP_SCENARIO_ID", "baseline_hawkes_exp")
@@ -296,6 +297,10 @@ HAWKES_T_TRUNC <- hawkes_t_trunc_cfg$value
 HAWKES_T_TRUNC_SOURCE <- hawkes_t_trunc_cfg$source
 MU_SCALE <- env_num("PP_MU_SCALE", 1, min_value = 1e-8)
 TARGET_POINTS <- env_num("PP_TARGET_POINTS", NA_real_, min_value = 1)
+ABUNDANCE_CALIBRATE <- tolower(env_chr("PP_ABUNDANCE_CALIBRATE", "mu"))
+if (!ABUNDANCE_CALIBRATE %in% c("mu", "time")) {
+  stop("PP_ABUNDANCE_CALIBRATE must be 'mu' or 'time'.")
+}
 RUN_DECAY_VALIDATION <- tolower(Sys.getenv("PP_DECAY_VALIDATION", "true")) %in% c("1", "true", "yes", "y")
 DECAY_VALIDATION_REPS <- env_int("PP_DECAY_REPS", if (TEST) 20L else 2000L, 1L)
 DECAY_ANNULUS_WIDTH <- env_num("PP_DECAY_ANNULUS_WIDTH", 1, min_value = 1e-8)
@@ -314,28 +319,79 @@ make_hawkes_params_for_kernel <- function(mu, K, kernel, spatial_kernel = "expon
   }
   as_hawkes_params(out, out$kernel, out$spatial_kernel)
 }
-expected_points_per_mu_analytic <- function(k_control, k_treated) {
+expected_points_per_mu_analytic <- function(k_control, k_treated, time_int = TIME_INT,
+                                            treatment_time = TREATMENT_TIME,
+                                            treat_prop = TREAT_PROP) {
   # Expected total event count per unit mu under the sim-study design:
   # pre-treatment control Hawkes on Omega, then post-treatment mix on the partition.
-  TREATMENT_TIME / (1 - k_control) +
-    TIME_INT * ((1 - TREAT_PROP) / (1 - k_control) + TREAT_PROP / (1 - k_treated))
+  treatment_time / (1 - k_control) +
+    time_int * ((1 - treat_prop) / (1 - k_control) + treat_prop / (1 - k_treated))
 }
-calibrate_mu_for_target <- function(target_points, base_mu, k_control, k_treated, mu_scale = 1) {
+calibrate_mu_for_target <- function(target_points, base_mu, k_control, k_treated, mu_scale = 1,
+                                    time_int = TIME_INT) {
   if (!is.finite(target_points) || target_points <= 0) {
-    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_))
+    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_, time_int = time_int))
   }
-  expected_per_mu <- expected_points_per_mu_analytic(k_control, k_treated)
+  expected_per_mu <- expected_points_per_mu_analytic(k_control, k_treated, time_int = time_int)
   if (!is.finite(expected_per_mu) || expected_per_mu <= 0) {
-    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_))
+    return(list(mu = base_mu * mu_scale, expected_points_per_mu = NA_real_, time_int = time_int))
   }
   list(
     mu = (target_points / expected_per_mu) * mu_scale,
-    expected_points_per_mu = expected_per_mu
+    expected_points_per_mu = expected_per_mu,
+    time_int = time_int
   )
 }
-mu_calibration <- calibrate_mu_for_target(TARGET_POINTS, BASE_MU, CONTROL_K, TREATED_K, MU_SCALE)
-TRUE_MU <- mu_calibration$mu
-EXPECTED_POINTS_PER_MU <- mu_calibration$expected_points_per_mu
+calibrate_time_for_target <- function(target_points, mu, k_control, k_treated,
+                                      treatment_time = TREATMENT_TIME,
+                                      treat_prop = TREAT_PROP) {
+  if (!is.finite(target_points) || target_points <= 0 || !is.finite(mu) || mu <= 0) {
+    return(list(time_int = NA_real_, expected_points_per_mu = NA_real_, mu = mu))
+  }
+  pre_per_mu <- treatment_time / (1 - k_control)
+  post_rate_per_mu <- (1 - treat_prop) / (1 - k_control) + treat_prop / (1 - k_treated)
+  if (!is.finite(post_rate_per_mu) || post_rate_per_mu <= 0) {
+    stop("Invalid post-treatment expected-rate factor for time calibration.")
+  }
+  # target = mu * (pre_per_mu + time_int * post_rate_per_mu)
+  time_int <- (target_points / mu - pre_per_mu) / post_rate_per_mu
+  if (!is.finite(time_int) || time_int <= 0) {
+    stop(sprintf(
+      paste0(
+        "Time calibration produced non-positive TIME_INT=%.6g. ",
+        "Reduce PP_BASE_MU*PP_MU_SCALE or increase PP_TARGET_POINTS ",
+        "(mu=%.6g, target=%.6g, pre_per_mu=%.6g)."
+      ),
+      time_int, mu, target_points, pre_per_mu
+    ))
+  }
+  list(
+    time_int = as.numeric(time_int),
+    expected_points_per_mu = pre_per_mu + time_int * post_rate_per_mu,
+    mu = mu
+  )
+}
+TIME_INT_BASE <- TIME_INT
+if (identical(ABUNDANCE_CALIBRATE, "time")) {
+  if (!is.finite(TARGET_POINTS) || TARGET_POINTS <= 0) {
+    stop("PP_ABUNDANCE_CALIBRATE='time' requires a positive PP_TARGET_POINTS.")
+  }
+  TRUE_MU <- BASE_MU * MU_SCALE
+  time_calibration <- calibrate_time_for_target(
+    TARGET_POINTS, TRUE_MU, CONTROL_K, TREATED_K
+  )
+  TIME_INT <- time_calibration$time_int
+  END_TIME <- TREATMENT_TIME + TIME_INT
+  POST_TIME_MULTIPLIER <- TIME_INT / (END_TIME_BASE - TREATMENT_TIME)
+  EXPECTED_POINTS_PER_MU <- time_calibration$expected_points_per_mu
+  MAX_TIME <- 10000 * (END_TIME * OMEGA[2] * OMEGA[4] / 1e6)
+} else {
+  mu_calibration <- calibrate_mu_for_target(
+    TARGET_POINTS, BASE_MU, CONTROL_K, TREATED_K, MU_SCALE, time_int = TIME_INT
+  )
+  TRUE_MU <- mu_calibration$mu
+  EXPECTED_POINTS_PER_MU <- mu_calibration$expected_points_per_mu
+}
 
 # ------------------------------------------------------------------
 # Logging
@@ -460,7 +516,9 @@ if (RUN_SEM_PILOT) {
           " | pilot_only=", PILOT_ONLY)
 }
 log_msg("Base seed=", BASE_SEED)
-log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER, " | END_TIME=", END_TIME)
+log_msg("Post-treatment time multiplier=", POST_TIME_MULTIPLIER,
+        " | TIME_INT=", signif(TIME_INT, 6),
+        " | END_TIME=", signif(END_TIME, 6))
 log_msg("Scenario=", SCENARIO_ID,
         " | sim_kernel=", SIM_KERNEL,
         " | fit_kernel=", FIT_KERNEL,
@@ -470,10 +528,16 @@ log_msg("Scenario=", SCENARIO_ID,
         " | treatment_assignment=", TREATMENT_ASSIGNMENT,
         " | control_K=", CONTROL_K,
         " | treated_K=", TREATED_K,
+        " | abundance_calibrate=", ABUNDANCE_CALIBRATE,
         " | base_mu=", BASE_MU,
         " | mu_scale=", MU_SCALE,
         " | target_points=", ifelse(is.finite(TARGET_POINTS), TARGET_POINTS, NA),
         " | expected_points_per_mu=", signif(EXPECTED_POINTS_PER_MU, 6),
+        " | expected_points=", ifelse(
+          is.finite(EXPECTED_POINTS_PER_MU),
+          signif(TRUE_MU * EXPECTED_POINTS_PER_MU, 6),
+          NA
+        ),
         " | true_mu=", signif(TRUE_MU, 6))
 log_msg(
   "Hawkes t_trunc: ",
@@ -2788,6 +2852,9 @@ sim_study_results <- list(
     SEM_PILOT_CORES = SEM_PILOT_CORES,
     SEM_STALENESS_TRIGGER_EVERY = SEM_STALENESS_TRIGGER_EVERY,
     POST_TIME_MULTIPLIER = POST_TIME_MULTIPLIER,
+    TIME_INT = TIME_INT,
+    TIME_INT_BASE = TIME_INT_BASE,
+    ABUNDANCE_CALIBRATE = ABUNDANCE_CALIBRATE,
     SCENARIO_ID = SCENARIO_ID,
     TREATMENT_ASSIGNMENT = TREATMENT_ASSIGNMENT,
     partition_assignment_counts = partition_assignment_counts,
@@ -2795,6 +2862,7 @@ sim_study_results <- list(
     FIT_KERNEL = FIT_KERNEL,
     TARGET_POINTS = TARGET_POINTS,
     EXPECTED_POINTS_PER_MU = EXPECTED_POINTS_PER_MU,
+    EXPECTED_POINTS = if (is.finite(EXPECTED_POINTS_PER_MU)) TRUE_MU * EXPECTED_POINTS_PER_MU else NA_real_,
     TRUE_MU = TRUE_MU,
     BASE_MU = BASE_MU,
     BASE_SEED = BASE_SEED,

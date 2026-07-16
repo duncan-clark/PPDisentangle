@@ -36,7 +36,9 @@ format_num_tag <- function(x) {
 ROBUSTNESS_CONTROL_K <- 0.8
 ROBUSTNESS_TREATED_K_DEFAULT <- 0.2
 
-# SNR grid: background-rate multiplier with mu recalibrated toward target_points.
+# SNR grid: background-rate multiplier. For k_separation / snr_scale we hold
+# mu = BASE_MU * mu_scale fixed and calibrate the post-treatment horizon so
+# expected catalogue size stays at target_points.
 DEFAULT_MU_SCALES <- c(0.25, 0.5, 1, 1.5, 2)
 DEFAULT_MU_SCALES_STR <- paste(DEFAULT_MU_SCALES, collapse = ",")
 format_mu_scale_grid <- function(scales = DEFAULT_MU_SCALES, for_tex = FALSE) {
@@ -46,6 +48,23 @@ format_mu_scale_grid <- function(scales = DEFAULT_MU_SCALES, for_tex = FALSE) {
   }, character(1L))
   body <- paste(vals, collapse = ", ")
   if (for_tex) paste0("\\{", body, "\\}") else paste0("{", body, "}")
+}
+
+# Match sim_study.R defaults used when anchoring mu so the reference scenario
+# (K0=0.8, K1=0.2, mu_scale=1) keeps the default post-treatment window.
+ROBUSTNESS_TREATMENT_TIME <- 10
+ROBUSTNESS_TIME_INT_BASE <- 100
+ROBUSTNESS_TREAT_PROP <- 0.5
+expected_points_per_mu_design <- function(k_control, k_treated,
+                                          treatment_time = ROBUSTNESS_TREATMENT_TIME,
+                                          time_int = ROBUSTNESS_TIME_INT_BASE,
+                                          treat_prop = ROBUSTNESS_TREAT_PROP) {
+  treatment_time / (1 - k_control) +
+    time_int * ((1 - treat_prop) / (1 - k_control) + treat_prop / (1 - k_treated))
+}
+TIME_CALIBRATED_FAMILIES <- c("k_separation", "snr_scale")
+uses_time_abundance_calibrate <- function(family) {
+  as.character(family) %in% TIME_CALIBRATED_FAMILIES
 }
 
 # Treated-K grid for k_separation with control fixed at k_anchor (default 0.8).
@@ -83,6 +102,16 @@ if (!is.finite(scenario_workers) || is.na(scenario_workers) || scenario_workers 
 }
 target_points <- suppressWarnings(as.numeric(get_arg_val("--target-points", Sys.getenv("PP_TARGET_POINTS", "2500"))))
 if (!is.finite(target_points) || is.na(target_points) || target_points <= 0) target_points <- 2500
+# Anchor mu so reference (control_k, treated_k_default, default T, scale=1)
+# has expected points = target_points; other K / mu_scale cells then adjust T.
+time_cal_base_mu <- target_points / expected_points_per_mu_design(
+  ROBUSTNESS_CONTROL_K, ROBUSTNESS_TREATED_K_DEFAULT
+)
+message(sprintf(
+  "[robustness] time-calibrated families=%s | anchor BASE_MU=%.6g (target=%.0f at default T)",
+  paste(TIME_CALIBRATED_FAMILIES, collapse = ","),
+  time_cal_base_mu, target_points
+))
 test_mode <- "--test" %in% args
 decay_reps <- suppressWarnings(as.integer(get_arg_val("--decay-reps", Sys.getenv("PP_DECAY_REPS", "2000"))))
 if (!is.finite(decay_reps) || is.na(decay_reps) || decay_reps < 1L) decay_reps <- 2000L
@@ -274,11 +303,18 @@ scenarios <- bind_rows(
 ) %>%
   mutate(
     k_delta = abs(.data$treated_k - .data$control_k),
+    abundance_calibrate = ifelse(
+      uses_time_abundance_calibrate(.data$scenario_family),
+      "time",
+      "mu"
+    ),
+    # "_acaltime" avoids resume collisions with older mu-calibrated RDS files.
     scenario_id = paste0(
       .data$scenario_family,
       "_kc", format_num_tag(.data$control_k),
       "_kt", format_num_tag(.data$treated_k),
       "_mu", format_num_tag(.data$mu_scale),
+      if_else(.data$abundance_calibrate == "time", "_acaltime", ""),
       "_sim", .data$sim_kernel,
       "_fit", .data$fit_kernel,
       "_ssim", .data$sim_spatial_kernel,
@@ -323,6 +359,11 @@ manifest_row <- function(sc, run_basename, rds_path) {
     treated_k = sc$treated_k,
     k_delta = sc$k_delta,
     mu_scale = sc$mu_scale,
+    abundance_calibrate = if ("abundance_calibrate" %in% names(sc)) {
+      sc$abundance_calibrate
+    } else {
+      "mu"
+    },
     sim_kernel = sc$sim_kernel,
     fit_kernel = sc$fit_kernel,
     sim_spatial_kernel = sc$sim_spatial_kernel,
@@ -402,10 +443,15 @@ run_one <- function(row_id) {
     return(manifest_row(sc, run_basename, rds_path))
   }
 
+  abundance_calibrate <- if ("abundance_calibrate" %in% names(sc)) {
+    as.character(sc$abundance_calibrate[[1]])
+  } else {
+    "mu"
+  }
   message(sprintf(
-    "[robustness] %d/%d %s | K=(%.3f, %.3f) mu_scale=%.3f target_points=%.0f",
+    "[robustness] %d/%d %s | K=(%.3f, %.3f) mu_scale=%.3f target_points=%.0f calibrate=%s",
     row_id, nrow(scenarios), sc$scenario_id, sc$control_k, sc$treated_k,
-    sc$mu_scale, target_points
+    sc$mu_scale, target_points, abundance_calibrate
   ))
   is_structured <- sc$scenario_family %in% c("effect_modification", "geometry_transport")
   env <- c(
@@ -419,6 +465,7 @@ run_one <- function(row_id) {
     PP_TREATED_K = as.character(sc$treated_k),
     PP_MU_SCALE = as.character(sc$mu_scale),
     PP_TARGET_POINTS = as.character(target_points),
+    PP_ABUNDANCE_CALIBRATE = abundance_calibrate,
     PP_SIM_KERNEL = sc$sim_kernel,
     PP_FIT_KERNEL = sc$fit_kernel,
     PP_SIM_SPATIAL_KERNEL = sc$sim_spatial_kernel,
@@ -428,6 +475,9 @@ run_one <- function(row_id) {
     PP_DECAY_VALIDATION = "0",
     PP_SIMS = as.character(pp_sims)
   )
+  if (identical(abundance_calibrate, "time")) {
+    env <- c(env, PP_BASE_MU = as.character(time_cal_base_mu))
+  }
   # Explicitly propagate production controls to child Rscript processes.
   # system2 inherits the parent environment on Unix, but listing these removes
   # ambiguity and keeps fresh standard scenarios identical to the submit profile.
@@ -590,6 +640,8 @@ load_label_summary_from_manifest <- function(manifest_df, out_dir) {
     }
     res <- readRDS(rds_path)
     cls <- rebuild_class_metrics_from_rds(res)
+    # Structured scenario RDS may already store ready-made class_metrics.
+    if (is.null(cls) || nrow(cls) < 1L) cls <- res$class_metrics
     if (is.null(cls) || nrow(cls) < 1L) return(NULL)
     transform(cls, scenario_id = row$scenario_id[[1]])
   })
@@ -629,8 +681,20 @@ rebuild_class_metrics_from_rds <- function(res, mu_fail_multiplier = LABEL_MU_FA
 
   lr_kept <- lapply(unique(lr$method), function(method_nm) {
     fit_label <- if (identical(method_nm, "SEM_adaptive")) "SEM_full" else method_nm
-    method_fs <- if (!is.null(fs) && nrow(fs) > 0L) {
-      fs %>% filter(.data$labelling == fit_label)
+    # Legacy RDS uses fit_status$labelling; structured scenario RDS uses $method.
+    fs_label_col <- if (!is.null(fs) && nrow(fs) > 0L) {
+      if ("labelling" %in% names(fs)) {
+        "labelling"
+      } else if ("method" %in% names(fs)) {
+        "method"
+      } else {
+        NA_character_
+      }
+    } else {
+      NA_character_
+    }
+    method_fs <- if (!is.null(fs) && nrow(fs) > 0L && !is.na(fs_label_col)) {
+      fs %>% filter(.data[[fs_label_col]] == fit_label)
     } else {
       NULL
     }
@@ -1952,7 +2016,7 @@ scenario_family_order <- c(
   "geometry_transport"
 )
 
-# Structured DTAITE studies write label summaries under generated/robustness/tables/.
+# Structured DAITE studies write label summaries under generated/robustness/tables/.
 # Fold them into the all-scenario overview scatter (Figure 1).
 load_structured_dtaite_label_rows <- function(robustness_dir) {
   table_dir <- file.path(robustness_dir, "tables")
@@ -2110,10 +2174,10 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
 support_contrast_display_labels <- c(
   single_cell_flip = "Single-cell vs all-control",
   random_50pct_flip = "Random 50% vs all-control",
-  global_1_0 = "All-or-nothing DTAITE"
+  global_1_0 = "All-or-nothing DAITE"
 )
 
-# Bias support figures focus on the all-or-nothing DTAITE; other contrasts
+# Bias support figures focus on the all-or-nothing DAITE; other contrasts
 # are retained in the summary CSVs but omitted from plots.
 SUPPORT_PLOT_CONTRAST <- "global_1_0"
 
@@ -2286,7 +2350,7 @@ make_high_count_support_plot <- function(df, title, stem, subtitle = NULL) {
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
       x = "Pretreatment assignment rule",
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = "Labelling",
       shape = "Labelling",
       title = title,
@@ -2428,7 +2492,7 @@ make_parameter_sweep_support_plot <- function(df, title, stem, subtitle) {
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
       x = NULL,
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = "Labelling",
       shape = "Labelling",
       title = title,
@@ -2512,7 +2576,7 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
       midpoint = 0,
       limits = c(-lim, lim),
       na.value = "grey95",
-      name = "DTAITE bias"
+      name = "DAITE bias"
     ) +
     labs(
       x = "Fitted kernels (temporal, spatial)",
@@ -2528,6 +2592,93 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
       legend.position = "bottom"
     )
   save_plot_pair(p_heat, stem, width = 8.5, height = 4.8)
+}
+
+# Checkerboard / allocation map panels for structured robustness figures.
+structured_allocation_map_df <- function(grid, allocations, labels, focal_cells = integer()) {
+  out <- bind_rows(lapply(seq_along(allocations), function(i) {
+    transform(
+      grid,
+      allocation = labels[[i]],
+      treated = ifelse(allocations[[i]], "Treated", "Control"),
+      focal = cell %in% focal_cells
+    )
+  }))
+  out$allocation <- factor(out$allocation, levels = labels)
+  out
+}
+
+plot_structured_allocation_maps <- function(map_df, nrow = 1L) {
+  focal_df <- map_df[as.logical(map_df$focal), c("col", "row", "allocation"), drop = FALSE]
+  focal_df <- unique(focal_df)
+  inset <- 0.12
+  ggplot(map_df, aes(x = .data$col, y = .data$row, fill = .data$treated)) +
+    geom_tile(color = "white", linewidth = 0.15, width = 1, height = 1) +
+    {
+      if (nrow(focal_df) > 0L) {
+        geom_rect(
+          data = focal_df,
+          aes(
+            xmin = .data$col - 0.5 + inset, xmax = .data$col + 0.5 - inset,
+            ymin = .data$row - 0.5 + inset, ymax = .data$row + 0.5 - inset
+          ),
+          fill = NA, color = "black", linewidth = 0.35,
+          inherit.aes = FALSE
+        )
+      } else {
+        NULL
+      }
+    } +
+    facet_wrap(vars(.data$allocation), nrow = nrow) +
+    scale_fill_manual(values = c(
+      Control = "#D9E2EC", Treated = "#D1495B",
+      `X = -1` = "#74A9CF", `X = +1` = "#FCAE91"
+    )) +
+    coord_equal(expand = FALSE) +
+    scale_x_continuous(breaks = NULL) +
+    scale_y_continuous(breaks = NULL) +
+    labs(x = NULL, y = NULL, fill = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(
+      panel.grid = element_blank(),
+      strip.text = element_text(size = 8),
+      legend.position = "bottom"
+    )
+}
+
+save_structured_figure_grid <- function(plots, stem, width = 12, height = 7) {
+  pdf_path <- file.path(fig_dir, paste0(stem, ".pdf"))
+  png_path <- file.path(fig_dir, paste0(stem, ".png"))
+  layout_matrix <- matrix(seq_along(plots), ncol = 1L)
+  heights <- if (length(plots) == 2L) c(0.85, 1) else rep(1, length(plots))
+  save_one <- function(file) {
+    if (grepl("[.]pdf$", file, ignore.case = TRUE)) {
+      grDevices::pdf(file, width = width, height = height, bg = "white",
+                     useDingbats = FALSE)
+    } else {
+      grDevices::png(file, width = width, height = height, units = "in",
+                     res = 300, bg = "white")
+    }
+    on.exit(grDevices::dev.off(), add = TRUE)
+    grid::grid.newpage()
+    lay <- grid::grid.layout(
+      nrow(layout_matrix), ncol(layout_matrix),
+      widths = grid::unit(1, "null"),
+      heights = grid::unit(heights, "null")
+    )
+    grid::pushViewport(grid::viewport(layout = lay))
+    for (i in seq_along(plots)) {
+      pos <- which(layout_matrix == i, arr.ind = TRUE)
+      print(plots[[i]], vp = grid::viewport(
+        layout.pos.row = range(pos[, "row"]),
+        layout.pos.col = range(pos[, "col"])
+      ), newpage = FALSE)
+    }
+    grid::popViewport()
+  }
+  save_one(pdf_path)
+  save_one(png_path)
+  list(stem = stem, pdf = pdf_path, png = png_path)
 }
 
 make_effect_modification_scenario_plot <- function(df, stem) {
@@ -2557,9 +2708,9 @@ make_effect_modification_scenario_plot <- function(df, stem) {
           "single_cell_flip_X_minus"
         ),
         labels = c(
-          "All treated vs all control",
-          "Single X=+1 cell vs all control",
-          "Single X=-1 cell vs all control"
+          "All-or-nothing DAITE",
+          "Single X=+1 cell flip",
+          "Single X=-1 cell flip"
         )
       ),
       mean_bias = ifelse(
@@ -2575,7 +2726,32 @@ make_effect_modification_scenario_plot <- function(df, stem) {
     ) %>%
     filter(.data[[lbl_col]] %in% c("naive", "SEM"), is.finite(.data$mean_bias), is.finite(.data$h_true))
   if (nrow(bias_df) < 1L) return(NULL)
-  p <- ggplot(
+
+  partition <- spatstat.geom::quadrats(
+    X = spatstat.geom::owin(c(0, 100), c(0, 100)), nx = 10, ny = 10
+  )
+  d <- make_effect_modification_design(partition, seed = 20260714L + 101L)
+  x_map <- transform(
+    d$grid, allocation = "Covariate X",
+    treated = ifelse(X == 1, "X = +1", "X = -1"),
+    focal = cell %in% c(d$flip_plus_cell, d$flip_minus_cell)
+  )
+  z_map <- structured_allocation_map_df(
+    d$grid, list(d$z_obs), c("Observed z[obs]"),
+    focal_cells = c(d$flip_plus_cell, d$flip_minus_cell)
+  )
+  maps <- bind_rows(x_map, z_map)
+  maps$allocation <- factor(
+    as.character(maps$allocation),
+    levels = c("Covariate X", "Observed z[obs]")
+  )
+  pA <- plot_structured_allocation_maps(maps, nrow = 1L) +
+    labs(title = sprintf(
+      "A  Fixed X and z[obs] (outlined single-cell flips: X=+1 cell %d, X=-1 cell %d)",
+      d$flip_plus_cell, d$flip_minus_cell
+    ))
+
+  pB <- ggplot(
     bias_df,
     aes(
       x = .data$h_true, y = .data$mean_bias,
@@ -2589,18 +2765,18 @@ make_effect_modification_scenario_plot <- function(df, stem) {
     ) +
     geom_line(position = position_dodge(width = 0.04)) +
     geom_point(position = position_dodge(width = 0.04), size = 2) +
-    facet_wrap(~contrast_label, scales = "free_y") +
+    facet_wrap(~contrast_label, scales = "free_y", nrow = 1L) +
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "Effect modification: DTAITE bias vs h",
+      title = "B  Estimated DAITE bias",
       x = "True h",
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 11) +
+    theme_minimal(base_size = 9) +
     theme(legend.position = "bottom")
-  save_plot_pair(p, stem, width = 9.2, height = 4.6)
+  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7)
 }
 
 make_geometry_transport_scenario_plot <- function(df, stem) {
@@ -2635,7 +2811,23 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
       is.finite(.data$coarseness)
     )
   if (nrow(bias_df) < 1L) return(NULL)
-  p <- ggplot(
+
+  d <- if (exists(".geo_design", inherits = TRUE)) {
+    get(".geo_design", inherits = TRUE)
+  } else {
+    partition <- spatstat.geom::quadrats(
+      X = spatstat.geom::owin(c(0, 100), c(0, 100)), nx = 10, ny = 10
+    )
+    make_geometry_transport_design(
+      partition, path_seed = 20260714L + 201L, observed_seed = 20260714L + 202L
+    )
+  }
+  labels <- sprintf("m=%d; C=%.2f", d$m, d$coarseness)
+  maps <- structured_allocation_map_df(d$grid, d$allocations, labels, d$focal_cells)
+  pA <- plot_structured_allocation_maps(maps, nrow = 1L) +
+    labs(title = "A  Estimation regimes along the coarseness path (each used as z for simulate/SEM/fit)")
+
+  pB <- ggplot(
     bias_df,
     aes(
       x = .data$coarseness, y = .data$mean_bias,
@@ -2652,14 +2844,14 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "Coarseness regimes: focal-band DTAITE bias",
+      title = "B  Estimated all-or-nothing DAITE bias by estimation-regime coarseness",
       x = "Coarseness C(z) of the estimation regime",
-      y = "DTAITE bias (estimate - truth)",
+      y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 11) +
+    theme_minimal(base_size = 9) +
     theme(legend.position = "bottom")
-  save_plot_pair(p, stem, width = 7.2, height = 4.6)
+  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7)
 }
 
 if (!is.null(support_summary) && nrow(support_summary) > 0 &&
@@ -2668,21 +2860,21 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
   if (!is.null(lbl_col)) {
     plot_files$parameter_sweep_support <- make_parameter_sweep_support_plot(
       support_summary,
-      title = "K-separation and signal-to-noise: all-or-nothing DTAITE bias",
+      title = "K-separation and signal-to-noise: all-or-nothing DAITE bias",
       stem = "robustness_parameter_sweep_support_contrasts",
       subtitle = "Naive vs SEM only. Left: bias vs |K_1 - K_0|; right: bias vs mu scale at (K_0,K_1)=(0.8,0.2). Error bars are +/- 1 SE across replications."
     )
     plot_files$spatiotemporal_kernel_heatmap <- make_spatiotemporal_kernel_heatmap(
       support_summary,
-      title = "Spatiotemporal kernel misspecification: all-or-nothing DTAITE bias",
+      title = "Spatiotemporal kernel misspecification: all-or-nothing DAITE bias",
       stem = "robustness_spatiotemporal_kernel_mismatch_heatmap",
-      subtitle = "Rows = true (temporal, spatial) kernels; columns = fitted kernels. Cells are mean DTAITE bias at (K_0,K_1)=(0.8,0.2)."
+      subtitle = "Rows = true (temporal, spatial) kernels; columns = fitted kernels. Cells are mean DAITE bias at (K_0,K_1)=(0.8,0.2)."
     )
     plot_files$high_count_assignment_support <- make_high_count_support_plot(
       support_summary,
-      title = "Pretreatment-informed assignment: all-or-nothing DTAITE bias",
+      title = "Pretreatment-informed assignment: all-or-nothing DAITE bias",
       stem = "robustness_pretreatment_assignment_support_contrasts",
-      subtitle = "Naive vs SEM DTAITE bias by assignment rule at (K_0,K_1)=(0.8,0.2); grey lines connect the two methods. Error bars are +/- 1 SE across replications."
+      subtitle = "Naive vs SEM DAITE bias by assignment rule at (K_0,K_1)=(0.8,0.2); grey lines connect the two methods. Error bars are +/- 1 SE across replications."
     )
     plot_files$effect_modification <- make_effect_modification_scenario_plot(
       support_summary,
@@ -2952,12 +3144,12 @@ tex_lines <- c(
   "}",
   "\\makeatother",
   "",
-  "\\Cref{fig:robustness-all-scenarios-label} summarises mean raw labelling accuracy for naive and SEM across every fitted robustness scenario with a DTAITE contrast (K-separation, signal-to-noise, kernel misspecification, pretreatment assignment, binary-covariate effect modification, and coarseness / geometry transport).",
+  "\\Cref{fig:robustness-all-scenarios-label} summarises mean raw labelling accuracy for naive and SEM across every fitted robustness scenario with a DAITE contrast (K-separation, signal-to-noise, kernel misspecification, pretreatment assignment, binary-covariate effect modification, and coarseness / geometry transport).",
   "",
   tex_fig(
     ROBUSTNESS_FIG_STEMS$all_scenarios_label,
     "fig:robustness-all-scenarios-label",
-    "Mean raw labelling accuracy for SEM versus naive across all robustness scenarios with DTAITE contrasts. Each point is one fitted scenario; colour marks the scenario family (including covariate-effect and coarseness studies). The dashed line is equal accuracy (points above favour SEM)."
+    "Mean raw labelling accuracy for SEM versus naive across all robustness scenarios with DAITE contrasts. Each point is one fitted scenario; colour marks the scenario family (including covariate-effect and coarseness studies). The dashed line is equal accuracy (points above favour SEM)."
   ),
   "\\FloatBarrier",
   "",
@@ -2965,18 +3157,18 @@ tex_lines <- c(
     "K-separation and signal-to-noise",
     "app:robustness-parameter-sweep",
     c(
-      "The main study in \\cref{sec:simulation_study} fixes a large separation between control and treated branching ratios, with treatment lowering the branching ratio from $K_0=0.8$ to $K_1=0.2$. Here we stress-test performance as that separation shrinks. Throughout, control and treated processes share $(\\alpha,\\beta)=(0.01,10)$ and exponential temporal triggering; treatment is assigned independently to $50\\%$ of cells. The control branching ratio is fixed at $K_0=0.8$ and the treated ratio varies over $K_1\\in\\{0.1,0.2,0.3,0.4,0.5,0.6,0.7\\}$, always below control. For each pair $(K_0,K_1)$ the background rate $\\mu$ is recalibrated so the expected post-treatment point count remains fixed; small $K_0-K_1$ therefore isolates weak component separation at comparable event abundance.",
+      "The main study in \\cref{sec:simulation_study} fixes a large separation between control and treated branching ratios, with treatment lowering the branching ratio from $K_0=0.8$ to $K_1=0.2$. Here we stress-test performance as that separation shrinks. Throughout, control and treated processes share $(\\alpha,\\beta)=(0.01,10)$ and exponential temporal triggering; treatment is assigned independently to $50\\%$ of cells. The control branching ratio is fixed at $K_0=0.8$ and the treated ratio varies over $K_1\\in\\{0.1,0.2,0.3,0.4,0.5,0.6,0.7\\}$, always below control. For each pair $(K_0,K_1)$ the background rate $\\mu$ is held fixed and the post-treatment horizon is recalibrated so the expected catalogue size remains at the common target; small $K_0-K_1$ therefore isolates weak component separation at matched event abundance.",
       sprintf(
-        "Finite-sample behaviour also depends on how many post-treatment events are available relative to the ambiguity created by spillover. Holding $(K_0,K_1)=(0.8,0.2)$ and the random assignment design fixed, we vary a background-rate multiplier $\\mu_{\\mathrm{scale}}\\in%s$ while calibrating $\\mu$ from a common target abundance; realized point counts therefore vary across the grid. Lower $\\mu_{\\mathrm{scale}}$ increases the relative contribution of triggered offspring to the observed pattern; higher values push the process toward a Poisson-like regime with weaker history dependence.",
+        "Holding $(K_0,K_1)=(0.8,0.2)$ and the random assignment design fixed, we also vary a background-rate multiplier $\\mu_{\\mathrm{scale}}\\in%s$. The immigrant intensity is $\\mu=\\mu_{\\mathrm{anchor}}\\mu_{\\mathrm{scale}}$ with $\\mu_{\\mathrm{anchor}}$ chosen so the default horizon recovers the target abundance at $\\mu_{\\mathrm{scale}}=1$; for every other scale the post-treatment horizon is recalibrated so expected catalogue size stays at the same target. Thus $\\mu_{\\mathrm{scale}}$ trades intensity against observation length at fixed expected sample size rather than changing total event abundance.",
         format_mu_scale_grid(mu_scales, for_tex = TRUE)
       ),
-      "\\Cref{fig:robustness-parameter-sweep-support} reports all-or-nothing DTAITE bias for both grids (naive and SEM). All contrast estimates use true control parameters with fitted treated parameters (as in \\cref{fig:all_nothing}). Labelling accuracy for these scenarios is summarised with the other robustness checks in \\cref{fig:robustness-all-scenarios-label}."
+      "\\Cref{fig:robustness-parameter-sweep-support} reports all-or-nothing DAITE bias for both grids (naive and SEM). All contrast estimates use true control parameters with fitted treated parameters (as in \\cref{fig:all_nothing}). Labelling accuracy for these scenarios is summarised with the other robustness checks in \\cref{fig:robustness-all-scenarios-label}."
     ),
     c(
       tex_fig(
         ROBUSTNESS_FIG_STEMS$parameter_sweep_support,
         "fig:robustness-parameter-sweep-support",
-        "All-or-nothing DTAITE bias ($\\widehat\\psi-\\psi$) for naive and SEM across two parameter sweeps. Left: K-separation vs $|K_1-K_0|$. Right: signal-to-noise vs $\\mu$ scale at $(K_0,K_1)=(0.8,0.2)$. Error bars are $\\pm 1$ SE across replications."
+        "All-or-nothing DAITE bias ($\\widehat\\psi-\\psi$) for naive and SEM across two parameter sweeps. Left: K-separation vs $|K_1-K_0|$. Right: signal-to-noise vs $\\mu$ scale at $(K_0,K_1)=(0.8,0.2)$. Error bars are $\\pm 1$ SE across replications."
       )
     )
   ),
@@ -2992,13 +3184,13 @@ tex_lines <- c(
       "+K_1\\sum_{\\substack{i:t_i<t\\\\r_i=1}}g_t(t-t_i)g_s(x-x_i).",
       "\\]",
       "The balanced strata imply $\\{m_h(1)+m_h(-1)\\}/2=1$, while the stratum source-rate ratio is $\\exp(2h)$; exact $X$-balance of $z_{\\mathrm{obs}}$ likewise keeps the treated-area mean of $m_h$ equal to one. We use $h\\in\\{0,0.3,0.6\\}$ with $32$ independent catalogues per $h$. For each realisation we form naive labels and a single SEM labelling, then fit the correctly specified heterogeneous model under those labels (control parameters held at truth).",
-      "We report three DTAITE contrasts versus all-control: the all-or-nothing contrast $\\Psi_{\\mathrm{global}}=\\Lambda^{1}(D)-\\Lambda^{0}(D)$, and two fixed single-cell interventions from the all-control baseline---one $X=+1$ cell and one $X=-1$ cell. Within every outer replication, truths and fitted counterfactuals condition on that replication's pre-treatment history and use common random numbers across regimes. Causal summaries report mean bias and its Monte Carlo standard error, absolute and percentage error, and fitting failures. Label summaries report raw and balanced accuracy with component-specific recall."
+      "We report three DAITE contrasts versus all-control: the all-or-nothing contrast $\\Psi_{\\mathrm{global}}=\\Lambda^{1}(D)-\\Lambda^{0}(D)$, and two fixed single-cell interventions from the all-control baseline---one $X=+1$ cell and one $X=-1$ cell. Within every outer replication, truths and fitted counterfactuals condition on that replication's pre-treatment history and use common random numbers across regimes. Causal summaries report mean bias and its Monte Carlo standard error, absolute and percentage error, and fitting failures. Label summaries report raw and balanced accuracy with component-specific recall."
     ),
     c(
       tex_fig(
         ROBUSTNESS_FIG_STEMS$effect_modification,
         "fig:robustness-effect-modification",
-        "Binary-covariate effect-modification study. Facets report estimated DTAITE bias versus $h$ for all-or-nothing and the single $X=+1$ and $X=-1$ cell interventions (naive and SEM)."
+        "Binary-covariate effect-modification study. Facets report estimated DAITE bias versus $h$ for all-or-nothing and the single $X=+1$ and $X=-1$ cell interventions (naive and SEM)."
       )
     )
   ),
@@ -3010,13 +3202,13 @@ tex_lines <- c(
       "\\paragraph{Rook adjacency and coarseness.}",
       "Index the $10\\times10$ cells by $(r,c)$ with $r,c\\in\\{1,\\ldots,10\\}$. Two distinct cells $j=(r,c)$ and $\\ell=(r',c')$ are rook-adjacent if they share a side, $|r-r'|+|c-c'|=1$, and are not diagonal neighbours. Let $E$ be the undirected edge set of all such pairs. On a $10\\times10$ grid there are $90$ horizontal and $90$ vertical edges, so $|E|=180$.",
       "For an allocation $z\\in\\{0,1\\}^{100}$, the cut count is $D(z)=\\sum_{(j,\\ell)\\in E}\\mathbf{1}\\{z_j\\neq z_\\ell\\}$. The checkerboard maximises the cut ($D(z^{\\mathrm{cb}})=180$), while the left--right block has only the ten centreline edges discordant ($D(z^{\\mathrm{block}})=10$). Normalised coarseness is $C(z)=\\{180-D(z)\\}/170$, so $C(z^{\\mathrm{cb}})=0$ and $C(z^{\\mathrm{block}})=1$. Larger $C(z)$ means greater spatial aggregation. Figures use realised $C(z^{(m)})$ rather than $m/25$.",
-      "The five-cell focal band in column 5 remains treated throughout. For each path allocation $z^{(m)}$ we simulate catalogues under that regime, form naive and SEM labels under $z^{(m)}$, and fit treated parameters under $z^{(m)}$. We then evaluate a fixed focal-band DTAITE under all-treated versus all-control allocations, so differences across the path isolate how estimation-regime coarseness affects recovery of the same region-specific target."
+      "The five-cell focal band in column 5 remains treated throughout. For each path allocation $z^{(m)}$ we simulate catalogues under that regime, form naive and SEM labels under $z^{(m)}$, and fit treated parameters under $z^{(m)}$. We then evaluate a fixed focal-band DAITE under all-treated versus all-control allocations, so differences across the path isolate how estimation-regime coarseness affects recovery of the same region-specific target."
     ),
     c(
       tex_fig(
         ROBUSTNESS_FIG_STEMS$geometry_transport,
         "fig:robustness-geometry-transport",
-        "Estimated focal-band DTAITE bias under all-treated versus all-control allocations when each balanced path allocation is used as the estimation regime (naive and SEM)."
+        "Estimated focal-band DAITE bias under all-treated versus all-control allocations when each balanced path allocation is used as the estimation regime (naive and SEM)."
       )
     )
   ),
@@ -3026,11 +3218,11 @@ tex_lines <- c(
     c(
       "Assumption~\\ref{ass:G3} and the identification discussion in \\cref{sec:identification} treat the triggering kernel as part of the causal specification: misspecification changes both fit and the transmitted spillover geometry. We therefore cross a $2\\times 2$ truth grid of temporal and spatial kernels (exponential or mean-matched power-law in each margin) with the same $2\\times 2$ fitted grid, yielding a $4\\times 4$ misspecification matrix at $(K_0,K_1)=(0.8,0.2)$ with random $50\\%$ treatment assignment.",
       "Power-law factors are mean-matched to their exponential counterparts so that misspecification isolates heavier tails rather than a change in expected triggering distance or lag. The resulting matrix includes correctly specified fits, temporal-only and spatial-only misspecification, and joint misspecification of both margins.",
-      "\\Cref{fig:robustness-kernel-heatmap} reports all-or-nothing DTAITE bias across this matrix for naive and SEM; labelling accuracy appears in \\cref{fig:robustness-all-scenarios-label}."
+      "\\Cref{fig:robustness-kernel-heatmap} reports all-or-nothing DAITE bias across this matrix for naive and SEM; labelling accuracy appears in \\cref{fig:robustness-all-scenarios-label}."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$spatiotemporal_kernel_heatmap, "fig:robustness-kernel-heatmap",
-              "Spatiotemporal kernel misspecification matrix for all-or-nothing DTAITE bias ($\\widehat\\psi-\\psi$). Rows are true (temporal, spatial) kernels; columns are fitted kernels. Facets are naive and SEM. Empty cells indicate scenarios not yet available in the plotted run.")
+              "Spatiotemporal kernel misspecification matrix for all-or-nothing DAITE bias ($\\widehat\\psi-\\psi$). Rows are true (temporal, spatial) kernels; columns are fitted kernels. Facets are naive and SEM. Empty cells indicate scenarios not yet available in the plotted run.")
     )
   ),
   tex_subsubsection(
@@ -3044,11 +3236,11 @@ tex_lines <- c(
       "\\item \\emph{Contiguous AOI}: grow a rook-contiguous treated region from the hottest seed cell by repeatedly adjoining the highest-count frontier neighbour (Oklahoma-style geometry).",
       "\\item \\emph{Voronoi random}: take the first $100$ pretreatment events as Dirichlet seeds (yielding up to $100$ Voronoi areas), randomly treat $50\\%$ of those tiles, and assign each analysis-grid cell the treatment of the tile containing its centroid.",
       "\\end{enumerate}",
-      "Highest-count assignment is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. Contiguous AOI assignment additionally concentrates spillover along a spatial boundary. Voronoi-random assignment uses pretreatment geometry to define irregular contiguous units while keeping treatment random at the tile level. \\Cref{fig:robustness-high-count-support} summarises all-or-nothing DTAITE bias across the five rules; labelling accuracy appears in \\cref{fig:robustness-all-scenarios-label}."
+      "Highest-count assignment is especially demanding for naive location-based labelling, because cell location and latent process type are deliberately misaligned. Contiguous AOI assignment additionally concentrates spillover along a spatial boundary. Voronoi-random assignment uses pretreatment geometry to define irregular contiguous units while keeping treatment random at the tile level. \\Cref{fig:robustness-high-count-support} summarises all-or-nothing DAITE bias across the five rules; labelling accuracy appears in \\cref{fig:robustness-all-scenarios-label}."
     ),
     c(
       tex_fig(ROBUSTNESS_FIG_STEMS$high_count_support, "fig:robustness-high-count-support",
-              "Pretreatment-informed assignment all-or-nothing DTAITE bias ($\\widehat\\psi-\\psi$) by assignment rule for naive and SEM. Grey lines connect the two methods within each rule. Error bars are $\\pm 1$ SE across replications.")
+              "Pretreatment-informed assignment all-or-nothing DAITE bias ($\\widehat\\psi-\\psi$) by assignment rule for naive and SEM. Grey lines connect the two methods within each rule. Error bars are $\\pm 1$ SE across replications.")
     )
   ),
   if (isTRUE(include_decay_diagnostics)) tex_subsubsection(
