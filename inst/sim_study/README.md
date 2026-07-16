@@ -198,6 +198,26 @@ cd PPDisentangle-output/sim_study/generated/robustness
 pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
+Resume a failed robustness job without rerunning completed scenarios (reuses
+RDS files named `robustness_<OLDJOB>_<scenario_id>.rds` on the cluster output
+path, then runs only the missing scenarios + structured studies + replot):
+
+```bash
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 48:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --resume-from robustness_<OLDJOB>
+```
+
+If the prior job never wrote a manifest CSV, build one from the completed RDS
+files before a local replot:
+
+```bash
+Rscript inst/sim_study/build_manifest_from_rds.R robustness_<OLDJOB>
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<OLDJOB>
+```
+
 Partial timing probe (subset only — not sufficient for the full PDF):
 
 ```bash

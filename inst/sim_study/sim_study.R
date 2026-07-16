@@ -645,10 +645,12 @@ assign_voronoi_random <- function(n_treated, n_seeds = 100L) {
   # First n_seeds pretreatment events (time order from the simulator).
   n_take <- min(n_seeds, nrow(ref_df))
   seed_df <- ref_df[seq_len(n_take), , drop = FALSE]
+  # spatstat::ppp requires a true owin; OMEGA is the numeric box c(xmin,xmax,ymin,ymax).
+  omega_win <- if (inherits(OMEGA, "owin")) OMEGA else spatstat.geom::as.owin(OMEGA)
   seeds <- spatstat.geom::ppp(
     x = seed_df$x,
     y = seed_df$y,
-    window = OMEGA,
+    window = omega_win,
     check = FALSE
   )
   seeds <- spatstat.geom::unique.ppp(seeds)

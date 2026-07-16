@@ -121,6 +121,8 @@ scenario_filter <- get_arg_val("--scenario-set", Sys.getenv("PP_ROBUSTNESS_SCENA
 if (!nzchar(scenario_filter)) scenario_filter <- "all"
 replot_basename <- get_arg_val("--replot", Sys.getenv("PP_ROBUSTNESS_REPLOT", ""))
 if (!nzchar(replot_basename)) replot_basename <- NULL
+resume_from <- get_arg_val("--resume-from", Sys.getenv("PP_ROBUSTNESS_RESUME_FROM", ""))
+if (!nzchar(resume_from)) resume_from <- NULL
 run_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 output_basename <- if (!is.null(replot_basename)) {
   replot_basename
@@ -261,6 +263,68 @@ source(file.path(script_dir, "decay_validation_utils.R"), local = FALSE)
 run_one <- function(row_id) {
   sc <- scenarios[row_id, , drop = FALSE]
   run_basename <- paste0(output_basename, "_", sc$scenario_id)
+  rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
+
+  # Resume: reuse a completed RDS from a prior job with the same scenario_id.
+  if (!is.null(resume_from)) {
+    resume_rds <- file.path(out_dir, paste0(resume_from, "_", sc$scenario_id, ".rds"))
+    if (!file.exists(resume_rds) && identical(out_dir, sim_root)) {
+      # Also look in paper/ archive layout.
+      resume_rds_alt <- file.path(sim_root, "paper", resume_from, paste0(resume_from, "_", sc$scenario_id, ".rds"))
+      if (file.exists(resume_rds_alt)) resume_rds <- resume_rds_alt
+    }
+    if (file.exists(resume_rds)) {
+      message(sprintf(
+        "[robustness] %d/%d %s | reusing %s",
+        row_id, nrow(scenarios), sc$scenario_id, basename(resume_rds)
+      ))
+      rds_path <- resume_rds
+      run_basename <- sub("\\.rds$", "", basename(resume_rds))
+      return(data.frame(
+        scenario_id = sc$scenario_id,
+        scenario_family = sc$scenario_family,
+        control_k = sc$control_k,
+        treated_k = sc$treated_k,
+        k_delta = sc$k_delta,
+        mu_scale = sc$mu_scale,
+        sim_kernel = sc$sim_kernel,
+        fit_kernel = sc$fit_kernel,
+        sim_spatial_kernel = sc$sim_spatial_kernel,
+        fit_spatial_kernel = sc$fit_spatial_kernel,
+        treatment_assignment = sc$treatment_assignment,
+        target_points = target_points,
+        run_basename = run_basename,
+        rds_path = rds_path,
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
+
+  # Skip recompute if this job already wrote the RDS (safe restart).
+  if (file.exists(rds_path)) {
+    message(sprintf(
+      "[robustness] %d/%d %s | existing RDS found, skipping recompute",
+      row_id, nrow(scenarios), sc$scenario_id
+    ))
+    return(data.frame(
+      scenario_id = sc$scenario_id,
+      scenario_family = sc$scenario_family,
+      control_k = sc$control_k,
+      treated_k = sc$treated_k,
+      k_delta = sc$k_delta,
+      mu_scale = sc$mu_scale,
+      sim_kernel = sc$sim_kernel,
+      fit_kernel = sc$fit_kernel,
+      sim_spatial_kernel = sc$sim_spatial_kernel,
+      fit_spatial_kernel = sc$fit_spatial_kernel,
+      treatment_assignment = sc$treatment_assignment,
+      target_points = target_points,
+      run_basename = run_basename,
+      rds_path = rds_path,
+      stringsAsFactors = FALSE
+    ))
+  }
+
   message(sprintf(
     "[robustness] %d/%d %s | K=(%.3f, %.3f) mu_scale=%.3f target_points=%.0f",
     row_id, nrow(scenarios), sc$scenario_id, sc$control_k, sc$treated_k,
@@ -290,7 +354,6 @@ run_one <- function(row_id) {
   on.exit(setwd(old_wd), add = TRUE)
   status <- system2("Rscript", args = cmd_args, env = sprintf("%s=%s", names(env), unname(env)))
   if (!identical(status, 0L)) stop(sprintf("sim_study.R failed for %s", sc$scenario_id))
-  rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
   if (!file.exists(rds_path)) stop(sprintf("Expected output missing: %s", rds_path))
   data.frame(
     scenario_id = sc$scenario_id,
@@ -311,6 +374,24 @@ run_one <- function(row_id) {
   )
 }
 
+run_one_safe <- function(row_id) {
+  tryCatch(
+    run_one(row_id),
+    error = function(e) {
+      sc <- scenarios[row_id, , drop = FALSE]
+      warning(sprintf(
+        "[robustness] scenario %s failed: %s",
+        sc$scenario_id, conditionMessage(e)
+      ), call. = FALSE)
+      NULL
+    }
+  )
+}
+
+is_manifest_row <- function(x) {
+  is.data.frame(x) && nrow(x) >= 1L && "scenario_id" %in% names(x)
+}
+
 manifest <- if (!is.null(replot_basename)) {
   manifest_path <- file.path(out_dir, paste0(output_basename, "_manifest.csv"))
   if (!file.exists(manifest_path)) {
@@ -319,17 +400,33 @@ manifest <- if (!is.null(replot_basename)) {
   message("[robustness] replot from existing summaries: ", output_basename)
   read.csv(manifest_path, stringsAsFactors = FALSE)
 } else {
+  if (!is.null(resume_from)) {
+    message("[robustness] resume-from prior basename: ", resume_from)
+  }
   scenario_ids <- seq_len(nrow(scenarios))
-  if (scenario_workers > 1L) {
-    bind_rows(parallel::mclapply(
+  raw_results <- if (scenario_workers > 1L) {
+    parallel::mclapply(
       scenario_ids,
-      run_one,
+      run_one_safe,
       mc.cores = scenario_workers,
       mc.preschedule = FALSE
-    ))
+    )
   } else {
-    bind_rows(lapply(scenario_ids, run_one))
+    lapply(scenario_ids, run_one_safe)
   }
+  # Drop NULLs and any try-error leftovers from parallel failures.
+  kept <- Filter(is_manifest_row, raw_results)
+  n_fail <- length(scenario_ids) - length(kept)
+  if (n_fail > 0L) {
+    warning(sprintf(
+      "[robustness] %d/%d scenarios failed; continuing with successful rows",
+      n_fail, length(scenario_ids)
+    ), call. = FALSE)
+  }
+  if (!length(kept)) {
+    stop("[robustness] all scenarios failed; no manifest rows to aggregate")
+  }
+  bind_rows(kept)
 }
 
 resolve_manifest_rds_path <- function(row, out_dir) {
