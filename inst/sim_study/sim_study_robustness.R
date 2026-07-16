@@ -122,7 +122,13 @@ if (!nzchar(scenario_filter)) scenario_filter <- "all"
 replot_basename <- get_arg_val("--replot", Sys.getenv("PP_ROBUSTNESS_REPLOT", ""))
 if (!nzchar(replot_basename)) replot_basename <- NULL
 resume_from <- get_arg_val("--resume-from", Sys.getenv("PP_ROBUSTNESS_RESUME_FROM", ""))
-if (!nzchar(resume_from)) resume_from <- NULL
+resume_sources <- if (is.null(resume_from) || !nzchar(resume_from)) {
+  character()
+} else {
+  src <- unlist(strsplit(resume_from, "[,;[:space:]]+", perl = TRUE), use.names = FALSE)
+  unique(src[nzchar(src)])
+}
+if (!length(resume_sources)) resume_from <- NULL
 run_stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 output_basename <- if (!is.null(replot_basename)) {
   replot_basename
@@ -211,11 +217,60 @@ spatiotemporal_kernel_mismatch <- expand.grid(
   stringsAsFactors = FALSE
 )
 
+# Structured designs are ordinary scenario rows (same RDS/manifest path).
+source(file.path(script_dir, "structured_robustness_utils.R"), local = FALSE)
+effect_h_values <- c(0, 0.3, 0.6)
+effect_modification <- data.frame(
+  scenario_family = "effect_modification",
+  control_k = ROBUSTNESS_CONTROL_K,
+  treated_k = ROBUSTNESS_TREATED_K_DEFAULT,
+  mu_scale = 1,
+  sim_kernel = "exponential",
+  fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
+  treatment_assignment = paste0(
+    "effect_mod_balanced_X_h",
+    vapply(effect_h_values, format_num_tag, character(1))
+  ),
+  h_true = effect_h_values,
+  geometry_m = NA_integer_,
+  coarseness = NA_real_,
+  stringsAsFactors = FALSE
+)
+.tmp_geo_partition <- spatstat.geom::quadrats(
+  X = spatstat.geom::owin(c(0, 100), c(0, 100)), nx = 10, ny = 10
+)
+.geo_design <- make_geometry_transport_design(
+  .tmp_geo_partition, path_seed = 20260714L + 201L, observed_seed = 20260714L + 202L
+)
+geometry_transport <- data.frame(
+  scenario_family = "geometry_transport",
+  control_k = ROBUSTNESS_CONTROL_K,
+  treated_k = ROBUSTNESS_TREATED_K_DEFAULT,
+  mu_scale = 1,
+  sim_kernel = "exponential",
+  fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
+  treatment_assignment = paste0(
+    "geometry_path_m", as.integer(.geo_design$m),
+    "_c", vapply(unname(.geo_design$coarseness), format_num_tag, character(1))
+  ),
+  h_true = 0,
+  geometry_m = as.integer(.geo_design$m),
+  coarseness = as.numeric(unname(.geo_design$coarseness)),
+  stringsAsFactors = FALSE
+)
+rm(.tmp_geo_partition, .geo_design)
+
 scenarios <- bind_rows(
   k_separation,
   pretreatment_assignment,
   snr_scale,
-  spatiotemporal_kernel_mismatch
+  spatiotemporal_kernel_mismatch,
+  effect_modification,
+  geometry_transport
 ) %>%
   mutate(
     k_delta = abs(.data$treated_k - .data$control_k),
@@ -260,101 +315,7 @@ dir.create(robustness_dir, recursive = TRUE, showWarnings = FALSE)
 message("[robustness] generated dir: ", robustness_dir)
 source(file.path(script_dir, "decay_validation_utils.R"), local = FALSE)
 
-run_one <- function(row_id) {
-  sc <- scenarios[row_id, , drop = FALSE]
-  run_basename <- paste0(output_basename, "_", sc$scenario_id)
-  rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
-
-  # Resume: reuse a completed RDS from a prior job with the same scenario_id.
-  if (!is.null(resume_from)) {
-    resume_rds <- file.path(out_dir, paste0(resume_from, "_", sc$scenario_id, ".rds"))
-    if (!file.exists(resume_rds) && identical(out_dir, sim_root)) {
-      # Also look in paper/ archive layout.
-      resume_rds_alt <- file.path(sim_root, "paper", resume_from, paste0(resume_from, "_", sc$scenario_id, ".rds"))
-      if (file.exists(resume_rds_alt)) resume_rds <- resume_rds_alt
-    }
-    if (file.exists(resume_rds)) {
-      message(sprintf(
-        "[robustness] %d/%d %s | reusing %s",
-        row_id, nrow(scenarios), sc$scenario_id, basename(resume_rds)
-      ))
-      rds_path <- resume_rds
-      run_basename <- sub("\\.rds$", "", basename(resume_rds))
-      return(data.frame(
-        scenario_id = sc$scenario_id,
-        scenario_family = sc$scenario_family,
-        control_k = sc$control_k,
-        treated_k = sc$treated_k,
-        k_delta = sc$k_delta,
-        mu_scale = sc$mu_scale,
-        sim_kernel = sc$sim_kernel,
-        fit_kernel = sc$fit_kernel,
-        sim_spatial_kernel = sc$sim_spatial_kernel,
-        fit_spatial_kernel = sc$fit_spatial_kernel,
-        treatment_assignment = sc$treatment_assignment,
-        target_points = target_points,
-        run_basename = run_basename,
-        rds_path = rds_path,
-        stringsAsFactors = FALSE
-      ))
-    }
-  }
-
-  # Skip recompute if this job already wrote the RDS (safe restart).
-  if (file.exists(rds_path)) {
-    message(sprintf(
-      "[robustness] %d/%d %s | existing RDS found, skipping recompute",
-      row_id, nrow(scenarios), sc$scenario_id
-    ))
-    return(data.frame(
-      scenario_id = sc$scenario_id,
-      scenario_family = sc$scenario_family,
-      control_k = sc$control_k,
-      treated_k = sc$treated_k,
-      k_delta = sc$k_delta,
-      mu_scale = sc$mu_scale,
-      sim_kernel = sc$sim_kernel,
-      fit_kernel = sc$fit_kernel,
-      sim_spatial_kernel = sc$sim_spatial_kernel,
-      fit_spatial_kernel = sc$fit_spatial_kernel,
-      treatment_assignment = sc$treatment_assignment,
-      target_points = target_points,
-      run_basename = run_basename,
-      rds_path = rds_path,
-      stringsAsFactors = FALSE
-    ))
-  }
-
-  message(sprintf(
-    "[robustness] %d/%d %s | K=(%.3f, %.3f) mu_scale=%.3f target_points=%.0f",
-    row_id, nrow(scenarios), sc$scenario_id, sc$control_k, sc$treated_k,
-    sc$mu_scale, target_points
-  ))
-  env <- c(
-    PP_OUTPUT_BASENAME = run_basename,
-    PP_OUTPUT_TAG = "",
-    PP_SCENARIO_ID = sc$scenario_id,
-    PP_CPUS = as.character(scenario_cpus),
-    SLURM_CPUS_PER_TASK = as.character(scenario_cpus),
-    PP_CONTROL_K = as.character(sc$control_k),
-    PP_TREATED_K = as.character(sc$treated_k),
-    PP_MU_SCALE = as.character(sc$mu_scale),
-    PP_TARGET_POINTS = as.character(target_points),
-    PP_SIM_KERNEL = sc$sim_kernel,
-    PP_FIT_KERNEL = sc$fit_kernel,
-    PP_SIM_SPATIAL_KERNEL = sc$sim_spatial_kernel,
-    PP_FIT_SPATIAL_KERNEL = sc$fit_spatial_kernel,
-    PP_TREATMENT_ASSIGNMENT = sc$treatment_assignment,
-    PP_DECAY_REPS = as.character(decay_reps)
-  )
-  cmd_args <- c(file.path("inst", "sim_study", "sim_study.R"), "--sims", as.character(pp_sims))
-  if (test_mode) cmd_args <- c(cmd_args, "--test")
-  old_wd <- getwd()
-  setwd(repo_dir)
-  on.exit(setwd(old_wd), add = TRUE)
-  status <- system2("Rscript", args = cmd_args, env = sprintf("%s=%s", names(env), unname(env)))
-  if (!identical(status, 0L)) stop(sprintf("sim_study.R failed for %s", sc$scenario_id))
-  if (!file.exists(rds_path)) stop(sprintf("Expected output missing: %s", rds_path))
+manifest_row <- function(sc, run_basename, rds_path) {
   data.frame(
     scenario_id = sc$scenario_id,
     scenario_family = sc$scenario_family,
@@ -367,11 +328,167 @@ run_one <- function(row_id) {
     sim_spatial_kernel = sc$sim_spatial_kernel,
     fit_spatial_kernel = sc$fit_spatial_kernel,
     treatment_assignment = sc$treatment_assignment,
+    h_true = if ("h_true" %in% names(sc)) sc$h_true else NA_real_,
+    geometry_m = if ("geometry_m" %in% names(sc)) sc$geometry_m else NA_integer_,
+    coarseness = if ("coarseness" %in% names(sc)) sc$coarseness else NA_real_,
     target_points = target_points,
     run_basename = run_basename,
     rds_path = rds_path,
     stringsAsFactors = FALSE
   )
+}
+
+find_resume_rds <- function(sc) {
+  if (!length(resume_sources)) return(NULL)
+  for (source_basename in resume_sources) {
+    candidates <- c(
+      file.path(out_dir, paste0(source_basename, "_", sc$scenario_id, ".rds")),
+      if (identical(out_dir, sim_root)) {
+        file.path(
+          sim_root, "paper", source_basename,
+          paste0(source_basename, "_", sc$scenario_id, ".rds")
+        )
+      } else character()
+    )
+    for (candidate in candidates) {
+      if (!file.exists(candidate)) next
+      config <- tryCatch(readRDS(candidate)$config, error = function(e) NULL)
+      completed_reps <- suppressWarnings(as.integer(config$N_SIMS %||% NA_integer_))
+      if (!is.finite(completed_reps)) {
+        warning(sprintf(
+          "[robustness] refusing resume RDS without config$N_SIMS: %s",
+          basename(candidate)
+        ), call. = FALSE)
+        next
+      }
+      if (completed_reps != pp_sims) {
+        warning(sprintf(
+          "[robustness] refusing resume RDS with N_SIMS=%d (expected %d): %s",
+          completed_reps, pp_sims, basename(candidate)
+        ), call. = FALSE)
+        next
+      }
+      return(candidate)
+    }
+  }
+  NULL
+}
+
+run_one <- function(row_id) {
+  sc <- scenarios[row_id, , drop = FALSE]
+  run_basename <- paste0(output_basename, "_", sc$scenario_id)
+  rds_path <- file.path(out_dir, paste0(run_basename, ".rds"))
+
+  # Resume: reuse the first matching completed RDS across one or more basenames.
+  if (length(resume_sources)) {
+    resume_rds <- find_resume_rds(sc)
+    if (!is.null(resume_rds)) {
+      message(sprintf(
+        "[robustness] %d/%d %s | reusing %s",
+        row_id, nrow(scenarios), sc$scenario_id, basename(resume_rds)
+      ))
+      rds_path <- resume_rds
+      run_basename <- sub("\\.rds$", "", basename(resume_rds))
+      return(manifest_row(sc, run_basename, rds_path))
+    }
+  }
+
+  # Skip recompute if this job already wrote the RDS (safe restart).
+  if (file.exists(rds_path)) {
+    message(sprintf(
+      "[robustness] %d/%d %s | existing RDS found, skipping recompute",
+      row_id, nrow(scenarios), sc$scenario_id
+    ))
+    return(manifest_row(sc, run_basename, rds_path))
+  }
+
+  message(sprintf(
+    "[robustness] %d/%d %s | K=(%.3f, %.3f) mu_scale=%.3f target_points=%.0f",
+    row_id, nrow(scenarios), sc$scenario_id, sc$control_k, sc$treated_k,
+    sc$mu_scale, target_points
+  ))
+  is_structured <- sc$scenario_family %in% c("effect_modification", "geometry_transport")
+  env <- c(
+    PP_OUTPUT_BASENAME = run_basename,
+    PP_OUTPUT_TAG = "",
+    PP_SCENARIO_ID = sc$scenario_id,
+    PP_SCENARIO_FAMILY = sc$scenario_family,
+    PP_CPUS = as.character(scenario_cpus),
+    SLURM_CPUS_PER_TASK = as.character(scenario_cpus),
+    PP_CONTROL_K = as.character(sc$control_k),
+    PP_TREATED_K = as.character(sc$treated_k),
+    PP_MU_SCALE = as.character(sc$mu_scale),
+    PP_TARGET_POINTS = as.character(target_points),
+    PP_SIM_KERNEL = sc$sim_kernel,
+    PP_FIT_KERNEL = sc$fit_kernel,
+    PP_SIM_SPATIAL_KERNEL = sc$sim_spatial_kernel,
+    PP_FIT_SPATIAL_KERNEL = sc$fit_spatial_kernel,
+    PP_TREATMENT_ASSIGNMENT = sc$treatment_assignment,
+    PP_DECAY_REPS = as.character(decay_reps),
+    PP_DECAY_VALIDATION = "0",
+    PP_SIMS = as.character(pp_sims)
+  )
+  # Explicitly propagate production controls to child Rscript processes.
+  # system2 inherits the parent environment on Unix, but listing these removes
+  # ambiguity and keeps fresh standard scenarios identical to the submit profile.
+  inherited_controls <- c(
+    "SLURM_JOB_ID", "PP_FORCE_CLUSTER",
+    "PP_SEM_INNER_ITER", "PP_SEM_OUTER_ITER",
+    "PP_SEM_N_PROPS", "PP_SEM_N_LABELLINGS",
+    "PP_SEM_PARAM_UPDATE_CADENCE", "PP_SEM_PROPOSAL_UPDATE_CADENCE",
+    "PP_SEM_PARAM_REFIT_CADENCE", "PP_SEM_WORKERS",
+    "PP_ATE_WORKERS", "PP_ATE_COMPUTE_TAU",
+    "PP_ATE_N_SIMS", "PP_ATE_N_TAU_SIMS", "PP_ATE_N_TAU_I"
+  )
+  for (control_name in inherited_controls) {
+    control_value <- Sys.getenv(control_name, "")
+    if (nzchar(control_value)) env[[control_name]] <- control_value
+  }
+  if (is_structured) {
+    if ("h_true" %in% names(sc) && is.finite(sc$h_true[[1]])) {
+      env <- c(env, PP_H_TRUE = as.character(sc$h_true[[1]]))
+    }
+    if ("geometry_m" %in% names(sc) && is.finite(sc$geometry_m[[1]])) {
+      env <- c(env, PP_GEOMETRY_M = as.character(as.integer(sc$geometry_m[[1]])))
+    }
+    # Forward SEM overrides used by the main long NeSI path.
+    sem_inner_env <- Sys.getenv("PP_SEM_INNER_ITER", "")
+    if (nzchar(sem_inner_env)) env <- c(env, PP_SEM_INNER_ITER = sem_inner_env)
+    sem_outer_env <- Sys.getenv("PP_SEM_OUTER_ITER", "")
+    if (nzchar(sem_outer_env)) env <- c(env, PP_SEM_OUTER_ITER = sem_outer_env)
+    rep_workers_env <- Sys.getenv("PP_STRUCTURED_REP_WORKERS", "")
+    if (nzchar(rep_workers_env)) {
+      env <- c(env, PP_STRUCTURED_REP_WORKERS = rep_workers_env)
+    }
+    truth_sims_env <- Sys.getenv("PP_STRUCTURED_TRUTH_SIMS", "")
+    if (nzchar(truth_sims_env)) {
+      env <- c(env, PP_STRUCTURED_TRUTH_SIMS = truth_sims_env)
+    }
+    forward_sims_env <- Sys.getenv("PP_STRUCTURED_FORWARD_SIMS", "")
+    if (nzchar(forward_sims_env)) {
+      env <- c(env, PP_STRUCTURED_FORWARD_SIMS = forward_sims_env)
+    }
+    cmd_args <- c(
+      file.path("inst", "sim_study", "run_structured_scenario.R"),
+      "--sims", as.character(pp_sims)
+    )
+  } else {
+    cmd_args <- c(file.path("inst", "sim_study", "sim_study.R"), "--sims", as.character(pp_sims))
+  }
+  if (test_mode) cmd_args <- c(cmd_args, "--test")
+  old_wd <- getwd()
+  setwd(repo_dir)
+  on.exit(setwd(old_wd), add = TRUE)
+  status <- system2("Rscript", args = cmd_args, env = sprintf("%s=%s", names(env), unname(env)))
+  if (!identical(status, 0L)) {
+    stop(sprintf(
+      "%s failed for %s",
+      if (is_structured) "run_structured_scenario.R" else "sim_study.R",
+      sc$scenario_id
+    ))
+  }
+  if (!file.exists(rds_path)) stop(sprintf("Expected output missing: %s", rds_path))
+  manifest_row(sc, run_basename, rds_path)
 }
 
 run_one_safe <- function(row_id) {
@@ -400,8 +517,8 @@ manifest <- if (!is.null(replot_basename)) {
   message("[robustness] replot from existing summaries: ", output_basename)
   read.csv(manifest_path, stringsAsFactors = FALSE)
 } else {
-  if (!is.null(resume_from)) {
-    message("[robustness] resume-from prior basename: ", resume_from)
+  if (length(resume_sources)) {
+    message("[robustness] resume-from prior basenames: ", paste(resume_sources, collapse = ", "))
   }
   scenario_ids <- seq_len(nrow(scenarios))
   raw_results <- if (scenario_workers > 1L) {
@@ -418,8 +535,8 @@ manifest <- if (!is.null(replot_basename)) {
   kept <- Filter(is_manifest_row, raw_results)
   n_fail <- length(scenario_ids) - length(kept)
   if (n_fail > 0L) {
-    warning(sprintf(
-      "[robustness] %d/%d scenarios failed; continuing with successful rows",
+    stop(sprintf(
+      "[robustness] %d/%d scenarios failed; refusing an incomplete production manifest",
       n_fail, length(scenario_ids)
     ), call. = FALSE)
   }
@@ -427,6 +544,21 @@ manifest <- if (!is.null(replot_basename)) {
     stop("[robustness] all scenarios failed; no manifest rows to aggregate")
   }
   bind_rows(kept)
+}
+if (is.null(replot_basename)) {
+  missing_ids <- setdiff(scenarios$scenario_id, manifest$scenario_id)
+  extra_ids <- setdiff(manifest$scenario_id, scenarios$scenario_id)
+  if (nrow(manifest) != nrow(scenarios) ||
+      length(missing_ids) > 0L || length(extra_ids) > 0L) {
+    stop(sprintf(
+      paste0(
+        "[robustness] manifest completeness failure: rows=%d expected=%d; ",
+        "missing=%d extra=%d"
+      ),
+      nrow(manifest), nrow(scenarios), length(missing_ids), length(extra_ids)
+    ))
+  }
+  message(sprintf("[robustness] manifest complete: %d/%d scenarios", nrow(manifest), nrow(scenarios)))
 }
 
 resolve_manifest_rds_path <- function(row, out_dir) {
@@ -713,6 +845,10 @@ load_support_summary_from_manifest <- function(manifest_df, out_dir) {
     }
     res <- readRDS(rds_path)
     rebuilt <- rebuild_support_contrast_summary_from_rds(res)
+    if (is.null(rebuilt) || nrow(rebuilt) < 1L) {
+      # Structured scenario RDS stores a ready-made summary (no results_flat).
+      rebuilt <- res$support_contrast_summary
+    }
     if (is.null(rebuilt) || nrow(rebuilt) < 1L) return(NULL)
     rebuilt$scenario_id <- row$scenario_id[[1]]
     rebuilt
@@ -1101,7 +1237,10 @@ summary_rows <- if (!is.null(replot_basename)) {
 spatial_decay_showcase_specs <- default_spatial_decay_showcase_specs()
 temporal_decay_showcase_specs <- default_temporal_decay_showcase_specs()
 manifest_has_k_separation <- any(manifest$scenario_family == "k_separation", na.rm = TRUE)
-auto_refresh_decay_showcase <- is.null(replot_basename) && isTRUE(manifest_has_k_separation)
+# Decay diagnostics are deliberately opt-in. They require a separate bank of
+# forward simulations and are not part of the production robustness estimands.
+auto_refresh_decay_showcase <- FALSE
+include_decay_diagnostics <- isTRUE(refresh_decay)
 decay_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) {
   if (isTRUE(auto_refresh_decay_showcase) && !isTRUE(refresh_decay)) {
     message("[robustness] auto-refreshing spatial decay showcase for appendix figures")
@@ -1112,8 +1251,8 @@ decay_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay
   if (!is.null(showcase_csv) && nrow(showcase_csv) > 0L) {
     showcase_csv
   } else {
-    message("[robustness] decay showcase CSV missing; refreshing showcase specs")
-    refresh_decay_showcase(manifest, spatial_decay_showcase_specs, decay_reps, out_dir)
+    message("[robustness] decay showcase CSV missing; skipping (use --refresh-decay explicitly)")
+    NULL
   }
 } else {
   NULL
@@ -1132,8 +1271,8 @@ decay_temporal_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_refr
   if (!is.null(temporal_csv) && nrow(temporal_csv) > 0L) {
     temporal_csv
   } else {
-    message("[robustness] temporal decay showcase CSV missing; refreshing showcase specs")
-    refresh_temporal_decay_showcase(manifest, temporal_decay_showcase_specs, decay_reps, out_dir)
+    message("[robustness] temporal decay showcase CSV missing; skipping (use --refresh-decay explicitly)")
+    NULL
   }
 } else {
   NULL
@@ -1152,8 +1291,8 @@ decay_label_flip_showcase_summary <- if (isTRUE(refresh_decay) || isTRUE(auto_re
   if (!is.null(label_flip_csv) && nrow(label_flip_csv) > 0L) {
     label_flip_csv
   } else {
-    message("[robustness] label-flip spatial decay showcase CSV missing; refreshing")
-    refresh_label_flip_decay_showcase(manifest, spatial_decay_showcase_specs, decay_reps, out_dir)
+    message("[robustness] label-flip spatial decay CSV missing; skipping")
+    NULL
   }
 } else {
   NULL
@@ -1172,8 +1311,8 @@ decay_label_flip_temporal_showcase_summary <- if (isTRUE(refresh_decay) || isTRU
   if (!is.null(label_flip_temporal_csv) && nrow(label_flip_temporal_csv) > 0L) {
     label_flip_temporal_csv
   } else {
-    message("[robustness] label-flip temporal decay showcase CSV missing; refreshing")
-    refresh_label_flip_temporal_decay_showcase(manifest, temporal_decay_showcase_specs, decay_reps, out_dir)
+    message("[robustness] label-flip temporal decay CSV missing; skipping")
+    NULL
   }
 } else {
   NULL
@@ -1215,8 +1354,12 @@ support_summary <- if (!is.null(replot_basename)) {
 ate_summary <- if (!is.null(replot_basename)) {
   read_summary_csv("_ate_summary.csv")
 } else {
-  bind_rows(lapply(summary_rows, `[[`, "ate")) %>%
-    left_join(manifest, by = "scenario_id")
+  ate_rows <- bind_rows(lapply(summary_rows, `[[`, "ate"))
+  if (is.null(ate_rows) || nrow(ate_rows) < 1L || !"scenario_id" %in% names(ate_rows)) {
+    ate_rows
+  } else {
+    left_join(ate_rows, manifest, by = "scenario_id")
+  }
 }
 decay_summary <- if (!is.null(replot_basename)) {
   read_summary_csv("_decay_validation_summary.csv")
@@ -1845,11 +1988,16 @@ load_structured_dtaite_label_rows <- function(robustness_dir) {
     geo <- geo[geo$method %in% c("naive", "SEM"), , drop = FALSE]
     if (nrow(geo) > 0L) {
       acc <- if ("accuracy" %in% names(geo)) geo$accuracy else geo$balanced_accuracy
+      sid <- if ("m" %in% names(geo)) {
+        sprintf("geometry_transport_m%d", as.integer(geo$m))
+      } else {
+        rep("geometry_transport", nrow(geo))
+      }
       rows[[length(rows) + 1L]] <- data.frame(
         method = as.character(geo$method),
         mean_accuracy = as.numeric(acc),
         mean_balanced_accuracy = as.numeric(geo$balanced_accuracy),
-        scenario_id = "geometry_transport",
+        scenario_id = sid,
         scenario_family = "geometry_transport",
         stringsAsFactors = FALSE
       )
@@ -1944,14 +2092,6 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
 
 plot_files <- list()
 if (!is.null(label_summary) && nrow(label_summary) > 0) {
-  structured_label_rows <- load_structured_dtaite_label_rows(robustness_dir)
-  if (!is.null(structured_label_rows) && nrow(structured_label_rows) > 0L) {
-    message(sprintf(
-      "[robustness] adding %d structured DTAITE label rows to all-scenario overview",
-      nrow(structured_label_rows)
-    ))
-    label_summary <- bind_rows(label_summary, structured_label_rows)
-  }
   lbl_col <- safe_label_col(label_summary)
   acc_col <- safe_metric_col(label_summary, c("mean_accuracy", "mean_balanced_accuracy", "accuracy"))
   if (!is.null(lbl_col) && !is.null(acc_col)) {
@@ -2390,6 +2530,138 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
   save_plot_pair(p_heat, stem, width = 8.5, height = 4.8)
 }
 
+make_effect_modification_scenario_plot <- function(df, stem) {
+  lbl_col <- safe_label_col(df)
+  if (is.null(lbl_col) || !"h_true" %in% names(df)) return(NULL)
+  work <- df
+  if (!"mean_bias" %in% names(work)) work$mean_bias <- NA_real_
+  if (!"mean_psi_estimate" %in% names(work)) work$mean_psi_estimate <- NA_real_
+  if (!"mean_psi_truth" %in% names(work)) work$mean_psi_truth <- NA_real_
+  if (!"se_bias" %in% names(work)) work$se_bias <- NA_real_
+  bias_df <- work %>%
+    filter(
+      .data$scenario_family == "effect_modification",
+      .data$contrast_family %in% c(
+        "global_1_0",
+        "single_cell_flip_X_plus",
+        "single_cell_flip_X_minus"
+      )
+    ) %>%
+    mutate(
+      !!lbl_col := normalize_labelling_method(.data[[lbl_col]]),
+      contrast_label = factor(
+        .data$contrast_family,
+        levels = c(
+          "global_1_0",
+          "single_cell_flip_X_plus",
+          "single_cell_flip_X_minus"
+        ),
+        labels = c(
+          "All treated vs all control",
+          "Single X=+1 cell vs all control",
+          "Single X=-1 cell vs all control"
+        )
+      ),
+      mean_bias = ifelse(
+        is.finite(.data$mean_bias),
+        .data$mean_bias,
+        ifelse(
+          is.finite(.data$mean_psi_estimate) & is.finite(.data$mean_psi_truth),
+          .data$mean_psi_estimate - .data$mean_psi_truth,
+          NA_real_
+        )
+      ),
+      se = ifelse(is.finite(.data$se_bias), .data$se_bias, 0)
+    ) %>%
+    filter(.data[[lbl_col]] %in% c("naive", "SEM"), is.finite(.data$mean_bias), is.finite(.data$h_true))
+  if (nrow(bias_df) < 1L) return(NULL)
+  p <- ggplot(
+    bias_df,
+    aes(
+      x = .data$h_true, y = .data$mean_bias,
+      color = .data[[lbl_col]], shape = .data[[lbl_col]]
+    )
+  ) +
+    geom_hline(yintercept = 0, linetype = 2, color = "grey45") +
+    geom_linerange(
+      aes(ymin = .data$mean_bias - .data$se, ymax = .data$mean_bias + .data$se),
+      position = position_dodge(width = 0.04)
+    ) +
+    geom_line(position = position_dodge(width = 0.04)) +
+    geom_point(position = position_dodge(width = 0.04), size = 2) +
+    facet_wrap(~contrast_label, scales = "free_y") +
+    scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
+    scale_shape_manual(values = c(naive = 16, SEM = 17)) +
+    labs(
+      title = "Effect modification: DTAITE bias vs h",
+      x = "True h",
+      y = "DTAITE bias (estimate - truth)",
+      color = NULL, shape = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "bottom")
+  save_plot_pair(p, stem, width = 9.2, height = 4.6)
+}
+
+make_geometry_transport_scenario_plot <- function(df, stem) {
+  lbl_col <- safe_label_col(df)
+  if (is.null(lbl_col) || !"coarseness" %in% names(df)) return(NULL)
+  work <- df
+  if (!"mean_bias" %in% names(work)) work$mean_bias <- NA_real_
+  if (!"mean_psi_estimate" %in% names(work)) work$mean_psi_estimate <- NA_real_
+  if (!"mean_psi_truth" %in% names(work)) work$mean_psi_truth <- NA_real_
+  if (!"se_bias" %in% names(work)) work$se_bias <- NA_real_
+  bias_df <- work %>%
+    filter(
+      .data$scenario_family == "geometry_transport",
+      .data$contrast_family == "focal_all_1_0"
+    ) %>%
+    mutate(
+      !!lbl_col := normalize_labelling_method(.data[[lbl_col]]),
+      mean_bias = ifelse(
+        is.finite(.data$mean_bias),
+        .data$mean_bias,
+        ifelse(
+          is.finite(.data$mean_psi_estimate) & is.finite(.data$mean_psi_truth),
+          .data$mean_psi_estimate - .data$mean_psi_truth,
+          NA_real_
+        )
+      ),
+      se = ifelse(is.finite(.data$se_bias), .data$se_bias, 0)
+    ) %>%
+    filter(
+      .data[[lbl_col]] %in% c("naive", "SEM"),
+      is.finite(.data$mean_bias),
+      is.finite(.data$coarseness)
+    )
+  if (nrow(bias_df) < 1L) return(NULL)
+  p <- ggplot(
+    bias_df,
+    aes(
+      x = .data$coarseness, y = .data$mean_bias,
+      color = .data[[lbl_col]], shape = .data[[lbl_col]]
+    )
+  ) +
+    geom_hline(yintercept = 0, linetype = 2, color = "grey45") +
+    geom_linerange(
+      aes(ymin = .data$mean_bias - .data$se, ymax = .data$mean_bias + .data$se),
+      position = position_dodge(width = 0.02)
+    ) +
+    geom_line(position = position_dodge(width = 0.02)) +
+    geom_point(position = position_dodge(width = 0.02), size = 2) +
+    scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
+    scale_shape_manual(values = c(naive = 16, SEM = 17)) +
+    labs(
+      title = "Coarseness regimes: focal-band DTAITE bias",
+      x = "Coarseness C(z) of the estimation regime",
+      y = "DTAITE bias (estimate - truth)",
+      color = NULL, shape = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "bottom")
+  save_plot_pair(p, stem, width = 7.2, height = 4.6)
+}
+
 if (!is.null(support_summary) && nrow(support_summary) > 0 &&
     all(c("contrast_family", "mean_abs_error") %in% names(support_summary))) {
   lbl_col <- safe_label_col(support_summary)
@@ -2412,10 +2684,19 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       stem = "robustness_pretreatment_assignment_support_contrasts",
       subtitle = "Naive vs SEM DTAITE bias by assignment rule at (K_0,K_1)=(0.8,0.2); grey lines connect the two methods. Error bars are +/- 1 SE across replications."
     )
+    plot_files$effect_modification <- make_effect_modification_scenario_plot(
+      support_summary,
+      stem = "robustness_effect_modification"
+    )
+    plot_files$geometry_transport <- make_geometry_transport_scenario_plot(
+      support_summary,
+      stem = "robustness_geometry_transport"
+    )
   }
 }
 
-if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
+if (isTRUE(include_decay_diagnostics) &&
+    !is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
     all(c("d_mid", "mean_abs_delta", "decay_label") %in% names(decay_showcase_summary))) {
   decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_decay <- make_decay_validation_plot(decay_showcase_summary, decay_reps_used)
@@ -2429,7 +2710,8 @@ if (!is.null(decay_showcase_summary) && nrow(decay_showcase_summary) > 0 &&
   )
 }
 
-if (!is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_summary) > 0 &&
+if (isTRUE(include_decay_diagnostics) &&
+    !is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_summary) > 0 &&
     all(c("mean_abs_delta", "decay_label") %in% names(decay_temporal_showcase_summary)) &&
     any(c("t_mid", "d_mid") %in% names(decay_temporal_showcase_summary))) {
   decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
@@ -2452,7 +2734,8 @@ if (!is.null(decay_temporal_showcase_summary) && nrow(decay_temporal_showcase_su
   )
 }
 
-if (!is.null(decay_label_flip_showcase_summary) && nrow(decay_label_flip_showcase_summary) > 0 &&
+if (isTRUE(include_decay_diagnostics) &&
+    !is.null(decay_label_flip_showcase_summary) && nrow(decay_label_flip_showcase_summary) > 0 &&
     all(c("d_mid", "mean_abs_delta", "decay_label") %in% names(decay_label_flip_showcase_summary))) {
   decay_reps_used <- if (isTRUE(refresh_decay) || isTRUE(auto_refresh_decay_showcase)) decay_reps else 2000L
   p_label_flip <- make_decay_validation_plot(
@@ -2483,7 +2766,8 @@ if (!is.null(decay_label_flip_showcase_summary) && nrow(decay_label_flip_showcas
   )
 }
 
-if (!is.null(decay_label_flip_temporal_showcase_summary) &&
+if (isTRUE(include_decay_diagnostics) &&
+    !is.null(decay_label_flip_temporal_showcase_summary) &&
     nrow(decay_label_flip_temporal_showcase_summary) > 0 &&
     all(c("mean_abs_delta", "decay_label") %in% names(decay_label_flip_temporal_showcase_summary)) &&
     any(c("t_mid", "d_mid") %in% names(decay_label_flip_temporal_showcase_summary))) {
@@ -2538,6 +2822,11 @@ ROBUSTNESS_FIG_STEMS <- list(
   decay_label_flip_temporal = "robustness_label_flip_temporal_decay_validation",
   decay_label_flip_temporal_cumulative = "robustness_label_flip_temporal_decay_validation_cumulative"
 )
+ACTIVE_ROBUSTNESS_FIG_STEMS <- if (isTRUE(include_decay_diagnostics)) {
+  ROBUSTNESS_FIG_STEMS
+} else {
+  ROBUSTNESS_FIG_STEMS[!grepl("^decay_", names(ROBUSTNESS_FIG_STEMS))]
+}
 
 prune_stale_robustness_figures <- function(fig_dir, keep_stems) {
   keep_files <- unique(c(
@@ -2632,7 +2921,7 @@ tex_lines <- c(
   "",
   "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: raw accuracy of the naive and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean percentage error in plug-in expected-count contrasts for (i) a single treated cell, (ii) a random $50\\%$ treated regime, and (iii) all-treated, each versus all-control. All contrast estimates fix control parameters at truth and use fitted treated parameters from each labelling, matching \\cref{fig:all_nothing}. These contrasts probe extrapolation across treatment intensity (SEM fits with explosive parameter estimates are excluded throughout).",
   "",
-  "The branching-ratio grid, spatiotemporal kernel misspecification matrix, assignment designs, signal-to-noise scalings, and decay diagnostics below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Figures are reported in \\cref{app:robustness-parameter-sweep,app:robustness-effect-modification,app:robustness-geometry-transport,app:robustness-kernel,app:robustness-high-count,app:robustness-decay-cell,app:robustness-decay-label}.",
+  "The branching-ratio grid, spatiotemporal kernel misspecification matrix, assignment designs, signal-to-noise scalings, effect modification, and allocation coarseness studies below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Decay diagnostics are excluded from the production robustness run because they require a separate forward-simulation experiment.",
   "",
   "\\makeatletter",
   "\\ifdefined\\robustnessstandalone",
@@ -2702,15 +2991,14 @@ tex_lines <- c(
       "\\lambda_1^z(t,x)=\\mu_1 m_h(X_{c(x)})\\mathbf{1}\\{z_{c(x)}=1\\}",
       "+K_1\\sum_{\\substack{i:t_i<t\\\\r_i=1}}g_t(t-t_i)g_s(x-x_i).",
       "\\]",
-      "The balanced strata imply $\\{m_h(1)+m_h(-1)\\}/2=1$, while the stratum source-rate ratio is $\\exp(2h)$; exact $X$-balance of $z_{\\mathrm{obs}}$ likewise keeps the treated-area mean of $m_h$ equal to one. We use $h\\in\\{0,0.3,0.6\\}$ and estimate unrestricted $h\\in\\mathbb R$ jointly with the treated Hawkes parameters $(\\mu_1,\\alpha_1,\\beta_1,K_1)$, holding control parameters at their true values. The correctly specified heterogeneous model is fitted under naive and SEM labels; a nested homogeneous model with $h=0$ is fitted under a separate homogeneous SEM.",
-      "Before the full experiment, a true-label pilot gates the study. For each $h$ it requires convergence rate at least $0.8$, absolute bias of $\\widehat h$ at most $0.25$, and RMSE at most $0.4$, and it checks profile likelihoods, Hessian Wald coverage for $h$, correlation of $\\widehat h$ with $\\widehat\\mu_1$, stratum-specific event counts and optimizer diagnostics.",
-      "We report three DTAITE contrasts versus all-control: the all-or-nothing contrast $\\Psi_{\\mathrm{global}}=\\Lambda^{1}(D)-\\Lambda^{0}(D)$, and two fixed single-cell interventions from the all-control baseline---one $X=+1$ cell and one $X=-1$ cell. Within every outer replication, truths and fitted counterfactuals condition on that replication's pre-treatment history and use common random numbers across regimes. Causal summaries report bias, RMSE, MAE, empirical variation, forward-simulation Monte Carlo error, Monte Carlo uncertainty of the summaries, and fitting failures. Label summaries use balanced accuracy and component-specific recall, including within each $X$ stratum."
+      "The balanced strata imply $\\{m_h(1)+m_h(-1)\\}/2=1$, while the stratum source-rate ratio is $\\exp(2h)$; exact $X$-balance of $z_{\\mathrm{obs}}$ likewise keeps the treated-area mean of $m_h$ equal to one. We use $h\\in\\{0,0.3,0.6\\}$ with $32$ independent catalogues per $h$. For each realisation we form naive labels and a single SEM labelling, then fit the correctly specified heterogeneous model under those labels (control parameters held at truth).",
+      "We report three DTAITE contrasts versus all-control: the all-or-nothing contrast $\\Psi_{\\mathrm{global}}=\\Lambda^{1}(D)-\\Lambda^{0}(D)$, and two fixed single-cell interventions from the all-control baseline---one $X=+1$ cell and one $X=-1$ cell. Within every outer replication, truths and fitted counterfactuals condition on that replication's pre-treatment history and use common random numbers across regimes. Causal summaries report mean bias and its Monte Carlo standard error, absolute and percentage error, and fitting failures. Label summaries report raw and balanced accuracy with component-specific recall."
     ),
     c(
       tex_fig(
         ROBUSTNESS_FIG_STEMS$effect_modification,
         "fig:robustness-effect-modification",
-        "Binary-covariate effect-modification study. Panel A shows the fixed covariate and observed allocation, with the two single-cell flip locations outlined. Panel B reports estimated DTAITE bias versus $h$ for all-or-nothing and the single $X=+1$ and $X=-1$ cell flips (naive and SEM)."
+        "Binary-covariate effect-modification study. Facets report estimated DTAITE bias versus $h$ for all-or-nothing and the single $X=+1$ and $X=-1$ cell interventions (naive and SEM)."
       )
     )
   ),
@@ -2721,14 +3009,14 @@ tex_lines <- c(
       "Starting at the checkerboard $z^{\\mathrm{cb}}_{r,c}=\\mathbf{1}\\{r+c\\text{ is even}\\}$, a fixed sequence reverses $m\\in\\{0,5,10,15,20,25\\}$ discrepant reflected pairs $(r,c)$ and $(r,11-c)$, ending at the left--right block $z^{\\mathrm{block}}_{r,c}=\\mathbf{1}\\{c\\leq5\\}$ while retaining exactly $50\\%$ treatment.",
       "\\paragraph{Rook adjacency and coarseness.}",
       "Index the $10\\times10$ cells by $(r,c)$ with $r,c\\in\\{1,\\ldots,10\\}$. Two distinct cells $j=(r,c)$ and $\\ell=(r',c')$ are rook-adjacent if they share a side, $|r-r'|+|c-c'|=1$, and are not diagonal neighbours. Let $E$ be the undirected edge set of all such pairs. On a $10\\times10$ grid there are $90$ horizontal and $90$ vertical edges, so $|E|=180$.",
-      "For an allocation $z\\in\\{0,1\\}^{100}$, the cut count is $D(z)=\\sum_{(j,\\ell)\\in E}\\mathbf{1}\\{z_j\\neq z_\\ell\\}$. The checkerboard maximises the cut ($D(z^{\\mathrm{cb}})=180$), while the left--right block has only the ten centreline edges discordant ($D(z^{\\mathrm{block}})=10$). Normalised coarseness is $C(z)=\\{180-D(z)\\}/170$, so $C(z^{\\mathrm{cb}})=0$ and $C(z^{\\mathrm{block}})=1$. Larger $C(z)$ means greater spatial aggregation. Figures use realised $C(z^{(m)})$ rather than $m/25$, and mark $C(z_{\\mathrm{obs}})$.",
-      "The five-cell focal band in column 5 remains treated throughout. Each naive or SEM model is fitted once under $z_{\\mathrm{obs}}$ and evaluated under all six targets. We report estimated bias in the DTAITE for each target allocation."
+      "For an allocation $z\\in\\{0,1\\}^{100}$, the cut count is $D(z)=\\sum_{(j,\\ell)\\in E}\\mathbf{1}\\{z_j\\neq z_\\ell\\}$. The checkerboard maximises the cut ($D(z^{\\mathrm{cb}})=180$), while the left--right block has only the ten centreline edges discordant ($D(z^{\\mathrm{block}})=10$). Normalised coarseness is $C(z)=\\{180-D(z)\\}/170$, so $C(z^{\\mathrm{cb}})=0$ and $C(z^{\\mathrm{block}})=1$. Larger $C(z)$ means greater spatial aggregation. Figures use realised $C(z^{(m)})$ rather than $m/25$.",
+      "The five-cell focal band in column 5 remains treated throughout. For each path allocation $z^{(m)}$ we simulate catalogues under that regime, form naive and SEM labels under $z^{(m)}$, and fit treated parameters under $z^{(m)}$. We then evaluate a fixed focal-band DTAITE under all-treated versus all-control allocations, so differences across the path isolate how estimation-regime coarseness affects recovery of the same region-specific target."
     ),
     c(
       tex_fig(
         ROBUSTNESS_FIG_STEMS$geometry_transport,
         "fig:robustness-geometry-transport",
-        "Fixed balanced-allocation path and estimated DTAITE bias against realized coarseness for naive and SEM. The vertical line marks the observed allocation."
+        "Estimated focal-band DTAITE bias under all-treated versus all-control allocations when each balanced path allocation is used as the estimation regime (naive and SEM)."
       )
     )
   ),
@@ -2763,7 +3051,7 @@ tex_lines <- c(
               "Pretreatment-informed assignment all-or-nothing DTAITE bias ($\\widehat\\psi-\\psi$) by assignment rule for naive and SEM. Grey lines connect the two methods within each rule. Error bars are $\\pm 1$ SE across replications.")
     )
   ),
-  tex_subsubsection(
+  if (isTRUE(include_decay_diagnostics)) tex_subsubsection(
     "Single-cell allocation flip under alternative kernels",
     "app:robustness-decay-cell",
     c(
@@ -2780,8 +3068,8 @@ tex_lines <- c(
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_temporal_cumulative, "fig:robustness-decay-temporal-cumulative",
               "Single-cell allocation flip: cumulative temporal decay. Curves show cumulative mean $|\\Delta N|$ up to each lag after $t^\\star$.")
     )
-  ),
-  tex_subsubsection(
+  ) else character(),
+  if (isTRUE(include_decay_diagnostics)) tex_subsubsection(
     "Single-event label flip under alternative kernels",
     "app:robustness-decay-label",
     c(
@@ -2797,7 +3085,7 @@ tex_lines <- c(
       tex_fig(ROBUSTNESS_FIG_STEMS$decay_label_flip_temporal_cumulative, "fig:robustness-label-flip-decay-temporal-cumulative",
               "Single-event label flip: cumulative temporal decay. Curves show cumulative mean $|\\Delta N|$ up to each lag after the flipped event.")
     )
-  ),
+  ) else character(),
   "",
   "\\ifdefined\\robustnessstandalone",
   "\\end{document}",
@@ -2806,7 +3094,7 @@ tex_lines <- c(
 
 tex_path <- file.path(robustness_dir, "simulation_robustness_appendix.tex")
 writeLines(tex_lines[nzchar(tex_lines)], tex_path)
-prune_stale_robustness_figures(fig_dir, ROBUSTNESS_FIG_STEMS)
+prune_stale_robustness_figures(fig_dir, ACTIVE_ROBUSTNESS_FIG_STEMS)
 
 saveRDS(
   list(

@@ -56,8 +56,29 @@ sem_inner <- arg_int("--sem-inner", if (test_mode) 5L else 1000L)
 sem_outer <- arg_int("--sem-outer", if (test_mode) 1L else 3L)
 sem_labels <- arg_int("--sem-labellings", if (test_mode) 1L else 10L, 0L)
 sem_props <- arg_int("--sem-props", if (test_mode) 1L else 20L)
-h_rounds <- arg_int("--h-sem-rounds", if (test_mode) 1L else 2L)
+# One effect-aware SEM pass per replication (no homogeneous comparator SEM).
+h_rounds <- arg_int("--h-sem-rounds", 1L)
 fit_maxit <- arg_int("--fit-maxit", if (test_mode) 30L else 1000L)
+n_workers <- arg_int(
+  "--workers",
+  {
+    slurm <- suppressWarnings(as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "")))
+    env <- suppressWarnings(as.integer(Sys.getenv("PP_STRUCTURED_WORKERS", "")))
+    if (is.finite(slurm) && !is.na(slurm) && slurm >= 1L) slurm
+    else if (is.finite(env) && !is.na(env) && env >= 1L) env
+    else max(1L, parallel::detectCores(logical = FALSE) - 1L)
+  }
+)
+if (test_mode) n_workers <- 1L
+
+structured_lapply <- function(X, FUN) {
+  n <- length(X)
+  if (n < 1L) return(list())
+  cores <- max(1L, min(as.integer(n_workers), n))
+  if (cores <= 1L) return(lapply(X, FUN))
+  message(sprintf("[structured] parallel workers=%d over %d jobs", cores, n))
+  parallel::mclapply(X, FUN, mc.cores = cores, mc.preschedule = FALSE)
+}
 
 omega <- spatstat.geom::owin(c(0, 100), c(0, 100))
 partition <- spatstat.geom::quadrats(X = omega, nx = 10, ny = 10)
@@ -103,11 +124,15 @@ dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
 run_id <- get_arg("--output", paste0("structured_", format(Sys.time(), "%Y%m%d_%H%M%S")))
 
 message(sprintf(
-  "[structured] study=%s reps=%d pilot=%d truth_sims=%d forward_sims=%d",
-  study, n_rep, pilot_reps, n_truth, n_cf
+  "[structured] study=%s reps=%d pilot=%d truth_sims=%d forward_sims=%d workers=%d h_sem_rounds=%d",
+  study, n_rep, pilot_reps, n_truth, n_cf, n_workers, h_rounds
 ))
 message(sprintf(
   "[structured] conditioning: truths and estimates share each replication's pre-treatment history"
+))
+message(paste0(
+  "[structured] design: effect = 1 SEM + naive per (h,rep); ",
+  "geometry = simulate/SEM/fit under each coarseness regime"
 ))
 
 simulate_pre <- function(rep_id) {
@@ -332,128 +357,121 @@ run_effect_study <- function() {
   }
 
   h_values <- c(0, 0.3, 0.6)
-  h_rows <- list()
-  causal_rows <- list()
-  label_rows <- list()
-  idx <- 0L
-  for (h_true in h_values) {
-    for (rep_id in seq_len(n_rep)) {
-      message(sprintf("[effect] h=%.1f replication %d/%d", h_true, rep_id, n_rep))
-      pre <- simulate_pre(rep_id + 1000L * match(h_true, h_values))
-      set.seed(structured_stage_seed(base_seed, 20L, rep_id, round(100 * h_true)))
-      post <- simulate_structured_catalogue(
-        partition, omega, post_window, design$z_obs,
-        control_params, treated_params, pre, design$grid, h_true
-      )
-      catalogue <- bind_catalogue(pre, post, partition, design$grid, design$z_obs, h_true)
-      labels <- make_oracle_and_naive_labels(catalogue, treatment_time)
-      sem <- tryCatch(
-        run_effect_aware_sem(
-          catalogue, partition, design$grid, design$z_obs, omega,
-          post_window, treatment_time, control_params, treated_params,
-          h_init = 0, interaction_rounds = h_rounds,
-          sem_control = sem_control,
-          seed = structured_stage_seed(base_seed, 21L, rep_id, round(100 * h_true))
-        ),
-        error = function(e) {
-          warning(sprintf(
-            "Effect-aware SEM failed for h=%.1f replication %d: %s",
-            h_true, rep_id, conditionMessage(e)
-          ))
-          NULL
-        }
-      )
-      if (!is.null(sem)) labels$SEM <- sem$labelling
-      sem_homogeneous <- tryCatch(
-        run_homogeneous_sem(
-          catalogue, partition, design$z_obs, omega, post_window,
-          treatment_time, control_params, treated_params, sem_control,
-          seed = structured_stage_seed(base_seed, 24L, rep_id, round(100 * h_true))
-        ),
-        error = function(e) {
-          warning(sprintf(
-            "Homogeneous SEM failed for h=%.1f replication %d: %s",
-            h_true, rep_id, conditionMessage(e)
-          ))
-          NULL
-        }
-      )
+  jobs <- expand.grid(
+    h_true = h_values,
+    rep_id = seq_len(n_rep),
+    KEEP.OUT.ATTRS = FALSE,
+    stringsAsFactors = FALSE
+  )
+  message(sprintf(
+    "[effect] %d data realizations (%d h x %d reps); 1 SEM + naive fit each; workers=%d",
+    nrow(jobs), length(h_values), n_rep, n_workers
+  ))
 
-      fits <- list()
-      for (method in intersect(c("oracle", "naive", "SEM"), names(labels))) {
-        fits[[paste0("heterogeneous__", method)]] <- fit_effect_modified_hawkes(
-          labels[[method]], partition, design$grid, design$z_obs, post_window,
-          treated_params, h_init = if (method == "SEM" && !is.null(sem)) sem$h else 0,
-          maxit = fit_maxit
-        )
+  run_one_effect <- function(job_i) {
+    h_true <- jobs$h_true[[job_i]]
+    rep_id <- as.integer(jobs$rep_id[[job_i]])
+    message(sprintf("[effect] h=%.1f replication %d/%d", h_true, rep_id, n_rep))
+    pre <- simulate_pre(rep_id + 1000L * match(h_true, h_values))
+    set.seed(structured_stage_seed(base_seed, 20L, rep_id, round(100 * h_true)))
+    post <- simulate_structured_catalogue(
+      partition, omega, post_window, design$z_obs,
+      control_params, treated_params, pre, design$grid, h_true
+    )
+    catalogue <- bind_catalogue(pre, post, partition, design$grid, design$z_obs, h_true)
+    labels <- make_oracle_and_naive_labels(catalogue, treatment_time)
+    # Single SEM labelling per realization (one effect-aware pass).
+    sem <- tryCatch(
+      run_effect_aware_sem(
+        catalogue, partition, design$grid, design$z_obs, omega,
+        post_window, treatment_time, control_params, treated_params,
+        h_init = 0, interaction_rounds = h_rounds,
+        sem_control = sem_control,
+        seed = structured_stage_seed(base_seed, 21L, rep_id, round(100 * h_true))
+      ),
+      error = function(e) {
+        warning(sprintf(
+          "Effect-aware SEM failed for h=%.1f replication %d: %s",
+          h_true, rep_id, conditionMessage(e)
+        ))
+        NULL
       }
-      homogeneous_labels <- list(oracle = labels$oracle)
-      if (!is.null(sem_homogeneous)) homogeneous_labels$SEM <- sem_homogeneous$labelling
-      for (method in names(homogeneous_labels)) {
-        fits[[paste0("homogeneous__", method)]] <- fit_effect_modified_hawkes(
-          homogeneous_labels[[method]], partition, design$grid, design$z_obs, post_window,
-          treated_params, homogeneous = TRUE, maxit = fit_maxit
-        )
-      }
-      h_rows[[length(h_rows) + 1L]] <- fit_rows_from_list(fits, rep_id, h_true)
+    )
+    if (!is.null(sem)) labels$SEM <- sem$labelling
 
-      for (method in names(labels)) {
-        lr <- label_recovery_by_stratum(labels[[method]], treatment_time)
-        lr$replication <- rep_id
-        lr$h_true <- h_true
-        lr$method <- method
-        label_rows[[length(label_rows) + 1L]] <- lr
-      }
-
-      regimes <- list(
-        z_flip_plus = design$z_flip_plus,
-        z_flip_minus = design$z_flip_minus,
-        z_all = design$z_all,
-        z_none = design$z_none
+    fits <- list()
+    for (method in intersect(c("oracle", "naive", "SEM"), names(labels))) {
+      fits[[paste0("heterogeneous__", method)]] <- fit_effect_modified_hawkes(
+        labels[[method]], partition, design$grid, design$z_obs, post_window,
+        treated_params, h_init = if (method == "SEM" && !is.null(sem)) sem$h else 0,
+        maxit = fit_maxit
       )
-      truth_regimes <- simulate_regime_counts(
-        partition, omega, post_window, regimes,
-        control_params, treated_params, pre, design$grid, h_true,
-        n_sim = n_truth,
-        seed = structured_stage_seed(base_seed, 22L, rep_id, round(100 * h_true))
-      )
-      truth_targets <- contrast_effect_regimes(truth_regimes)
-      names(truth_targets)[names(truth_targets) == "estimate"] <- "truth"
-      for (fit_name in names(fits)) {
-        fit <- fits[[fit_name]]
-        bits <- strsplit(fit_name, "__", fixed = TRUE)[[1L]]
-        if (!isTRUE(fit$converged)) {
-          est_targets <- data.frame(
-            target = truth_targets$target, estimate = NA_real_, mc_se = NA_real_
-          )
-        } else {
-          est_regimes <- simulate_regime_counts(
-            partition, omega, post_window, regimes,
-            control_params,
-            as.list(fit$par[c("mu", "alpha", "beta", "K")]),
-            pre, design$grid, fit$par[["h"]],
-            n_sim = n_cf,
-            seed = structured_stage_seed(
-              base_seed, 23L, rep_id,
-              round(100 * h_true) + match(fit_name, names(fits))
-            )
-          )
-          est_targets <- contrast_effect_regimes(est_regimes)
-        }
-        row <- left_join(est_targets, truth_targets[, c("target", "truth")], by = "target")
-        row$replication <- rep_id
-        row$h_true <- h_true
-        row$model <- bits[[1L]]
-        row$method <- bits[[2L]]
-        causal_rows[[length(causal_rows) + 1L]] <- row
-      }
-      idx <- idx + 1L
     }
+    h_row <- fit_rows_from_list(fits, rep_id, h_true)
+
+    label_rows <- list()
+    for (method in names(labels)) {
+      lr <- label_recovery_by_stratum(labels[[method]], treatment_time)
+      lr$replication <- rep_id
+      lr$h_true <- h_true
+      lr$method <- method
+      label_rows[[length(label_rows) + 1L]] <- lr
+    }
+
+    regimes <- list(
+      z_flip_plus = design$z_flip_plus,
+      z_flip_minus = design$z_flip_minus,
+      z_all = design$z_all,
+      z_none = design$z_none
+    )
+    truth_regimes <- simulate_regime_counts(
+      partition, omega, post_window, regimes,
+      control_params, treated_params, pre, design$grid, h_true,
+      n_sim = n_truth,
+      seed = structured_stage_seed(base_seed, 22L, rep_id, round(100 * h_true))
+    )
+    truth_targets <- contrast_effect_regimes(truth_regimes)
+    names(truth_targets)[names(truth_targets) == "estimate"] <- "truth"
+    causal_rows <- list()
+    for (fit_name in names(fits)) {
+      fit <- fits[[fit_name]]
+      bits <- strsplit(fit_name, "__", fixed = TRUE)[[1L]]
+      if (!isTRUE(fit$converged)) {
+        est_targets <- data.frame(
+          target = truth_targets$target, estimate = NA_real_, mc_se = NA_real_
+        )
+      } else {
+        est_regimes <- simulate_regime_counts(
+          partition, omega, post_window, regimes,
+          control_params,
+          as.list(fit$par[c("mu", "alpha", "beta", "K")]),
+          pre, design$grid, fit$par[["h"]],
+          n_sim = n_cf,
+          seed = structured_stage_seed(
+            base_seed, 23L, rep_id,
+            round(100 * h_true) + match(fit_name, names(fits))
+          )
+        )
+        est_targets <- contrast_effect_regimes(est_regimes)
+      }
+      row <- left_join(est_targets, truth_targets[, c("target", "truth")], by = "target")
+      row$replication <- rep_id
+      row$h_true <- h_true
+      row$model <- bits[[1L]]
+      row$method <- bits[[2L]]
+      causal_rows[[length(causal_rows) + 1L]] <- row
+    }
+    list(
+      h = h_row,
+      causal = bind_rows(causal_rows),
+      labels = bind_rows(label_rows)
+    )
   }
 
-  h_df <- bind_rows(h_rows)
-  causal_df <- bind_rows(causal_rows)
-  label_df <- bind_rows(label_rows)
+  effect_parts <- structured_lapply(seq_len(nrow(jobs)), run_one_effect)
+  h_df <- bind_rows(lapply(effect_parts, `[[`, "h"))
+  causal_df <- bind_rows(lapply(effect_parts, `[[`, "causal"))
+  label_df <- bind_rows(lapply(effect_parts, `[[`, "labels"))
   h_summary <- summarize_h(h_df)
   causal_summary <- causal_error_summary(
     causal_df, group_cols = c("h_true", "model", "method", "target")
@@ -517,17 +535,18 @@ run_geometry_truth_pilot <- function(design) {
   list(truth = pilot, diagnostics = diagnostics, pre_history = pre)
 }
 
-geometry_contrasts <- function(regime_df, design, region) {
+geometry_global_contrast <- function(regime_df, m, coarseness, region) {
   zero <- regime_df$mean[regime_df$allocation == "z_none"]
   zero_se <- regime_df$mc_se[regime_df$allocation == "z_none"]
-  target <- regime_df[regime_df$allocation != "z_none", , drop = FALSE]
+  all_treated <- regime_df$mean[regime_df$allocation == "z_all"]
+  all_se <- regime_df$mc_se[regime_df$allocation == "z_all"]
   data.frame(
-    allocation = target$allocation,
-    m = design$m,
-    coarseness = unname(design$coarseness),
+    target = "psi_global",
+    m = as.integer(m),
+    coarseness = as.numeric(coarseness),
     region = region,
-    estimate = target$mean - zero,
-    mc_se = sqrt(target$mc_se^2 + zero_se^2),
+    estimate = as.numeric(all_treated - zero),
+    mc_se = sqrt(as.numeric(all_se)^2 + as.numeric(zero_se)^2),
     stringsAsFactors = FALSE
   )
 }
@@ -550,30 +569,56 @@ run_geometry_study <- function() {
     return(list(design = design, pilot = pilot, pilot_only = TRUE))
   }
 
-  causal_rows <- list()
-  label_rows <- list()
-  parameter_rows <- list()
-  allocations <- c(design$allocations, list(z_none = rep(FALSE, partition$n)))
-  for (rep_id in seq_len(n_rep)) {
-    message(sprintf("[geometry] replication %d/%d", rep_id, n_rep))
-    pre <- simulate_pre(rep_id + 50000L)
-    set.seed(structured_stage_seed(base_seed, 31L, rep_id))
+  n_alloc <- length(design$allocations)
+  jobs <- expand.grid(
+    alloc_idx = seq_len(n_alloc),
+    rep_id = seq_len(n_rep),
+    KEEP.OUT.ATTRS = FALSE
+  )
+  message(sprintf(
+    paste0(
+      "[geometry] %d jobs (%d coarseness regimes x %d reps); ",
+      "simulate/SEM/fit under each regime; workers=%d"
+    ),
+    nrow(jobs), n_alloc, n_rep, n_workers
+  ))
+
+  # Evaluation target is fixed (all-treated vs all-control). Estimation design
+  # varies: each job uses one path allocation as the observed treatment regime.
+  eval_regimes <- list(
+    z_all = rep(TRUE, partition$n),
+    z_none = rep(FALSE, partition$n)
+  )
+
+  run_one_geometry <- function(job_i) {
+    alloc_idx <- as.integer(jobs$alloc_idx[[job_i]])
+    rep_id <- as.integer(jobs$rep_id[[job_i]])
+    z_est <- as.logical(design$allocations[[alloc_idx]])
+    m_val <- as.integer(design$m[[alloc_idx]])
+    c_val <- as.numeric(design$coarseness[[alloc_idx]])
+    message(sprintf(
+      "[geometry] m=%d C=%.2f replication %d/%d",
+      m_val, c_val, rep_id, n_rep
+    ))
+
+    pre <- simulate_pre(rep_id + 50000L + 1000L * alloc_idx)
+    set.seed(structured_stage_seed(base_seed, 31L, rep_id, alloc_idx))
     post <- simulate_structured_catalogue(
-      partition, omega, post_window, design$z_obs,
+      partition, omega, post_window, z_est,
       control_params, treated_params, pre, design$grid, h = 0
     )
-    catalogue <- bind_catalogue(pre, post, partition, design$grid, design$z_obs, 0)
+    catalogue <- bind_catalogue(pre, post, partition, design$grid, z_est, 0)
     labels <- make_oracle_and_naive_labels(catalogue, treatment_time)
     sem <- tryCatch(
       run_homogeneous_sem(
-        catalogue, partition, design$z_obs, omega, post_window,
+        catalogue, partition, z_est, omega, post_window,
         treatment_time, control_params, treated_params, sem_control,
-        seed = structured_stage_seed(base_seed, 32L, rep_id)
+        seed = structured_stage_seed(base_seed, 32L, rep_id, alloc_idx)
       ),
       error = function(e) {
         warning(sprintf(
-          "Geometry SEM failed for replication %d: %s",
-          rep_id, conditionMessage(e)
+          "Geometry SEM failed for m=%d replication %d: %s",
+          m_val, rep_id, conditionMessage(e)
         ))
         NULL
       }
@@ -581,57 +626,61 @@ run_geometry_study <- function() {
     if (!is.null(sem)) labels$SEM <- sem$labelling
     fits <- lapply(names(labels), function(method) {
       fit_effect_modified_hawkes(
-        labels[[method]], partition, design$grid, design$z_obs,
+        labels[[method]], partition, design$grid, z_est,
         post_window, treated_params, homogeneous = TRUE, maxit = fit_maxit
       )
     })
     names(fits) <- names(labels)
 
+    label_rows <- list()
+    parameter_rows <- list()
     for (method in names(labels)) {
       lr <- label_recovery_by_stratum(labels[[method]], treatment_time)
       lr$replication <- rep_id
       lr$method <- method
+      lr$m <- m_val
+      lr$coarseness <- c_val
       label_rows[[length(label_rows) + 1L]] <- lr
       fit <- fits[[method]]
       parameter_rows[[length(parameter_rows) + 1L]] <- data.frame(
-        replication = rep_id, method = method,
+        replication = rep_id, method = method, m = m_val, coarseness = c_val,
         converged = isTRUE(fit$converged),
         mu1_hat = fit$par[["mu"]], alpha1_hat = fit$par[["alpha"]],
         beta1_hat = fit$par[["beta"]], K1_hat = fit$par[["K"]]
       )
     }
 
-    truth_by_region <- list()
+    causal_rows <- list()
     for (region in c("focal", "domain")) {
       cells <- if (region == "focal") design$focal_cells else seq_len(partition$n)
       truth_regimes <- simulate_regime_counts(
-        partition, omega, post_window, allocations,
+        partition, omega, post_window, eval_regimes,
         control_params, treated_params, pre, design$grid, h = 0,
         region_cells = cells, n_sim = n_truth,
-        seed = structured_stage_seed(base_seed, 33L, rep_id, match(region, c("focal", "domain")))
+        seed = structured_stage_seed(
+          base_seed, 33L, rep_id,
+          10L * alloc_idx + match(region, c("focal", "domain"))
+        )
       )
-      truth_by_region[[region]] <- geometry_contrasts(truth_regimes, design, region)
-    }
-    for (method in names(fits)) {
-      fit <- fits[[method]]
-      for (region in c("focal", "domain")) {
-        truth <- truth_by_region[[region]]
+      truth <- geometry_global_contrast(truth_regimes, m_val, c_val, region)
+      for (method in names(fits)) {
+        fit <- fits[[method]]
         if (!isTRUE(fit$converged)) {
           est <- truth
           est$estimate <- NA_real_
           est$mc_se <- NA_real_
         } else {
-          cells <- if (region == "focal") design$focal_cells else seq_len(partition$n)
           regimes <- simulate_regime_counts(
-            partition, omega, post_window, allocations,
+            partition, omega, post_window, eval_regimes,
             control_params, as.list(fit$par[c("mu", "alpha", "beta", "K")]),
             pre, design$grid, h = 0, region_cells = cells, n_sim = n_cf,
             seed = structured_stage_seed(
               base_seed, 34L, rep_id,
-              10L * match(method, names(fits)) + match(region, c("focal", "domain"))
+              100L * alloc_idx + 10L * match(method, names(fits)) +
+                match(region, c("focal", "domain"))
             )
           )
-          est <- geometry_contrasts(regimes, design, region)
+          est <- geometry_global_contrast(regimes, m_val, c_val, region)
         }
         est$truth <- truth$estimate
         est$replication <- rep_id
@@ -639,15 +688,23 @@ run_geometry_study <- function() {
         causal_rows[[length(causal_rows) + 1L]] <- est
       }
     }
+    list(
+      causal = bind_rows(causal_rows),
+      labels = bind_rows(label_rows),
+      parameters = bind_rows(parameter_rows)
+    )
   }
-  causal <- bind_rows(causal_rows)
+
+  geometry_parts <- structured_lapply(seq_len(nrow(jobs)), run_one_geometry)
+  causal <- bind_rows(lapply(geometry_parts, `[[`, "causal"))
+  labels <- bind_rows(lapply(geometry_parts, `[[`, "labels"))
+  parameters <- bind_rows(lapply(geometry_parts, `[[`, "parameters"))
   summary <- causal_error_summary(
-    causal, group_cols = c("region", "method", "m", "coarseness")
+    causal, group_cols = c("region", "method", "m", "coarseness", "target")
   )
-  labels <- bind_rows(label_rows)
   label_summary <- labels |>
     filter(.data$stratum == "all") |>
-    group_by(.data$method) |>
+    group_by(.data$m, .data$coarseness, .data$method) |>
     summarise(
       accuracy = mean(.data$accuracy, na.rm = TRUE),
       balanced_accuracy = mean(.data$balanced_accuracy, na.rm = TRUE),
@@ -658,7 +715,7 @@ run_geometry_study <- function() {
   list(
     design = design, pilot = pilot, causal = causal, causal_summary = summary,
     labels = labels, label_summary = label_summary,
-    parameters = bind_rows(parameter_rows), pilot_only = FALSE
+    parameters = parameters, pilot_only = FALSE
   )
 }
 
@@ -810,14 +867,13 @@ make_geometry_figure <- function(res) {
   labels <- sprintf("m=%d; C=%.2f", d$m, d$coarseness)
   maps <- allocation_map_df(d$grid, d$allocations, labels, d$focal_cells)
   pA <- plot_allocation_maps(maps, nrow = 1L) +
-    labs(
-      title = sprintf(
-        "A  Fixed allocation path; C(z[obs]) = %.2f",
-        d$observed_coarseness
-      )
-    )
+    labs(title = "A  Estimation regimes along the coarseness path (each used as z for simulate/SEM/fit)")
   bias_df <- res$causal_summary |>
-    filter(.data$region == "focal", .data$method %in% c("naive", "SEM")) |>
+    filter(
+      .data$region == "focal",
+      .data$method %in% c("naive", "SEM"),
+      is.na(.data$target) | .data$target == "psi_global"
+    ) |>
     mutate(
       method = factor(.data$method, levels = c("naive", "SEM")),
       se = ifelse(is.finite(.data$mcse_bias), .data$mcse_bias, 0)
@@ -825,8 +881,6 @@ make_geometry_figure <- function(res) {
   pB <- ggplot(bias_df, aes(.data$coarseness, .data$bias,
                             color = .data$method, shape = .data$method)) +
     geom_hline(yintercept = 0, linetype = 2, color = "grey45") +
-    geom_vline(xintercept = d$observed_coarseness, linetype = 3,
-               color = "grey40") +
     geom_linerange(aes(ymin = .data$bias - .data$se,
                        ymax = .data$bias + .data$se),
                    position = position_dodge(width = 0.02)) +
@@ -835,8 +889,8 @@ make_geometry_figure <- function(res) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "B  Estimated DTAITE bias",
-      x = "Realized coarseness C(z)",
+      title = "B  Estimated all-or-nothing DTAITE bias by estimation-regime coarseness",
+      x = "Coarseness C(z) of the estimation regime",
       y = "DTAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
@@ -931,10 +985,13 @@ if (!is.null(geometry_result)) {
 config <- list(
   study = study, test_mode = test_mode, pilot_only = pilot_only,
   n_rep = n_rep, pilot_reps = pilot_reps, n_truth = n_truth, n_cf = n_cf,
+  n_workers = n_workers, h_sem_rounds = h_rounds,
   base_seed = base_seed, observed_design_seed_effect = base_seed + 101L,
   path_seed_geometry = base_seed + 201L,
   observed_design_seed_geometry = base_seed + 202L,
   conditioning = "replication-specific truth and estimates conditional on the same pre-treatment history",
+  effect_design = "32x3 realizations; one effect-aware SEM + naive/oracle heterogeneous fits per realization",
+  geometry_design = "simulate, SEM, and fit under each coarseness-path allocation; evaluate fixed all-or-nothing DTAITE",
   grid = c(10L, 10L), treatment_time = treatment_time,
   observation_window = c(0, end_time), control_params = control_params,
   treated_params = treated_params, sem_control = sem_control

@@ -4,9 +4,10 @@
 #   Rscript inst/sim_study/build_manifest_from_rds.R robustness_7671212
 
 suppressPackageStartupMessages(library(dplyr))
+`%||%` <- function(x, y) if (is.null(x)) y else x
 
 args <- commandArgs(trailingOnly = TRUE)
-basename <- if (length(args) >= 1L) args[[1]] else "robustness_7671212"
+run_prefix <- if (length(args) >= 1L) args[[1]] else "robustness_7671212"
 
 fa <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 repo_dir <- if (length(fa)) {
@@ -16,9 +17,10 @@ repo_dir <- if (length(fa)) {
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
 out_dir <- PPDisentangle::pp_output_path("sim_study", repo_root = repo_dir)
-prefix <- paste0(basename, "_")
+prefix <- paste0(run_prefix, "_")
 rds <- list.files(out_dir, pattern = paste0("^", prefix, ".*\\.rds$"), full.names = TRUE)
-if (!length(rds)) stop("No RDS files found for basename ", basename, " in ", out_dir)
+rds <- rds[base::basename(rds) != paste0(run_prefix, "_summary.rds")]
+if (!length(rds)) stop("No RDS files found for basename ", run_prefix, " in ", out_dir)
 
 parse_tag <- function(sid, key) {
   m <- regmatches(sid, regexpr(paste0(key, "[0-9p]+"), sid, perl = TRUE))
@@ -27,7 +29,7 @@ parse_tag <- function(sid, key) {
 }
 
 rows <- lapply(rds, function(p) {
-  sid <- sub(paste0("^", prefix), "", sub("\\.rds$", "", basename(p)))
+  sid <- sub(paste0("^", prefix), "", sub("\\.rds$", "", base::basename(p)))
   fam <- if (startsWith(sid, "k_separation")) {
     "k_separation"
   } else if (startsWith(sid, "pretreatment_assignment")) {
@@ -36,9 +38,15 @@ rows <- lapply(rds, function(p) {
     "snr_scale"
   } else if (startsWith(sid, "spatiotemporal_kernel_mismatch")) {
     "spatiotemporal_kernel_mismatch"
+  } else if (startsWith(sid, "effect_modification")) {
+    "effect_modification"
+  } else if (startsWith(sid, "geometry_transport")) {
+    "geometry_transport"
   } else {
     "unknown"
   }
+  result <- readRDS(p)
+  cfg <- result$config
   assign <- sub(".*_assign", "", sid)
   simk <- sub(".*_sim", "", sub("_fit.*", "", sid))
   fitk <- sub(".*_fit", "", sub("_ssim.*", "", sid))
@@ -58,18 +66,21 @@ rows <- lapply(rds, function(p) {
     sim_spatial_kernel = ssim,
     fit_spatial_kernel = sfit,
     treatment_assignment = assign,
-    target_points = 2500,
-    run_basename = sub("\\.rds$", "", basename(p)),
+    h_true = suppressWarnings(as.numeric(cfg$H_TRUE %||% NA_real_)),
+    geometry_m = suppressWarnings(as.integer(cfg$GEOMETRY_M %||% NA_integer_)),
+    coarseness = suppressWarnings(as.numeric(cfg$COARSENESS %||% NA_real_)),
+    target_points = suppressWarnings(as.numeric(cfg$TARGET_POINTS %||% 2500)),
+    run_basename = sub("\\.rds$", "", base::basename(p)),
     rds_path = normalizePath(p, winslash = "/", mustWork = TRUE),
     stringsAsFactors = FALSE
   )
 })
 
 man <- bind_rows(rows)
-paper_dir <- file.path(out_dir, "paper", basename)
+paper_dir <- file.path(out_dir, "paper", run_prefix)
 dir.create(paper_dir, recursive = TRUE, showWarnings = FALSE)
-manifest_flat <- file.path(out_dir, paste0(basename, "_manifest.csv"))
-manifest_paper <- file.path(paper_dir, paste0(basename, "_manifest.csv"))
+manifest_flat <- file.path(out_dir, paste0(run_prefix, "_manifest.csv"))
+manifest_paper <- file.path(paper_dir, paste0(run_prefix, "_manifest.csv"))
 write.csv(man, manifest_flat, row.names = FALSE)
 write.csv(man, manifest_paper, row.names = FALSE)
 message("Wrote ", nrow(man), " rows to:")

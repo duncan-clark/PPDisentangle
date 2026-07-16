@@ -78,10 +78,12 @@ pretreatment-informed treatment assignment
 (highest count, lowest count, count propensity, contiguous AOI, Voronoi random),
 off-support allocation contrasts (including the
 all-or-nothing DTAITE as the global contrast), label recovery,
-the forward-simulation decay diagnostics, binary-covariate effect modification,
+binary-covariate effect modification,
 and transport across balanced allocation geometries. It writes per-scenario
-result objects plus structured-study results, summary CSV/RDS files, and
+result objects, summary CSV/RDS files, and
 paper-ready figures/LaTeX fragments.
+Decay forward simulations are not part of the production robustness run;
+`--refresh-decay` remains available for an explicit standalone diagnostic.
 
 **K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with μ calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
 
@@ -106,13 +108,13 @@ PPDisentangle-output/sim_study/generated/robustness/figures/
   robustness_parameter_sweep_support_contrasts.{pdf,png}
   robustness_spatiotemporal_kernel_mismatch_heatmap.{pdf,png}
   robustness_pretreatment_assignment_support_contrasts.{pdf,png}
-  robustness_decay_validation.{pdf,png}
-  robustness_temporal_decay_validation.{pdf,png}
+  robustness_effect_modification.{pdf,png}
+  robustness_geometry_transport.{pdf,png}
 PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
 ```
 
-Effect modification and geometry transport are automatically run after the
-standard scenario grid by `--robustness`. They can still be rerun independently
+Effect modification and geometry transport are ordinary rows in the same
+42-scenario grid. They can still be rerun independently
 for inspection or debugging:
 
 ```bash
@@ -122,14 +124,14 @@ bash inst/sim_study/run_nesi.sh --structured-inspect
 bash inst/sim_study/run_nesi.sh --structured-robustness --structured-study both --sims 32
 ```
 
-Use `--skip-structured` only for a deliberate grid-only timing probe.
+For a standard-family-only timing probe, pass an explicit `--scenario-set`
+that excludes `effect_modification` and `geometry_transport`.
 
 They add two composite figures:
 
 ```text
 generated/robustness/figures/robustness_effect_modification.{pdf,png}
 generated/robustness/figures/robustness_geometry_transport.{pdf,png}
-generated/robustness/structured/*.rds
 ```
 
 Label recovery is summarised once across all scenarios (naive vs SEM). Bias support
@@ -162,14 +164,13 @@ use this only for grid timing, not as the complete appendix):
 bash inst/sim_study/run_nesi.sh --robustness-quick-probe
 ```
 
-Full NeSI robustness run (33 standard scenarios followed by both structured
-studies, then a combined replot). Recommended resources: **64 CPUs / 48h /
-128G** (better backfill than 100-core requests):
+Full NeSI robustness run (42 unified scenarios). Recommended resources:
+**64 CPUs / 24h / 128G**:
 
 ```bash
 PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
   --robustness --mode long \
-  --sims 32 --cpus 64 --time 48:00:00 \
+  --sims 32 --cpus 64 --time 24:00:00 \
   --target-points 2500 --sem-inner 2000 --skip-ate-tau
 ```
 
@@ -180,8 +181,8 @@ bash inst/sim_study/run_nesi.sh --robustness --mode long \
   --sims 32 --cpus 100 --target-points 2500 --skip-ate-tau
 ```
 
-Quick NeSI run for the full `robustness.pdf` appendix (33 standard scenarios,
-both structured studies with reduced forward Monte Carlo, no estimated
+Quick NeSI run for the full `robustness.pdf` appendix (42 scenarios,
+structured rows with reduced forward Monte Carlo, no estimated
 `tau_i`):
 
 ```bash
@@ -198,16 +199,18 @@ cd PPDisentangle-output/sim_study/generated/robustness
 pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
-Resume a failed robustness job without rerunning completed scenarios (reuses
-RDS files named `robustness_<OLDJOB>_<scenario_id>.rds` on the cluster output
-path, then runs only the missing scenarios + structured studies + replot):
+Resume from one or more prior jobs without rerunning completed scenarios.
+Comma-separated basenames are searched in order and the replication count is
+validated before reuse. The production continuation below combines the 32
+standard scenarios from job 7671212 with the fixed Voronoi scenario from
+job 7718420, leaving only the nine structured scenarios:
 
 ```bash
 PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
   --robustness --mode long \
-  --sims 32 --cpus 64 --time 48:00:00 \
+  --sims 32 --cpus 64 --time 24:00:00 \
   --target-points 2500 --sem-inner 2000 --skip-ate-tau \
-  --resume-from robustness_<OLDJOB>
+  --resume-from robustness_7671212,robustness_7718420
 ```
 
 If the prior job never wrote a manifest CSV, build one from the completed RDS
