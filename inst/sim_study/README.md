@@ -41,7 +41,7 @@ Override the output root with `PPDISENTANGLE_OUTPUT_ROOT`. See [`../OUTPUT.md`](
 ## Publication outputs
 
 Paper-canonical main run: **`time_sweep_5228509`** (`*_summary_FOR_PAPER.rds` +
-raw horizon `tmp*.rds`). Robustness appendix: **`robustness_7568933`**.
+raw horizon `tmp*.rds`). Robustness appendix: **`robustness_merged_tcal`**.
 
 To regenerate all paper figures from a Zenodo unpack, see
 [`../zenodo/README.md`](../zenodo/README.md):
@@ -71,7 +71,7 @@ PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
 ## Robustness suite
 
 The robustness launcher runs the complete robustness suite in one job: grids
-over K separation, signal-to-noise,
+over K separation, signal-to-noise, K-separation × spatial range,
 a $4\times 4$ spatiotemporal kernel misspecification matrix
 (temporal × spatial, each exponential or power-law, under sim and fit),
 pretreatment-informed treatment assignment
@@ -85,9 +85,16 @@ paper-ready figures/LaTeX fragments.
 Decay forward simulations are not part of the production robustness run;
 `--refresh-decay` remains available for an explicit standalone diagnostic.
 
-**K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with μ calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
+**K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with post-treatment horizon time-calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
 
-**SNR grid (default):** `μ_scale ∈ {0.25, 0.5, 1, 1.5, 2}` at fixed `K = (0.8, 0.2)`. Override with `PP_MU_SCALES` or `--mu-scales`.
+**SNR grid (default):** `μ_scale ∈ {0.25, 0.5, 1, 1.5, 2}` at fixed `K = (0.8, 0.2)`, also time-calibrated. Override with `PP_MU_SCALES` or `--mu-scales`.
+
+**K × spatial-range grid (`k_spatial_range`, default):** treated
+`K ∈ {0.2, 0.3, 0.4, 0.5, 0.6}` at control `K = 0.8`, crossed with spatial
+scale multipliers `α/α₀ ∈ {0.25, 0.5, 1, 2, 4}` (`α₀ = 0.01`, exponential
+spatial kernel). Time-calibrated abundance; 25 scenarios. Override scales with
+`PP_ALPHA_SCALES` or `--alpha-scales`. Scenario IDs encode `_as…` so they do
+not collide with plain `k_separation` resumes.
 
 **Pretreatment assignment family (`pretreatment_assignment`):** five rules at
 `K = (0.8, 0.2)`, each treating 50% of cells from a reference pre-treatment
@@ -106,6 +113,7 @@ Default generated assets:
 PPDisentangle-output/sim_study/generated/robustness/figures/
   robustness_all_scenarios_label_recovery.{pdf,png}
   robustness_parameter_sweep_support_contrasts.{pdf,png}
+  robustness_k_spatial_range_heatmap.{pdf,png}
   robustness_spatiotemporal_kernel_mismatch_heatmap.{pdf,png}
   robustness_pretreatment_assignment_support_contrasts.{pdf,png}
   robustness_effect_modification.{pdf,png}
@@ -114,7 +122,8 @@ PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_append
 ```
 
 Effect modification and geometry transport are ordinary rows in the same
-42-scenario grid. They can still be rerun independently
+scenario grid (67 scenarios when all families are selected: prior 42 plus the
+25-cell `k_spatial_range` surface). They can still be rerun independently
 for inspection or debugging:
 
 ```bash
@@ -191,12 +200,31 @@ PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
   --target-points 2500 --sem-inner 2000 --skip-ate-tau \
   --scenario-set k_separation,snr_scale
 
+# K × spatial-range surface only (25 scenarios)
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --scenario-set k_spatial_range
+
 # full grid; resume non-tcal scenarios from the prior completed job
 PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
   --robustness --mode long \
   --sims 32 --cpus 64 --time 24:00:00 \
   --target-points 2500 --sem-inner 2000 --skip-ate-tau \
   --resume-from robustness_7762623
+```
+
+After fetching a `k_spatial_range` job, replot that basename (or merge its RDS
+into the paper archive alongside `robustness_merged_tcal`) and rebuild the
+appendix PDF:
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<JOBID>
+# optional merge: copy new *_k_spatial_range_*.rds into paper/robustness_merged_tcal/
+# then --replot robustness_merged_tcal
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
 ```
 
 Larger-node alternative (100 CPUs / default 72h wall):
@@ -206,7 +234,7 @@ bash inst/sim_study/run_nesi.sh --robustness --mode long \
   --sims 32 --cpus 100 --target-points 2500 --skip-ate-tau
 ```
 
-Quick NeSI run for the full `robustness.pdf` appendix (42 scenarios,
+Quick NeSI run for the full `robustness.pdf` appendix (all families,
 structured rows with reduced forward Monte Carlo, no estimated
 `tau_i`):
 

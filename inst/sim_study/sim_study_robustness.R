@@ -62,10 +62,15 @@ expected_points_per_mu_design <- function(k_control, k_treated,
   treatment_time / (1 - k_control) +
     time_int * ((1 - treat_prop) / (1 - k_control) + treat_prop / (1 - k_treated))
 }
-TIME_CALIBRATED_FAMILIES <- c("k_separation", "snr_scale")
+TIME_CALIBRATED_FAMILIES <- c("k_separation", "snr_scale", "k_spatial_range")
 uses_time_abundance_calibrate <- function(family) {
   as.character(family) %in% TIME_CALIBRATED_FAMILIES
 }
+
+# Spatial-range × K grid: alpha = ALPHA0 * alpha_scale (default ALPHA0=0.01).
+DEFAULT_ALPHA0 <- 0.01
+DEFAULT_ALPHA_SCALES <- c(0.25, 0.5, 1, 2, 4)
+DEFAULT_K_SPATIAL_TREATED_K <- c(0.2, 0.3, 0.4, 0.5, 0.6)
 
 # Treated-K grid for k_separation with control fixed at k_anchor (default 0.8).
 default_k_separation_values <- function(k_anchor = ROBUSTNESS_CONTROL_K) {
@@ -144,6 +149,15 @@ mu_scales <- mu_scales[mu_scales > 0]
 message(sprintf(
   "[robustness] snr mu_scale grid (%d): %s",
   length(mu_scales), paste(signif(mu_scales, 4), collapse = ", ")
+))
+alpha_scales <- parse_num_vec(
+  get_arg_val("--alpha-scales", Sys.getenv("PP_ALPHA_SCALES", paste(DEFAULT_ALPHA_SCALES, collapse = ","))),
+  default = DEFAULT_ALPHA_SCALES
+)
+alpha_scales <- alpha_scales[alpha_scales > 0]
+message(sprintf(
+  "[robustness] k_spatial_range alpha_scale grid (%d) at ALPHA0=%.4g: %s",
+  length(alpha_scales), DEFAULT_ALPHA0, paste(signif(alpha_scales, 4), collapse = ", ")
 ))
 
 scenario_filter <- get_arg_val("--scenario-set", Sys.getenv("PP_ROBUSTNESS_SCENARIO_SET", "all"))
@@ -233,6 +247,21 @@ snr_scale <- data.frame(
   stringsAsFactors = FALSE
 )
 
+k_spatial_range <- expand.grid(
+  scenario_family = "k_spatial_range",
+  control_k = ROBUSTNESS_CONTROL_K,
+  treated_k = DEFAULT_K_SPATIAL_TREATED_K,
+  mu_scale = 1,
+  alpha_scale = alpha_scales,
+  sim_kernel = "exponential",
+  fit_kernel = "exponential",
+  sim_spatial_kernel = "exponential",
+  fit_spatial_kernel = "exponential",
+  treatment_assignment = "random",
+  stringsAsFactors = FALSE
+)
+k_spatial_range$hawkes_alpha <- DEFAULT_ALPHA0 * as.numeric(k_spatial_range$alpha_scale)
+
 spatiotemporal_kernel_mismatch <- expand.grid(
   scenario_family = "spatiotemporal_kernel_mismatch",
   control_k = ROBUSTNESS_CONTROL_K,
@@ -297,6 +326,7 @@ scenarios <- bind_rows(
   k_separation,
   pretreatment_assignment,
   snr_scale,
+  k_spatial_range,
   spatiotemporal_kernel_mismatch,
   effect_modification,
   geometry_transport
@@ -309,12 +339,18 @@ scenarios <- bind_rows(
       "mu"
     ),
     # "_acaltime" avoids resume collisions with older mu-calibrated RDS files.
+    # "_as..." encodes alpha_scale for k_spatial_range resume safety.
     scenario_id = paste0(
       .data$scenario_family,
       "_kc", format_num_tag(.data$control_k),
       "_kt", format_num_tag(.data$treated_k),
       "_mu", format_num_tag(.data$mu_scale),
       if_else(.data$abundance_calibrate == "time", "_acaltime", ""),
+      if_else(
+        is.finite(.data$alpha_scale),
+        paste0("_as", format_num_tag(.data$alpha_scale)),
+        ""
+      ),
       "_sim", .data$sim_kernel,
       "_fit", .data$fit_kernel,
       "_ssim", .data$sim_spatial_kernel,
@@ -369,6 +405,8 @@ manifest_row <- function(sc, run_basename, rds_path) {
     sim_spatial_kernel = sc$sim_spatial_kernel,
     fit_spatial_kernel = sc$fit_spatial_kernel,
     treatment_assignment = sc$treatment_assignment,
+    alpha_scale = if ("alpha_scale" %in% names(sc)) sc$alpha_scale else NA_real_,
+    hawkes_alpha = if ("hawkes_alpha" %in% names(sc)) sc$hawkes_alpha else NA_real_,
     h_true = if ("h_true" %in% names(sc)) sc$h_true else NA_real_,
     geometry_m = if ("geometry_m" %in% names(sc)) sc$geometry_m else NA_integer_,
     coarseness = if ("coarseness" %in% names(sc)) sc$coarseness else NA_real_,
@@ -477,6 +515,9 @@ run_one <- function(row_id) {
   )
   if (identical(abundance_calibrate, "time")) {
     env <- c(env, PP_BASE_MU = as.character(time_cal_base_mu))
+  }
+  if ("hawkes_alpha" %in% names(sc) && is.finite(sc$hawkes_alpha[[1]])) {
+    env <- c(env, PP_HAWKES_ALPHA = as.character(sc$hawkes_alpha[[1]]))
   }
   # Explicitly propagate production controls to child Rscript processes.
   # system2 inherits the parent environment on Unix, but listing these removes
@@ -1202,7 +1243,8 @@ collapse_sem_labelling_rows <- function(df, label_col = NULL) {
   key_cols <- intersect(
     c(
       label_col, "scenario_id", "contrast_family", "scenario_family", "control_k",
-      "treated_k", "k_delta", "mu_scale", "sim_kernel", "fit_kernel",
+      "treated_k", "k_delta", "mu_scale", "alpha_scale", "hawkes_alpha",
+      "sim_kernel", "fit_kernel",
       "sim_spatial_kernel", "fit_spatial_kernel", "treatment_assignment", "target_points"
     ),
     names(df)
@@ -1969,7 +2011,8 @@ make_spatial_kernel_mismatch_bar_plot <- function(df, y_col, lbl_col, title, sub
 scenario_display_name <- function(scenario_family, treated_k, k_delta, mu_scale,
                                   sim_kernel, fit_kernel,
                                   sim_spatial_kernel, fit_spatial_kernel,
-                                  scenario_id, treatment_assignment = NULL) {
+                                  scenario_id, treatment_assignment = NULL,
+                                  alpha_scale = NULL) {
   fam <- as.character(scenario_family)
   n <- length(fam)
   out <- character(n)
@@ -1977,6 +2020,11 @@ scenario_display_name <- function(scenario_family, treated_k, k_delta, mu_scale,
     rep(NA_character_, n)
   } else {
     as.character(treatment_assignment)
+  }
+  a_scale <- if (is.null(alpha_scale)) {
+    rep(NA_real_, n)
+  } else {
+    as.numeric(alpha_scale)
   }
   for (i in seq_len(n)) {
     if (fam[[i]] %in% c("pretreatment_assignment", "high_count_assignment")) {
@@ -1988,6 +2036,12 @@ scenario_display_name <- function(scenario_family, treated_k, k_delta, mu_scale,
         "K-sep: K_1=%s (dK=%s)",
         format(treated_k[[i]], trim = TRUE, scientific = FALSE),
         format(k_delta[[i]], trim = TRUE, scientific = FALSE)
+      )
+    } else if (identical(fam[[i]], "k_spatial_range")) {
+      out[[i]] <- sprintf(
+        "K x alpha: K_1=%s, alpha x %s",
+        format(treated_k[[i]], trim = TRUE, scientific = FALSE),
+        format(a_scale[[i]], trim = TRUE, scientific = FALSE)
       )
     } else if (fam[[i]] %in% c(
       "spatiotemporal_kernel_mismatch", "kernel_mismatch", "spatial_kernel_mismatch"
@@ -2009,6 +2063,7 @@ scenario_family_order <- c(
   "high_count_assignment",
   "snr_scale",
   "k_separation",
+  "k_spatial_range",
   "spatiotemporal_kernel_mismatch",
   "kernel_mismatch",
   "spatial_kernel_mismatch",
@@ -2090,6 +2145,7 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
     high_count_assignment = "Pretreatment assignment",
     snr_scale = "Signal-to-noise",
     k_separation = "K-separation",
+    k_spatial_range = "K x spatial range",
     spatiotemporal_kernel_mismatch = "Kernel misspecification",
     kernel_mismatch = "Kernel misspecification",
     spatial_kernel_mismatch = "Kernel misspecification",
@@ -2100,6 +2156,7 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
     "Pretreatment assignment",
     "Signal-to-noise",
     "K-separation",
+    "K x spatial range",
     "Kernel misspecification",
     "Covariate effect",
     "Coarseness"
@@ -2108,9 +2165,19 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
     "Pretreatment assignment" = "#3D405B",
     "Signal-to-noise" = "#E07A5F",
     "K-separation" = "#81B29A",
+    "K x spatial range" = "#F4A261",
     "Kernel misspecification" = "#F2CC8F",
     "Covariate effect" = "#9B5DE5",
     "Coarseness" = "#00BBF9"
+  )
+  family_shapes <- c(
+    "Pretreatment assignment" = 15,
+    "Signal-to-noise" = 16,
+    "K-separation" = 17,
+    "K x spatial range" = 3,
+    "Kernel misspecification" = 18,
+    "Covariate effect" = 8,
+    "Coarseness" = 4
   )
 
   wide <- plot_df %>%
@@ -2138,15 +2205,25 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
   pad <- max(0.02, 0.05 * diff(lims))
   lims <- pmin(1, pmax(0, c(lims[1] - pad, lims[2] + pad)))
 
-  ggplot(wide, aes(x = .data$naive, y = .data$SEM, color = .data$family_label)) +
+  ggplot(
+    wide,
+    aes(
+      x = .data$naive,
+      y = .data$SEM,
+      color = .data$family_label,
+      shape = .data$family_label
+    )
+  ) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey55", linewidth = 0.45) +
     geom_point(size = 2.6, alpha = 0.9) +
     coord_fixed(xlim = lims, ylim = lims) +
     scale_color_manual(values = family_colors[present], drop = FALSE) +
+    scale_shape_manual(values = family_shapes[present], drop = FALSE) +
     labs(
       x = "Naive mean raw accuracy",
       y = "SEM mean raw accuracy",
       color = "Scenario family",
+      shape = "Scenario family",
       title = title,
       subtitle = subtitle
     ) +
@@ -2386,9 +2463,11 @@ prepare_parameter_sweep_support_df <- function(df) {
   lbl_col <- safe_label_col(df)
   if (is.null(lbl_col)) return(NULL)
   plot_labelling_levels <- c("naive", "SEM")
-  panel_levels <- c(
-    "K-separation: |K_1 - K_0|",
-    "Signal-to-noise: mu scale"
+  # Facet keys; strip text (bottom) is rendered as the panel x-axis label.
+  panel_levels <- c("k_delta", "mu_scale")
+  panel_axis_labels <- c(
+    k_delta = "group('|', K[1] - K[0], '|')",
+    mu_scale = "mu[scale]"
   )
 
   finish_panel <- function(out, panel_label, param_col) {
@@ -2455,6 +2534,7 @@ prepare_parameter_sweep_support_df <- function(df) {
   if (is.null(out) || nrow(out) < 1L) return(NULL)
   out$panel <- factor(out$panel, levels = panel_levels)
   out[[lbl_col]] <- factor(out[[lbl_col]], levels = plot_labelling_levels)
+  attr(out, "panel_axis_labels") <- panel_axis_labels
   out
 }
 
@@ -2463,6 +2543,13 @@ make_parameter_sweep_support_plot <- function(df, title, stem, subtitle) {
   if (is.null(lbl_col)) return(NULL)
   support_plot_df <- prepare_parameter_sweep_support_df(df)
   if (is.null(support_plot_df) || nrow(support_plot_df) < 1L) return(NULL)
+  panel_axis_labels <- attr(support_plot_df, "panel_axis_labels")
+  if (is.null(panel_axis_labels)) {
+    panel_axis_labels <- c(
+      k_delta = "group('|', K[1] - K[0], '|')",
+      mu_scale = "mu[scale]"
+    )
+  }
   has_se <- any(is.finite(support_plot_df$se_bias))
   dodge <- ggplot2::position_dodge(width = 0.04)
   p_support <- ggplot(
@@ -2487,20 +2574,29 @@ make_parameter_sweep_support_plot <- function(df, title, stem, subtitle) {
       )
     }} +
     geom_point(size = 1.8, alpha = 0.85, position = dodge) +
-    facet_wrap(~ panel, scales = "free_x", nrow = 1) +
+    facet_wrap(
+      ~ panel,
+      scales = "free_x",
+      nrow = 1,
+      strip.position = "bottom",
+      labeller = ggplot2::as_labeller(panel_axis_labels, default = ggplot2::label_parsed)
+    ) +
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
       x = NULL,
       y = "DAITE bias (estimate - truth)",
       color = "Labelling",
-      shape = "Labelling",
-      title = title,
-      subtitle = subtitle
+      shape = "Labelling"
     ) +
     theme_minimal() +
-    theme(legend.position = "bottom")
-  save_plot_pair(p_support, stem, width = 9.5, height = 4.6)
+    theme(
+      legend.position = "bottom",
+      strip.placement = "outside",
+      strip.background = element_blank(),
+      strip.text = element_text(size = 11)
+    )
+  save_plot_pair(p_support, stem, width = 9.5, height = 4.2)
 }
 
 make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL) {
@@ -2561,20 +2657,18 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
     levels = heatmap_labelling_levels
   )
 
-  lim <- max(abs(support_plot_df$mean_bias), na.rm = TRUE)
-  if (!is.finite(lim) || lim <= 0) lim <- 1
+  lim_hi <- max(support_plot_df$mean_bias, na.rm = TRUE)
+  if (!is.finite(lim_hi) || lim_hi <= 0) lim_hi <- 1
   p_heat <- ggplot(
     support_plot_df,
     aes(x = .data$fit_label, y = .data$truth_label, fill = .data$mean_bias)
   ) +
     geom_tile(color = "grey85", linewidth = 0.3) +
     facet_wrap(stats::as.formula(paste("~", lbl_col)), nrow = 1) +
-    scale_fill_gradient2(
-      low = "#3D405B",
-      mid = "white",
+    scale_fill_gradient(
+      low = "white",
       high = "#E07A5F",
-      midpoint = 0,
-      limits = c(-lim, lim),
+      limits = c(0, lim_hi),
       na.value = "grey95",
       name = "DAITE bias"
     ) +
@@ -2592,6 +2686,95 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
       legend.position = "bottom"
     )
   save_plot_pair(p_heat, stem, width = 8.5, height = 4.8)
+}
+
+make_k_spatial_range_heatmap <- function(df, title, stem, subtitle = NULL) {
+  lbl_col <- safe_label_col(df)
+  if (is.null(lbl_col)) return(NULL)
+  if (!all(c("k_delta", "alpha_scale") %in% names(df))) return(NULL)
+  heatmap_labelling_levels <- c("naive", "SEM")
+  out <- df %>%
+    filter(.data$scenario_family == "k_spatial_range") %>%
+    filter_support_plot_contrast()
+  if (nrow(out) < 1L) return(NULL)
+  if (!"mean_bias" %in% names(out)) out$mean_bias <- NA_real_
+  support_plot_df <- out %>%
+    mutate(
+      mean_bias = ifelse(
+        is.finite(.data$mean_bias),
+        .data$mean_bias,
+        ifelse(
+          is.finite(.data$mean_psi_estimate) & is.finite(.data$mean_psi_truth),
+          .data$mean_psi_estimate - .data$mean_psi_truth,
+          NA_real_
+        )
+      ),
+      !!lbl_col := normalize_labelling_method(.data[[lbl_col]]),
+      k_delta = as.numeric(.data$k_delta),
+      alpha_scale = as.numeric(.data$alpha_scale)
+    ) %>%
+    filter(
+      .data[[lbl_col]] %in% heatmap_labelling_levels,
+      is.finite(.data$mean_bias),
+      is.finite(.data$k_delta),
+      is.finite(.data$alpha_scale)
+    ) %>%
+    group_by(.data[[lbl_col]], .data$k_delta, .data$alpha_scale) %>%
+    summarize(mean_bias = mean(.data$mean_bias, na.rm = TRUE), .groups = "drop")
+  if (nrow(support_plot_df) < 1L) return(NULL)
+
+  methods <- unique(as.character(support_plot_df[[lbl_col]]))
+  methods <- methods[methods %in% heatmap_labelling_levels]
+  if (length(methods) < 1L) methods <- heatmap_labelling_levels
+  k_levels <- sort(unique(c(
+    abs(DEFAULT_K_SPATIAL_TREATED_K - ROBUSTNESS_CONTROL_K),
+    support_plot_df$k_delta
+  )))
+  a_levels <- sort(unique(c(DEFAULT_ALPHA_SCALES, support_plot_df$alpha_scale)))
+  grid <- expand.grid(
+    k_delta = k_levels,
+    alpha_scale = a_levels,
+    method_tmp = methods,
+    stringsAsFactors = FALSE
+  )
+  names(grid)[names(grid) == "method_tmp"] <- lbl_col
+  support_plot_df <- grid %>%
+    left_join(support_plot_df, by = c("k_delta", "alpha_scale", lbl_col))
+
+  support_plot_df$k_delta <- factor(support_plot_df$k_delta, levels = k_levels)
+  support_plot_df$alpha_scale <- factor(support_plot_df$alpha_scale, levels = a_levels)
+  support_plot_df[[lbl_col]] <- factor(
+    as.character(support_plot_df[[lbl_col]]),
+    levels = heatmap_labelling_levels
+  )
+
+  lim_hi <- max(support_plot_df$mean_bias, na.rm = TRUE)
+  if (!is.finite(lim_hi) || lim_hi <= 0) lim_hi <- 1
+  p_heat <- ggplot(
+    support_plot_df,
+    aes(x = .data$k_delta, y = .data$alpha_scale, fill = .data$mean_bias)
+  ) +
+    geom_tile(color = "grey85", linewidth = 0.3) +
+    facet_wrap(stats::as.formula(paste("~", lbl_col)), nrow = 1) +
+    scale_fill_gradient(
+      low = "white",
+      high = "#E07A5F",
+      limits = c(0, lim_hi),
+      na.value = "grey95",
+      name = "DAITE bias"
+    ) +
+    labs(
+      x = expression(group("|", K[1] - K[0], "|")),
+      y = expression(alpha / alpha[0]),
+      title = title,
+      subtitle = subtitle
+    ) +
+    theme_minimal() +
+    theme(
+      panel.grid = element_blank(),
+      legend.position = "bottom"
+    )
+  save_plot_pair(p_heat, stem, width = 8.5, height = 4.6)
 }
 
 # Checkerboard / allocation map panels for structured robustness figures.
@@ -2745,11 +2928,7 @@ make_effect_modification_scenario_plot <- function(df, stem) {
     as.character(maps$allocation),
     levels = c("Covariate X", "Observed z[obs]")
   )
-  pA <- plot_structured_allocation_maps(maps, nrow = 1L) +
-    labs(title = sprintf(
-      "A  Fixed X and z[obs] (outlined single-cell flips: X=+1 cell %d, X=-1 cell %d)",
-      d$flip_plus_cell, d$flip_minus_cell
-    ))
+  pA <- plot_structured_allocation_maps(maps, nrow = 1L)
 
   pB <- ggplot(
     bias_df,
@@ -2769,7 +2948,6 @@ make_effect_modification_scenario_plot <- function(df, stem) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "B  Estimated DAITE bias",
       x = "True h",
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
@@ -2824,8 +3002,7 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
   }
   labels <- sprintf("m=%d; C=%.2f", d$m, d$coarseness)
   maps <- structured_allocation_map_df(d$grid, d$allocations, labels, d$focal_cells)
-  pA <- plot_structured_allocation_maps(maps, nrow = 1L) +
-    labs(title = "A  Estimation regimes along the coarseness path (each used as z for simulate/SEM/fit)")
+  pA <- plot_structured_allocation_maps(maps, nrow = 1L)
 
   pB <- ggplot(
     bias_df,
@@ -2844,7 +3021,6 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
-      title = "B  Estimated all-or-nothing DAITE bias by estimation-regime coarseness",
       x = "Coarseness C(z) of the estimation regime",
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
@@ -2869,6 +3045,12 @@ if (!is.null(support_summary) && nrow(support_summary) > 0 &&
       title = "Spatiotemporal kernel misspecification: all-or-nothing DAITE bias",
       stem = "robustness_spatiotemporal_kernel_mismatch_heatmap",
       subtitle = "Rows = true (temporal, spatial) kernels; columns = fitted kernels. Cells are mean DAITE bias at (K_0,K_1)=(0.8,0.2)."
+    )
+    plot_files$k_spatial_range_heatmap <- make_k_spatial_range_heatmap(
+      support_summary,
+      title = "K-separation x spatial range: all-or-nothing DAITE bias",
+      stem = "robustness_k_spatial_range_heatmap",
+      subtitle = NULL
     )
     plot_files$high_count_assignment_support <- make_high_count_support_plot(
       support_summary,
@@ -3001,6 +3183,7 @@ latex_escape <- function(x) {
 ROBUSTNESS_FIG_STEMS <- list(
   all_scenarios_label = "robustness_all_scenarios_label_recovery",
   parameter_sweep_support = "robustness_parameter_sweep_support_contrasts",
+  k_spatial_range_heatmap = "robustness_k_spatial_range_heatmap",
   spatiotemporal_kernel_heatmap = "robustness_spatiotemporal_kernel_mismatch_heatmap",
   high_count_support = "robustness_pretreatment_assignment_support_contrasts",
   effect_modification = "robustness_effect_modification",
@@ -3113,7 +3296,7 @@ tex_lines <- c(
   "",
   "For each scenario we simulate an ensemble of independent replications and report two classes of outcome. First, \\emph{label recovery}: raw accuracy of the naive and SEM labellings of post-$t^\\star$ events (as in the main simulation study). Second, \\emph{off-support allocation contrasts}: mean percentage error in plug-in expected-count contrasts for (i) a single treated cell, (ii) a random $50\\%$ treated regime, and (iii) all-treated, each versus all-control. All contrast estimates fix control parameters at truth and use fitted treated parameters from each labelling, matching \\cref{fig:all_nothing}. These contrasts probe extrapolation across treatment intensity (SEM fits with explosive parameter estimates are excluded throughout).",
   "",
-  "The branching-ratio grid, spatiotemporal kernel misspecification matrix, assignment designs, signal-to-noise scalings, effect modification, and allocation coarseness studies below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Decay diagnostics are excluded from the production robustness run because they require a separate forward-simulation experiment.",
+  "The branching-ratio grid, K-separation $\\times$ spatial-range surface, spatiotemporal kernel misspecification matrix, assignment designs, signal-to-noise scalings, effect modification, and allocation coarseness studies below are generated automatically by \\texttt{sim\\_study\\_robustness.R} in the \\texttt{PPDisentangle} package. Decay diagnostics are excluded from the production robustness run because they require a separate forward-simulation experiment.",
   "",
   "\\makeatletter",
   "\\ifdefined\\robustnessstandalone",
@@ -3144,7 +3327,7 @@ tex_lines <- c(
   "}",
   "\\makeatother",
   "",
-  "\\Cref{fig:robustness-all-scenarios-label} summarises mean raw labelling accuracy for naive and SEM across every fitted robustness scenario with a DAITE contrast (K-separation, signal-to-noise, kernel misspecification, pretreatment assignment, binary-covariate effect modification, and coarseness / geometry transport).",
+  "\\Cref{fig:robustness-all-scenarios-label} summarises mean raw labelling accuracy for naive and SEM across every fitted robustness scenario with a DAITE contrast (K-separation, K-separation $\\times$ spatial range, signal-to-noise, kernel misspecification, pretreatment assignment, binary-covariate effect modification, and coarseness / geometry transport).",
   "",
   tex_fig(
     ROBUSTNESS_FIG_STEMS$all_scenarios_label,
@@ -3169,6 +3352,21 @@ tex_lines <- c(
         ROBUSTNESS_FIG_STEMS$parameter_sweep_support,
         "fig:robustness-parameter-sweep-support",
         "All-or-nothing DAITE bias ($\\widehat\\psi-\\psi$) for naive and SEM across two parameter sweeps. Left: K-separation vs $|K_1-K_0|$. Right: signal-to-noise vs $\\mu$ scale at $(K_0,K_1)=(0.8,0.2)$. Error bars are $\\pm 1$ SE across replications."
+      )
+    )
+  ),
+  tex_subsubsection(
+    "K-separation and spatial triggering range",
+    "app:robustness-k-spatial-range",
+    c(
+      "Component separation and spatial spillover range may interact: longer-range triggering increases cross-cell contamination of labels, while smaller $|K_1-K_0|$ makes the latent components harder to distinguish. We therefore cross a coarse treated-branching grid $K_1\\in\\{0.2,0.3,0.4,0.5,0.6\\}$ (control fixed at $K_0=0.8$) with spatial-scale multipliers $\\alpha/\\alpha_0\\in\\{0.25,0.5,1,2,4\\}$ for the exponential spatial kernel at baseline $\\alpha_0=0.01$. Temporal triggering remains exponential with $\\beta=10$; treatment is random at $50\\%$ of cells; and post-treatment horizons are time-calibrated so expected catalogue size matches the common abundance target.",
+      "\\Cref{fig:robustness-k-spatial-range} reports mean all-or-nothing DAITE bias on this $5\\times5$ surface for naive and SEM. Labelling accuracy for these cells appears with the other families in \\cref{fig:robustness-all-scenarios-label}."
+    ),
+    c(
+      tex_fig(
+        ROBUSTNESS_FIG_STEMS$k_spatial_range_heatmap,
+        "fig:robustness-k-spatial-range",
+        "All-or-nothing DAITE bias ($\\widehat\\psi-\\psi$) on a $K$-separation $\\times$ spatial-range grid. Columns are $|K_1-K_0|$ at $K_0=0.8$; rows are spatial-scale multipliers $\\alpha/\\alpha_0$ with $\\alpha_0=0.01$. Facets are naive and SEM."
       )
     )
   ),
