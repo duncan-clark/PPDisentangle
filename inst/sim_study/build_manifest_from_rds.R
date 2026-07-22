@@ -30,7 +30,9 @@ parse_tag <- function(sid, key) {
 
 rows <- lapply(rds, function(p) {
   sid <- sub(paste0("^", prefix), "", sub("\\.rds$", "", base::basename(p)))
-  fam <- if (startsWith(sid, "k_separation")) {
+  fam <- if (startsWith(sid, "k_spatial_range")) {
+    "k_spatial_range"
+  } else if (startsWith(sid, "k_separation")) {
     "k_separation"
   } else if (startsWith(sid, "pretreatment_assignment")) {
     "pretreatment_assignment"
@@ -54,6 +56,7 @@ rows <- lapply(rds, function(p) {
   sfit <- sub(".*_sfit", "", sub("_assign.*", "", sid))
   kc <- parse_tag(sid, "kc")
   kt <- parse_tag(sid, "kt")
+  alpha_scale <- parse_tag(sid, "as")
   data.frame(
     scenario_id = sid,
     scenario_family = fam,
@@ -61,6 +64,9 @@ rows <- lapply(rds, function(p) {
     treated_k = kt,
     k_delta = abs(kt - kc),
     mu_scale = parse_tag(sid, "mu"),
+    alpha_scale = alpha_scale,
+    hawkes_alpha = if (is.finite(alpha_scale)) 0.01 * alpha_scale else NA_real_,
+    abundance_calibrate = if (grepl("_acaltime", sid, fixed = TRUE)) "time" else "mu",
     sim_kernel = simk,
     fit_kernel = fitk,
     sim_spatial_kernel = ssim,

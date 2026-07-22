@@ -2726,11 +2726,14 @@ make_k_spatial_range_heatmap <- function(df, title, stem, subtitle = NULL) {
   methods <- unique(as.character(support_plot_df[[lbl_col]]))
   methods <- methods[methods %in% heatmap_labelling_levels]
   if (length(methods) < 1L) methods <- heatmap_labelling_levels
-  k_levels <- sort(unique(c(
+  # Round before unique/factor so CSV float noise cannot duplicate levels.
+  support_plot_df$k_delta <- round(as.numeric(support_plot_df$k_delta), 6)
+  support_plot_df$alpha_scale <- round(as.numeric(support_plot_df$alpha_scale), 6)
+  k_levels <- sort(unique(round(c(
     abs(DEFAULT_K_SPATIAL_TREATED_K - ROBUSTNESS_CONTROL_K),
     support_plot_df$k_delta
-  )))
-  a_levels <- sort(unique(c(DEFAULT_ALPHA_SCALES, support_plot_df$alpha_scale)))
+  ), 6)))
+  a_levels <- sort(unique(round(c(DEFAULT_ALPHA_SCALES, support_plot_df$alpha_scale), 6)))
   grid <- expand.grid(
     k_delta = k_levels,
     alpha_scale = a_levels,
@@ -2748,18 +2751,22 @@ make_k_spatial_range_heatmap <- function(df, title, stem, subtitle = NULL) {
     levels = heatmap_labelling_levels
   )
 
-  lim_hi <- max(support_plot_df$mean_bias, na.rm = TRUE)
-  if (!is.finite(lim_hi) || lim_hi <= 0) lim_hi <- 1
+  # SEM can be negatively biased (esp. long-range / small alpha); use a
+  # symmetric diverging scale so negatives are not clipped to grey.
+  lim <- max(abs(support_plot_df$mean_bias), na.rm = TRUE)
+  if (!is.finite(lim) || lim <= 0) lim <- 1
   p_heat <- ggplot(
     support_plot_df,
     aes(x = .data$k_delta, y = .data$alpha_scale, fill = .data$mean_bias)
   ) +
     geom_tile(color = "grey85", linewidth = 0.3) +
     facet_wrap(stats::as.formula(paste("~", lbl_col)), nrow = 1) +
-    scale_fill_gradient(
-      low = "white",
+    scale_fill_gradient2(
+      low = "#3D405B",
+      mid = "white",
       high = "#E07A5F",
-      limits = c(0, lim_hi),
+      midpoint = 0,
+      limits = c(-lim, lim),
       na.value = "grey95",
       name = "DAITE bias"
     ) +

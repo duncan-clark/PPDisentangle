@@ -41,7 +41,7 @@ pp_nesi_init_config "$PKG_ROOT"
 echo "Watching job $JOB_ID on ${PP_NESI_SSH} (poll every ${POLL_SECS}s) ..."
 
 while true; do
-  state="$(ssh "$PP_NESI_SSH" "squeue -h -j ${JOB_ID} 2>/dev/null | awk '{print \$5}'" || true)"
+  state="$(ssh "$PP_NESI_SSH" "squeue -h -j ${JOB_ID} -o '%T' 2>/dev/null | head -1" || true)"
   if [ -z "$state" ]; then
     echo "Job $JOB_ID no longer in queue ($(date))."
     break

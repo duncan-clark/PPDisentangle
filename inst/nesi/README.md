@@ -141,6 +141,19 @@ bash inst/nesi/wait_and_fetch.sh sim_study 1234567
 
 Polls `squeue` every 60s (`PP_NESI_POLL_SECS`) then runs `fetch.sh`.
 
+### Wait, fetch, and merge into the paper robustness archive
+
+For a family job (e.g. `k_spatial_range`) that should be folded into
+`paper/robustness_merged_tcal/`:
+
+```bash
+bash inst/nesi/wait_fetch_merge_robustness.sh 7839871 \
+  --archive robustness_merged_tcal --family k_spatial_range
+```
+
+Polls until the job leaves the queue, fetches, copies matching RDS into the
+archive, rewrites the archive manifest, replots, and rebuilds `robustness.pdf`.
+
 ## Output locations
 
 | Location | Role |
@@ -157,6 +170,7 @@ Override locally or on cluster with `PPDISENTANGLE_OUTPUT_ROOT`.
 | `inst/nesi/submit.sh` | Laptop | SSH → remote `run_nesi.sh` → sbatch |
 | `inst/nesi/fetch.sh` | Laptop | rsync cluster → local output |
 | `inst/nesi/wait_and_fetch.sh` | Laptop | Poll queue, then fetch |
+| `inst/nesi/wait_fetch_merge_robustness.sh` | Laptop | Poll, fetch, merge family into paper archive, replot |
 | `inst/nesi/status.sh` | Laptop | Remote `squeue` |
 | `inst/nesi/setup_remote.sh` | Laptop | One-time remote setup |
 | `inst/sim_study/run_nesi.sh` | NeSI | Submit + worker for sim study |
