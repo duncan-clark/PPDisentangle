@@ -23,6 +23,11 @@ See [`inst/oklahoma/README.md`](inst/oklahoma/README.md).
 
 See [`inst/sim_study/README.md`](inst/sim_study/README.md).
 
+## NeSI (cluster from your laptop)
+
+See [`inst/nesi/README.md`](inst/nesi/README.md) for SSH submit, result fetch,
+and queue monitoring.
+
 ## Output policy
 
 The repository tracks **source code, tests, analysis scripts, and small prepared inputs** only. Generated results live in a sibling folder `PPDisentangle-output/` (or `PPDISENTANGLE_OUTPUT_ROOT`) so they survive git clones, branch switches, and repo restructures. Archive large result sets on Zenodo separately from the software release; see [`inst/OUTPUT.md`](inst/OUTPUT.md).

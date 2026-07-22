@@ -7,7 +7,7 @@
 #   2. Download/unpack the Zenodo archive so it looks like:
 #        <output-root>/
 #          sim_study/paper/main_5228509/time_sweep_5228509_summary_FOR_PAPER.rds
-#          sim_study/paper/robustness_7568933/
+#          sim_study/paper/robustness_merged_tcal/
 #          oklahoma/for_paper.rds
 #
 # Usage (from repo root):
@@ -18,10 +18,10 @@
 #
 # Canonical paper jobs:
 #   main simulation figures  -> paper/main_5228509
-#   robustness appendix      -> paper/robustness_7568933
+#   robustness appendix      -> paper/robustness_merged_tcal
 #   Oklahoma application     -> oklahoma/for_paper.rds
 #
-# Does not rebuild local LaTeX previews such as robustness_standalone.pdf.
+# Does not rebuild local LaTeX previews such as robustness.pdf.
 
 get_arg_val <- function(args, flag, default = NULL) {
   idx <- which(args == flag)
@@ -64,7 +64,7 @@ ok_rds <- pp_output_path("oklahoma", "for_paper.rds", repo_root = repo_root)
 main_summary <- file.path(
   sim_dir, "paper", "main_5228509", "time_sweep_5228509_summary_FOR_PAPER.rds"
 )
-robustness_basename <- "robustness_7568933"
+robustness_basename <- "robustness_merged_tcal"
 skip_main <- has_flag(args, "--skip-main")
 skip_robustness <- has_flag(args, "--skip-robustness")
 skip_oklahoma <- has_flag(args, "--skip-oklahoma")
@@ -74,13 +74,21 @@ message("Output root:  ", output_root)
 message("Sim study:    ", sim_dir)
 
 run_rscript <- function(rel_script, extra_args = character()) {
-  script <- file.path(repo_root, rel_script)
-  if (!file.exists(script)) stop("Missing script: ", script, call. = FALSE)
-  cmd <- c(script, extra_args)
-  message("\n=== ", paste(c("Rscript", cmd), collapse = " "), " ===")
-  status <- system2("Rscript", args = cmd)
+  script_abs <- file.path(repo_root, rel_script)
+  if (!file.exists(script_abs)) stop("Missing script: ", script_abs, call. = FALSE)
+  # Run via relative path from repo_root so spaced absolute paths (Google Drive
+  # "My Drive") never appear in Rscript --file= / source() resolution.
+  message("\n=== Rscript ", paste(c(rel_script, extra_args), collapse = " "), " ===")
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(repo_root)
+  status <- system2("Rscript", args = c(rel_script, extra_args))
   if (!identical(as.integer(status), 0L)) {
-    stop("Command failed with status ", status, ": Rscript ", paste(cmd, collapse = " "), call. = FALSE)
+    stop(
+      "Command failed with status ", status, ": Rscript ",
+      paste(c(rel_script, extra_args), collapse = " "),
+      call. = FALSE
+    )
   }
 }
 

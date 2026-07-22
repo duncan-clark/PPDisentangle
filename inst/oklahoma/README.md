@@ -97,7 +97,8 @@ estimation. The free parameters are:
 |------|---------|
 | `Oklahoma_data_and_viz.R` | Downloads USGS earthquake catalog and OCC AOI geometry, builds regional grid, saves CSVs and GeoJSON |
 | `oklahoma_analysis.R` | Main analysis: county tessellation, four-way fits, ATE simulation, plots, results |
-| `oklahoma_report.qmd` | Quarto report (HTML + PDF) |
+| `oklahoma_report.qmd` | Quarto report source (HTML + PDF) |
+| `render_oklahoma_report.R` | Render report into `PPDisentangle-output/oklahoma/` |
 | `paper/oklahoma_paper_assets.R` | Builds publication figures and LaTeX table fragments from saved analysis results |
 | `../sim_study/consistency_study.R` | Simulation study verifying point-process parameter recovery |
 
@@ -114,21 +115,33 @@ Rscript oklahoma_analysis.R --test
 # 3. Run full analysis
 Rscript oklahoma_analysis.R
 
-# 4. Optional manual render (analysis auto-renders by default)
-quarto render oklahoma_report.qmd
+# 4. Render HTML report from saved results (no re-analysis)
+Rscript render_oklahoma_report.R
+Rscript render_oklahoma_report.R --results ../../../PPDisentangle-output/oklahoma/for_paper.rds
 ```
+
+### NeSI (from your laptop)
+
+```bash
+bash inst/nesi/submit.sh oklahoma --cores 32 --mode long
+bash inst/nesi/wait_and_fetch.sh oklahoma JOB_ID
+```
+
+See [`../nesi/README.md`](../nesi/README.md).
 
 ## Output
 
 Running `oklahoma_analysis.R` now does the following automatically on success:
 
 1. Saves results and plots to `../PPDisentangle-output/oklahoma/`
-2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
+2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX) into the same output folder
 3. Writes `last_run_sync_stamp.txt` in canonical output to trigger cloud sync tools
 
 Primary artifacts:
 
 - `PPDisentangle-output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
+- `PPDisentangle-output/oklahoma/oklahoma_report.html` — interactive review report (Quarto)
+- `PPDisentangle-output/oklahoma/oklahoma_report.pdf` — PDF report (when PDF render enabled)
 - `PPDisentangle-output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
 - `PPDisentangle-output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
 - `PPDisentangle-output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)

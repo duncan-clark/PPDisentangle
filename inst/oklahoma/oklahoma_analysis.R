@@ -64,8 +64,44 @@ tryCatch({
 #   ../PPDisentangle-output/oklahoma/
 OUT_DIR  <- PPDisentangle::pp_output_path("oklahoma", repo_root = REPO_DIR)
 PLOT_DIR <- file.path(OUT_DIR, "plots")
-for (d in unique(c(OUT_DIR, PLOT_DIR))) {
+report_out_dir_raw <- trimws(Sys.getenv("OK_REPORT_OUTPUT_DIR", ""))
+REPORT_OUT_DIR <- if (nzchar(report_out_dir_raw)) {
+  normalizePath(report_out_dir_raw, winslash = "/", mustWork = FALSE)
+} else {
+  OUT_DIR
+}
+for (d in unique(c(OUT_DIR, PLOT_DIR, REPORT_OUT_DIR))) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+}
+remove_legacy_report_outputs <- function() {
+  legacy_paths <- c(
+    file.path(SCRIPT_DIR, "oklahoma_report.html"),
+    file.path(SCRIPT_DIR, "oklahoma_report.pdf"),
+    file.path(SCRIPT_DIR, "oklahoma_report.tex")
+  )
+  legacy_glob <- list.files(
+    SCRIPT_DIR,
+    pattern = "^oklahoma_report_[0-9]{8}_[0-9]{6}\\.(html|pdf)$",
+    full.names = TRUE
+  )
+  for (p in c(legacy_paths, legacy_glob)) {
+    if (file.exists(p)) unlink(p)
+  }
+  legacy_files_dir <- file.path(SCRIPT_DIR, "oklahoma_report_files")
+  if (dir.exists(legacy_files_dir)) unlink(legacy_files_dir, recursive = TRUE)
+}
+path_rel_to <- function(path, start) {
+  path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  start <- normalizePath(start, winslash = "/", mustWork = FALSE)
+  path_seg <- strsplit(path, "/", fixed = TRUE)[[1L]]
+  start_seg <- strsplit(start, "/", fixed = TRUE)[[1L]]
+  path_seg <- path_seg[nzchar(path_seg)]
+  start_seg <- start_seg[nzchar(start_seg)]
+  n <- min(length(path_seg), length(start_seg))
+  i <- 1L
+  while (i <= n && identical(path_seg[[i]], start_seg[[i]])) i <- i + 1L
+  rel_parts <- c(rep("..", length(start_seg) - i + 1L), path_seg[i:length(path_seg)])
+  if (length(rel_parts) < 1L) "." else paste(rel_parts, collapse = "/")
 }
 analysis_plots <- list()
 store_analysis_plot <- function(name, plot_obj) {
@@ -4202,7 +4238,10 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
       render_status <- tryCatch(
         system2(
           quarto_bin,
-          c("render", basename(report_file), "--to", fmt),
+          c(
+            "render", basename(report_file), "--to", fmt,
+            "--output-dir", path_rel_to(REPORT_OUT_DIR, SCRIPT_DIR)
+          ),
           stdout = TRUE,
           stderr = TRUE
         ),
@@ -4236,24 +4275,24 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
         format(Sys.time(), "%Y%m%d_%H%M%S")
       }
       report_html_rendered <- if ("html" %in% REPORT_FORMATS) {
-        file.path(SCRIPT_DIR, "oklahoma_report.html")
+        file.path(REPORT_OUT_DIR, "oklahoma_report.html")
       } else {
         NA_character_
       }
       report_pdf_rendered <- if ("pdf" %in% REPORT_FORMATS) {
-        file.path(SCRIPT_DIR, "oklahoma_report.pdf")
+        file.path(REPORT_OUT_DIR, "oklahoma_report.pdf")
       } else {
         NA_character_
       }
       report_html_target <- if (is.character(report_html_rendered) &&
                                 !is.na(report_html_rendered)) {
-        file.path(SCRIPT_DIR, add_file_tag(sprintf("oklahoma_report_%s.html", result_stamp)))
+        file.path(REPORT_OUT_DIR, add_file_tag(sprintf("oklahoma_report_%s.html", result_stamp)))
       } else {
         report_html_rendered
       }
       report_pdf_target <- if (is.character(report_pdf_rendered) &&
                                !is.na(report_pdf_rendered)) {
-        file.path(SCRIPT_DIR, add_file_tag(sprintf("oklahoma_report_%s.pdf", result_stamp)))
+        file.path(REPORT_OUT_DIR, add_file_tag(sprintf("oklahoma_report_%s.pdf", result_stamp)))
       } else {
         report_pdf_rendered
       }
@@ -4294,6 +4333,7 @@ if (file.exists(report_file) && length(REPORT_FORMATS) > 0L) {
         cat(sprintf("Timestamped PDF (from results mtime %s): %s\n",
                     result_stamp, normalizePath(report_pdf_target, winslash = "/", mustWork = FALSE)))
       }
+      remove_legacy_report_outputs()
     }
   } else {
     cat("Quarto not found in PATH; skipping report render.\n")

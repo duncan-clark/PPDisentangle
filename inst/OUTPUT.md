@@ -46,7 +46,7 @@ Canonical jobs in the archive:
 | Component | Identifier |
 |-----------|------------|
 | Main simulation | `sim_study/paper/main_5228509/` (`*_summary_FOR_PAPER.rds` + raw `tmp*.rds`) |
-| Robustness appendix | `sim_study/paper/robustness_7568933/` |
+| Robustness appendix | `sim_study/paper/robustness_merged_tcal/` |
 | Oklahoma application | `oklahoma/for_paper.rds` |
 
 Manuscript robustness appendix text: Overleaf / `docs/paper/revision.tex` (local
@@ -54,7 +54,7 @@ snapshot is gitignored).
 
 ```bash
 # pack when ready (excludes local-only refreshes, logs, duplicate summary.rds,
-# and robustness_standalone.pdf preview builds)
+# and robustness.pdf preview builds)
 bash inst/zenodo/pack_zenodo.sh
 
 # reproduce figures after unpacking the Zenodo tarball

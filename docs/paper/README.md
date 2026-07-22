@@ -14,7 +14,7 @@ manuscript source of truth.
 Robustness appendix figures are produced by:
 
 ```bash
-Rscript inst/sim_study/sim_study_robustness.R --replot robustness_7568933
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_merged_tcal
 # or a fresh run:
 Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
 ```

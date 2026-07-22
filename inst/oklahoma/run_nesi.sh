@@ -354,7 +354,9 @@ source "$PKG_ROOT/inst/include/output_root.sh"
 # ----------------------------
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   cd "$PKG_ROOT"
-  git pull origin main 2>/dev/null || true
+  # shellcheck source=../include/git_sync.sh
+  source "$PKG_ROOT/inst/include/git_sync.sh"
+  pp_git_sync_repo "$PKG_ROOT"
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   OUTPUT_DIR="$(pp_disentangle_output_path oklahoma)"
   mkdir -p "$OUTPUT_DIR"

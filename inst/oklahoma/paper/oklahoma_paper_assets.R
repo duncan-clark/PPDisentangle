@@ -721,6 +721,19 @@ fmt_scaled_num <- function(x, digits = 5) {
   format(round(xv[[1]], digits), scientific = FALSE, trim = TRUE)
 }
 
+# Fixed significant figures (keeps trailing zeros, e.g. 2.00 not 2).
+fmt_sigfig <- function(x, digits = 3L) {
+  if (is.null(x)) return("---")
+  xv <- suppressWarnings(as.numeric(unlist(x, use.names = FALSE)))
+  xv <- xv[is.finite(xv)]
+  if (length(xv) < 1L) return("---")
+  v <- signif(xv[[1]], digits)
+  if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+  order <- floor(log10(abs(v)))
+  dp <- max(0L, as.integer(digits) - order - 1L)
+  sprintf(paste0("%.", dp, "f"), v)
+}
+
 to_named_num <- function(x) {
   if (is.null(x)) return(setNames(numeric(0), character(0)))
   if (is.list(x)) x <- unlist(x, use.names = TRUE)
@@ -819,8 +832,8 @@ write_tex_ok_ef_params <- function(E_vec, F_vec, path) {
       sprintf(
         "%s & %s & %s\\\\",
         tex_escape_cfg(pn),
-        fmt_scaled_num(ev, 5L),
-        fmt_scaled_num(fv, 5L)
+        fmt_sigfig(ev, 3L),
+        fmt_sigfig(fv, 3L)
       )
     )
   }

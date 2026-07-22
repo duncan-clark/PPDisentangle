@@ -3,14 +3,15 @@
 #
 # Includes paper-canonical runs only:
 #   - sim_study/paper/main_5228509/   (FOR_PAPER summary + raw horizon RDS + pub assets)
-#   - sim_study/paper/robustness_7568933/  (scenario RDS + summaries)
+#   - sim_study/paper/robustness_merged_tcal/  (42-scenario suite + summaries)
 #   - sim_study/generated/{figures,robustness figures+tex fragment,tab_*.tex}
 #   - oklahoma/ (application RDS + paper assets)
 #
 # Excludes:
-#   - sim_study/local/ (e.g. 7568879 SEM refresh, standalone PDF previews)
+#   - sim_study/local/ (e.g. 7568879 SEM refresh, local PDF previews)
 #   - duplicate time_sweep_5228509_summary.rds (FOR_PAPER only)
 #   - slurm/logs (optional clutter; kept on disk but not archived)
+#   - legacy paper/robustness_7568933/ (superseded by robustness_merged_tcal)
 #
 # Usage (from repo root):
 #   bash inst/zenodo/pack_zenodo.sh
@@ -70,7 +71,7 @@ echo "Staging from: $OUTPUT_ROOT"
 echo "Tarball:      $OUT_TGZ"
 
 MAIN_DIR="$OUTPUT_ROOT/sim_study/paper/main_5228509"
-ROB_DIR="$OUTPUT_ROOT/sim_study/paper/robustness_7568933"
+ROB_DIR="$OUTPUT_ROOT/sim_study/paper/robustness_merged_tcal"
 
 if [[ ! -d "$MAIN_DIR" ]]; then
   echo "ERROR: missing $MAIN_DIR" >&2
@@ -78,6 +79,10 @@ if [[ ! -d "$MAIN_DIR" ]]; then
 fi
 if [[ ! -d "$ROB_DIR" ]]; then
   echo "ERROR: missing $ROB_DIR" >&2
+  exit 1
+fi
+if [[ ! -f "$ROB_DIR/robustness_merged_tcal_manifest.csv" ]]; then
+  echo "ERROR: missing $ROB_DIR/robustness_merged_tcal_manifest.csv" >&2
   exit 1
 fi
 
@@ -91,12 +96,13 @@ rsync -a \
   --exclude='*' \
   "$MAIN_DIR/" "$DEST/sim_study/paper/main_5228509/"
 
-# --- robustness paper run: RDS + CSV summaries; skip logs/slurm ---
+# --- robustness paper run: RDS + CSV/RDS summaries; skip logs/slurm ---
 rsync -a \
-  --include='robustness_7568933_*.rds' \
-  --include='robustness_7568933_*.csv' \
+  --include='robustness_*.rds' \
+  --include='robustness_merged_tcal_*.csv' \
+  --include='robustness_merged_tcal_*.rds' \
   --exclude='*' \
-  "$ROB_DIR/" "$DEST/sim_study/paper/robustness_7568933/"
+  "$ROB_DIR/" "$DEST/sim_study/paper/robustness_merged_tcal/"
 
 # --- generated paper figures ---
 if [[ -d "$OUTPUT_ROOT/sim_study/generated" ]]; then
@@ -107,8 +113,9 @@ if [[ -d "$OUTPUT_ROOT/sim_study/generated" ]]; then
     --exclude='*.out' \
     --exclude='*.fls' \
     --exclude='*.fdb_latexmk' \
-    --exclude='robustness_standalone*' \
+    --exclude='robustness.pdf' \
     --exclude='tex/' \
+    --exclude='structured/' \
     "$OUTPUT_ROOT/sim_study/generated/" "$DEST/sim_study/generated/"
 fi
 
@@ -130,7 +137,7 @@ Companion data archive for the PPDisentangle software repository.
 |-----------|------|------|
 | Main simulation | `sim_study/paper/main_5228509/` | Paper simulation figures |
 | Illustrative realisation | `.../simulated_hawkes_hawkes_process.pdf` | `fig:pp_realiz` |
-| Robustness appendix | `sim_study/paper/robustness_7568933/` | Appendix robustness figures |
+| Robustness appendix | `sim_study/paper/robustness_merged_tcal/` | Appendix robustness figures (42 scenarios; time-calibrated K/SNR) |
 | Oklahoma application | `oklahoma/for_paper.rds` | Application figures/tables |
 
 ## Layout
@@ -144,10 +151,10 @@ PPDisentangle-output/
         time_sweep_5228509_summary_FOR_PAPER.rds
         time_sweep_5228509_tmp*.rds
         simulated_hawkes_hawkes_process.pdf
-      robustness_7568933/
-        robustness_7568933_*.rds
-        robustness_7568933_*_summary.csv
-        robustness_7568933_manifest.csv
+      robustness_merged_tcal/
+        robustness_*_*.rds
+        robustness_merged_tcal_manifest.csv
+        robustness_merged_tcal_*_summary.csv
     generated/
       figures/   # results_* + simulated_hawkes_*.pdf
       robustness/figures/
@@ -167,6 +174,12 @@ EOF
 
 echo "Staged size:"
 du -sh "$DEST" "$DEST/sim_study" "$DEST/oklahoma" 2>/dev/null || true
+n_rob_rds="$(find "$DEST/sim_study/paper/robustness_merged_tcal" -name 'robustness_*.rds' ! -name 'robustness_merged_tcal_summary.rds' | wc -l | tr -d ' ')"
+echo "Robustness scenario RDS staged: $n_rob_rds (expect 42)"
+if [[ "$n_rob_rds" -ne 42 ]]; then
+  echo "ERROR: expected 42 robustness scenario RDS, found $n_rob_rds" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$OUT_TGZ")"
 tar -C "$STAGE" -czf "$OUT_TGZ" PPDisentangle-output

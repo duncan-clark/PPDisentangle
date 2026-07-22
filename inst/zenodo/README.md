@@ -9,8 +9,13 @@ live **outside** the git repo (Zenodo deposit).
 |-----------|--------------------------------------|
 | Main simulation | `sim_study/paper/main_5228509/` |
 | Illustrative Hawkes realisation | `.../simulated_hawkes_hawkes_process.pdf` (`fig:pp_realiz`) |
-| Robustness appendix | `sim_study/paper/robustness_7568933/` |
+| Robustness appendix | `sim_study/paper/robustness_merged_tcal/` |
 | Oklahoma | `oklahoma/for_paper.rds` |
+
+The robustness archive is the production 42-scenario suite with
+time-calibrated K-separation / SNR cells (`7767397`) folded into the
+remaining families from `7762623` / earlier resume sources. Legacy
+`paper/robustness_7568933/` is superseded and not packed.
 
 Local-only material lives under `sim_study/local/` and is not packed.
 
@@ -27,7 +32,7 @@ Rscript inst/zenodo/reproduce_paper_figures.R
 
 This regenerates main-sim figures, robustness figure PDFs (+ optional appendix
 `.tex` fragment), and Oklahoma paper assets. It does **not** compile
-`robustness_standalone.pdf`.
+`robustness.pdf`.
 
 A `sessionInfo()` snapshot is written beside the outputs and compared against
 `inst/zenodo/sessionInfo.txt` in this repo.
