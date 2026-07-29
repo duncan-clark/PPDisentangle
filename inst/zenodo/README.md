@@ -12,10 +12,10 @@ live **outside** the git repo (Zenodo deposit).
 | Robustness appendix | `sim_study/paper/robustness_merged_tcal/` |
 | Oklahoma | `oklahoma/for_paper.rds` |
 
-The robustness archive is the production 42-scenario suite with
-time-calibrated K-separation / SNR cells (`7767397`) folded into the
-remaining families from `7762623` / earlier resume sources. Legacy
-`paper/robustness_7568933/` is superseded and not packed.
+The robustness archive is the production **67-scenario** suite:
+time-calibrated K-separation / SNR (`7767397`), K×spatial-range surface
+(`7839871`), and the remaining families from `7762623` / earlier resume
+sources. Legacy `paper/robustness_7568933/` is superseded and not packed.
 
 Local-only material lives under `sim_study/local/` and is not packed.
 

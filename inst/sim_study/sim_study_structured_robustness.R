@@ -766,8 +766,8 @@ plot_allocation_maps <- function(map_df, nrow = 1L, show_X = FALSE) {
     scale_x_continuous(breaks = NULL) +
     scale_y_continuous(breaks = NULL) +
     labs(x = NULL, y = NULL, fill = NULL) +
-    theme_minimal(base_size = 9) +
-    theme(panel.grid = element_blank(), strip.text = element_text(size = 8),
+    theme_minimal(base_size = 14) +
+    theme(panel.grid = element_blank(), strip.text = element_text(size = 13),
           legend.position = "bottom")
 }
 
@@ -857,7 +857,7 @@ make_effect_figure <- function(res) {
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 9) + theme(legend.position = "bottom")
+    theme_minimal(base_size = 13) + theme(legend.position = "bottom")
 
   list(pA, pB)
 }
@@ -894,7 +894,7 @@ make_geometry_figure <- function(res) {
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 9) + theme(legend.position = "bottom")
+    theme_minimal(base_size = 13) + theme(legend.position = "bottom")
   list(pA, pB)
 }
 

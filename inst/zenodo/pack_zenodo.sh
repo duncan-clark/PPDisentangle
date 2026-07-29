@@ -3,7 +3,7 @@
 #
 # Includes paper-canonical runs only:
 #   - sim_study/paper/main_5228509/   (FOR_PAPER summary + raw horizon RDS + pub assets)
-#   - sim_study/paper/robustness_merged_tcal/  (42-scenario suite + summaries)
+#   - sim_study/paper/robustness_merged_tcal/  (67-scenario suite + summaries)
 #   - sim_study/generated/{figures,robustness figures+tex fragment,tab_*.tex}
 #   - oklahoma/ (application RDS + paper assets)
 #
@@ -116,13 +116,17 @@ if [[ -d "$OUTPUT_ROOT/sim_study/generated" ]]; then
     --exclude='robustness.pdf' \
     --exclude='tex/' \
     --exclude='structured/' \
+    --exclude='PPDisentangle-output/' \
+    --exclude='.DS_Store' \
     "$OUTPUT_ROOT/sim_study/generated/" "$DEST/sim_study/generated/"
 fi
 
-# --- oklahoma ---
+# --- oklahoma (canonical RDS + paper assets; skip bulky exploratory HTML) ---
 if [[ -d "$OUTPUT_ROOT/oklahoma" ]]; then
   rsync -a \
     --exclude='.DS_Store' \
+    --exclude='oklahoma_report.html' \
+    --exclude='plots/' \
     "$OUTPUT_ROOT/oklahoma/" "$DEST/oklahoma/"
 fi
 
@@ -137,8 +141,12 @@ Companion data archive for the PPDisentangle software repository.
 |-----------|------|------|
 | Main simulation | `sim_study/paper/main_5228509/` | Paper simulation figures |
 | Illustrative realisation | `.../simulated_hawkes_hawkes_process.pdf` | `fig:pp_realiz` |
-| Robustness appendix | `sim_study/paper/robustness_merged_tcal/` | Appendix robustness figures (42 scenarios; time-calibrated K/SNR) |
+| Robustness appendix | `sim_study/paper/robustness_merged_tcal/` | Appendix robustness figures (67 scenarios; time-calibrated K/SNR/K×spatial) |
 | Oklahoma application | `oklahoma/for_paper.rds` | Application figures/tables |
+
+Robustness composition: K-separation (7) + SNR (5) + K×spatial range (25) +
+kernel misspecification (16) + pretreatment assignment (5) + effect modification (3) +
+geometry transport (6) = 67.
 
 ## Layout
 
@@ -157,6 +165,7 @@ PPDisentangle-output/
         robustness_merged_tcal_*_summary.csv
     generated/
       figures/   # results_* + simulated_hawkes_*.pdf
+      tab_sim_*.tex
       robustness/figures/
       robustness/simulation_robustness_appendix.tex
   oklahoma/
@@ -172,12 +181,13 @@ Rscript inst/zenodo/reproduce_paper_figures.R
 ```
 EOF
 
+EXPECT_ROB_RDS=67
 echo "Staged size:"
 du -sh "$DEST" "$DEST/sim_study" "$DEST/oklahoma" 2>/dev/null || true
 n_rob_rds="$(find "$DEST/sim_study/paper/robustness_merged_tcal" -name 'robustness_*.rds' ! -name 'robustness_merged_tcal_summary.rds' | wc -l | tr -d ' ')"
-echo "Robustness scenario RDS staged: $n_rob_rds (expect 42)"
-if [[ "$n_rob_rds" -ne 42 ]]; then
-  echo "ERROR: expected 42 robustness scenario RDS, found $n_rob_rds" >&2
+echo "Robustness scenario RDS staged: $n_rob_rds (expect ${EXPECT_ROB_RDS})"
+if [[ "$n_rob_rds" -ne "$EXPECT_ROB_RDS" ]]; then
+  echo "ERROR: expected ${EXPECT_ROB_RDS} robustness scenario RDS, found $n_rob_rds" >&2
   exit 1
 fi
 

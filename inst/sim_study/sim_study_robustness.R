@@ -2127,9 +2127,7 @@ load_structured_dtaite_label_rows <- function(robustness_dir) {
   bind_rows(rows)
 }
 
-make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
-                                             title = "Labelling accuracy across robustness scenarios",
-                                             subtitle = "Each point is one fitted scenario.") {
+make_all_scenarios_label_scatter <- function(df, y_col, lbl_col) {
   if (is.null(df) || nrow(df) < 1L) return(NULL)
   plot_df <- df %>%
     mutate(!!lbl_col := normalize_labelling_method(.data[[lbl_col]])) %>%
@@ -2139,43 +2137,43 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
     plot_df$treatment_assignment <- NA_character_
   }
 
-  # Alias legacy family names for a compact legend.
+  # Compact legend labels (caption carries the fuller family names).
   family_labels <- c(
-    pretreatment_assignment = "Pretreatment assignment",
-    high_count_assignment = "Pretreatment assignment",
+    pretreatment_assignment = "Pretreatment",
+    high_count_assignment = "Pretreatment",
     snr_scale = "Signal-to-noise",
     k_separation = "K-separation",
     k_spatial_range = "K x spatial range",
-    spatiotemporal_kernel_mismatch = "Kernel misspecification",
-    kernel_mismatch = "Kernel misspecification",
-    spatial_kernel_mismatch = "Kernel misspecification",
+    spatiotemporal_kernel_mismatch = "Kernel mismatch",
+    kernel_mismatch = "Kernel mismatch",
+    spatial_kernel_mismatch = "Kernel mismatch",
     effect_modification = "Covariate effect",
     geometry_transport = "Coarseness"
   )
   family_levels <- c(
-    "Pretreatment assignment",
+    "Pretreatment",
     "Signal-to-noise",
     "K-separation",
     "K x spatial range",
-    "Kernel misspecification",
+    "Kernel mismatch",
     "Covariate effect",
     "Coarseness"
   )
   family_colors <- c(
-    "Pretreatment assignment" = "#3D405B",
+    "Pretreatment" = "#3D405B",
     "Signal-to-noise" = "#E07A5F",
     "K-separation" = "#81B29A",
     "K x spatial range" = "#F4A261",
-    "Kernel misspecification" = "#F2CC8F",
+    "Kernel mismatch" = "#F2CC8F",
     "Covariate effect" = "#9B5DE5",
     "Coarseness" = "#00BBF9"
   )
   family_shapes <- c(
-    "Pretreatment assignment" = 15,
+    "Pretreatment" = 15,
     "Signal-to-noise" = 16,
     "K-separation" = 17,
     "K x spatial range" = 3,
-    "Kernel misspecification" = 18,
+    "Kernel mismatch" = 18,
     "Covariate effect" = 8,
     "Coarseness" = 4
   )
@@ -2216,19 +2214,29 @@ make_all_scenarios_label_scatter <- function(df, y_col, lbl_col,
   ) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey55", linewidth = 0.45) +
     geom_point(size = 2.6, alpha = 0.9) +
-    coord_fixed(xlim = lims, ylim = lims) +
+    coord_fixed(xlim = lims, ylim = lims, clip = "off") +
     scale_color_manual(values = family_colors[present], drop = FALSE) +
     scale_shape_manual(values = family_shapes[present], drop = FALSE) +
     labs(
       x = "Naive mean raw accuracy",
       y = "SEM mean raw accuracy",
-      color = "Scenario family",
-      shape = "Scenario family",
-      title = title,
-      subtitle = subtitle
+      color = "Family",
+      shape = "Family"
     ) +
-    theme_minimal(base_size = 11) +
-    theme(legend.position = "bottom")
+    guides(
+      color = guide_legend(nrow = 4L, byrow = TRUE),
+      shape = guide_legend(nrow = 4L, byrow = TRUE)
+    ) +
+    theme_minimal(base_size = 16) +
+    theme(
+      legend.position = "bottom",
+      legend.justification = "center",
+      legend.box = "vertical",
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 13),
+      legend.margin = margin(t = 6, r = 4, b = 4, l = 4),
+      plot.margin = margin(t = 8, r = 12, b = 8, l = 8)
+    )
 }
 
 plot_files <- list()
@@ -2237,13 +2245,10 @@ if (!is.null(label_summary) && nrow(label_summary) > 0) {
   acc_col <- safe_metric_col(label_summary, c("mean_accuracy", "mean_balanced_accuracy", "accuracy"))
   if (!is.null(lbl_col) && !is.null(acc_col)) {
     plot_files$all_scenarios_label_recovery <- save_plot_pair(
-      make_all_scenarios_label_scatter(
-        label_summary, acc_col, lbl_col,
-        title = "Labelling accuracy across all robustness scenarios",
-        subtitle = "SEM vs naive; dashed line is equal accuracy. Points above the line favour SEM."
-      ),
+      make_all_scenarios_label_scatter(label_summary, acc_col, lbl_col),
       "robustness_all_scenarios_label_recovery",
-      width = 6.8, height = 6.4
+      # Tall enough for the fixed-aspect panel plus a full 4-row bottom legend.
+      width = 7.6, height = 8.2
     )
   }
 }
@@ -2433,8 +2438,11 @@ make_high_count_support_plot <- function(df, title, stem, subtitle = NULL) {
       title = title,
       subtitle = subtitle
     ) +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 20, hjust = 1), legend.position = "bottom")
+    theme_minimal(base_size = 16) +
+    theme(
+      axis.text.x = element_text(angle = 20, hjust = 1),
+      legend.position = "bottom"
+    )
   save_plot_pair(p_support, stem, width = 8.0, height = 4.6)
 }
 
@@ -2589,14 +2597,14 @@ make_parameter_sweep_support_plot <- function(df, title, stem, subtitle) {
       color = "Labelling",
       shape = "Labelling"
     ) +
-    theme_minimal() +
+    theme_minimal(base_size = 16) +
     theme(
       legend.position = "bottom",
       strip.placement = "outside",
       strip.background = element_blank(),
-      strip.text = element_text(size = 11)
+      strip.text = element_text(size = 15)
     )
-  save_plot_pair(p_support, stem, width = 9.5, height = 4.2)
+  save_plot_pair(p_support, stem, width = 9.5, height = 4.6)
 }
 
 make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL) {
@@ -2678,14 +2686,15 @@ make_spatiotemporal_kernel_heatmap <- function(df, title, stem, subtitle = NULL)
       title = title,
       subtitle = subtitle
     ) +
-    theme_minimal() +
+    theme_minimal(base_size = 16) +
     theme(
-      axis.text.x = element_text(angle = 35, hjust = 1, size = 8),
-      axis.text.y = element_text(size = 8),
+      axis.text.x = element_text(angle = 35, hjust = 1, size = 13),
+      axis.text.y = element_text(size = 13),
+      strip.text = element_text(size = 15),
       panel.grid = element_blank(),
       legend.position = "bottom"
     )
-  save_plot_pair(p_heat, stem, width = 8.5, height = 4.8)
+  save_plot_pair(p_heat, stem, width = 8.5, height = 5.2)
 }
 
 make_k_spatial_range_heatmap <- function(df, title, stem, subtitle = NULL) {
@@ -2776,12 +2785,13 @@ make_k_spatial_range_heatmap <- function(df, title, stem, subtitle = NULL) {
       title = title,
       subtitle = subtitle
     ) +
-    theme_minimal() +
+    theme_minimal(base_size = 16) +
     theme(
+      strip.text = element_text(size = 15),
       panel.grid = element_blank(),
       legend.position = "bottom"
     )
-  save_plot_pair(p_heat, stem, width = 8.5, height = 4.6)
+  save_plot_pair(p_heat, stem, width = 8.5, height = 5.0)
 }
 
 # Checkerboard / allocation map panels for structured robustness figures.
@@ -2828,11 +2838,14 @@ plot_structured_allocation_maps <- function(map_df, nrow = 1L) {
     scale_x_continuous(breaks = NULL) +
     scale_y_continuous(breaks = NULL) +
     labs(x = NULL, y = NULL, fill = NULL) +
-    theme_minimal(base_size = 9) +
+    # Large base size: these maps are composited and then shrunk to textwidth.
+    theme_minimal(base_size = 20) +
     theme(
       panel.grid = element_blank(),
-      strip.text = element_text(size = 8),
-      legend.position = "bottom"
+      strip.text = element_text(size = 16, margin = margin(b = 4, t = 2)),
+      legend.position = "bottom",
+      legend.text = element_text(size = 16),
+      legend.key.size = grid::unit(0.9, "lines")
     )
 }
 
@@ -2840,7 +2853,8 @@ save_structured_figure_grid <- function(plots, stem, width = 12, height = 7) {
   pdf_path <- file.path(fig_dir, paste0(stem, ".pdf"))
   png_path <- file.path(fig_dir, paste0(stem, ".png"))
   layout_matrix <- matrix(seq_along(plots), ncol = 1L)
-  heights <- if (length(plots) == 2L) c(0.85, 1) else rep(1, length(plots))
+  # Give the checkerboard row a bit more vertical share so strip labels stay readable.
+  heights <- if (length(plots) == 2L) c(1.05, 1) else rep(1, length(plots))
   save_one <- function(file) {
     if (grepl("[.]pdf$", file, ignore.case = TRUE)) {
       grDevices::pdf(file, width = width, height = height, bg = "white",
@@ -2959,9 +2973,13 @@ make_effect_modification_scenario_plot <- function(df, stem) {
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 9) +
-    theme(legend.position = "bottom")
-  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7)
+    theme_minimal(base_size = 18) +
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 15),
+      strip.text = element_text(size = 15)
+    )
+  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7.5)
 }
 
 make_geometry_transport_scenario_plot <- function(df, stem) {
@@ -3007,7 +3025,8 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
       partition, path_seed = 20260714L + 201L, observed_seed = 20260714L + 202L
     )
   }
-  labels <- sprintf("m=%d; C=%.2f", d$m, d$coarseness)
+  # Two-line strip labels so m/C stay readable when six panels share a row.
+  labels <- sprintf("m=%d\nC=%.2f", d$m, d$coarseness)
   maps <- structured_allocation_map_df(d$grid, d$allocations, labels, d$focal_cells)
   pA <- plot_structured_allocation_maps(maps, nrow = 1L)
 
@@ -3024,7 +3043,7 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
       position = position_dodge(width = 0.02)
     ) +
     geom_line(position = position_dodge(width = 0.02)) +
-    geom_point(position = position_dodge(width = 0.02), size = 2) +
+    geom_point(position = position_dodge(width = 0.02), size = 2.4) +
     scale_color_manual(values = c(naive = "#E07A5F", SEM = "#3D405B")) +
     scale_shape_manual(values = c(naive = 16, SEM = 17)) +
     labs(
@@ -3032,9 +3051,12 @@ make_geometry_transport_scenario_plot <- function(df, stem) {
       y = "DAITE bias (estimate - truth)",
       color = NULL, shape = NULL
     ) +
-    theme_minimal(base_size = 9) +
-    theme(legend.position = "bottom")
-  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7)
+    theme_minimal(base_size = 18) +
+    theme(
+      legend.position = "bottom",
+      legend.text = element_text(size = 15)
+    )
+  save_structured_figure_grid(list(pA, pB), stem, width = 12, height = 7.8)
 }
 
 if (!is.null(support_summary) && nrow(support_summary) > 0 &&

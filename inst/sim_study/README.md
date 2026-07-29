@@ -66,7 +66,13 @@ Default outputs:
 PPDisentangle-output/sim_study/generated/figures/results_true_control.{pdf,png}
 PPDisentangle-output/sim_study/generated/figures/results_estimated_control.{pdf,png}
 PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+PPDisentangle-output/sim_study/generated/tab_sim_all_nothing_true_control.tex
 ```
+
+`tab_sim_all_nothing_true_control.tex` is a table counterpart to
+`results_true_control` (`fig:all_nothing`): naive vs SEM only (no oracle),
+with nested rows per post-treatment horizon reporting Monte Carlo mean,
+median, and IQR.
 
 ## Robustness suite
 
@@ -179,7 +185,7 @@ K-separation and SNR scenarios hold expected catalogue size at
 calibrate `mu` at the default window. New scenario IDs include `_acaltime` so
 they do not collide with older mu-calibrated RDS files under `--resume-from`.
 
-Full NeSI robustness run (42 unified scenarios). Recommended resources:
+Full NeSI robustness run (67 unified scenarios). Recommended resources:
 **64 CPUs / 24h / 128G**:
 
 ```bash
