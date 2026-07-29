@@ -69,6 +69,10 @@ adaptive_SEM <- function(pp_data,
 
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
+  hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
+  hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
+  hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
+  hawkes_spatial_d <- dots$spatial_d
   loglik_fn <- if (is_biv_etas) loglik_etas_bivariate
                else if (is_etas) loglik_etas
                else loglik_hawk_fast
@@ -193,10 +197,22 @@ adaptive_SEM <- function(pp_data,
   hawkes_bg_var <- if (!is.null(background_rate_var)) background_rate_var else "W"
 
   hawkes_loglik_with_filtration <- function(params, post_realiz, filt_realiz, zero_bg_region) {
-    p <- unlist(params)
-    mu <- p[1]; alpha <- p[2]; beta <- p[3]; K <- p[4]
-    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(beta) || !is.finite(K)) return(-Inf)
-    if (mu < 0 || alpha < 0 || beta <= 0 || K < 0 || K >= 1) return(-Inf)
+    par_obj <- as_hawkes_params(params, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
+    mu <- par_obj$mu
+    alpha <- par_obj$alpha
+    beta <- par_obj$beta
+    K <- par_obj$K
+    cc <- par_obj[["c"]]
+    p <- par_obj$p
+    q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+    d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
+    if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-Inf)
+    if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-Inf)
+    if (identical(hawkes_kernel, "power_law")) {
+      if (!is.finite(cc) || !is.finite(p) || cc <= 0 || p <= 1) return(-Inf)
+    } else {
+      if (!is.finite(beta) || beta <= 0) return(-Inf)
+    }
     if (!inherits(statespace, "owin")) statespace <- as.owin(statespace)
     total_area <- spatstat.geom::area(statespace)
     dt <- max_data_t - treatment_time
@@ -259,7 +275,13 @@ adaptive_SEM <- function(pp_data,
       t_start = t_start_fit,
       t_end = t_end_fit,
       adjust_factor = adjust_factor_fit,
-      t_trunc = if (!is.null(t_trunc)) t_trunc else -1
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1,
+      kernel_type = hawkes_kernel_type(hawkes_kernel),
+      cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+      p = if (is.null(p)) 2.0 else as.numeric(p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     if (!is.finite(loglik)) return(-Inf)
     loglik
@@ -464,6 +486,22 @@ adaptive_SEM <- function(pp_data,
     if (!is.finite(outer_optim_report) || is.na(outer_optim_report) || outer_optim_report < 1L) {
       outer_optim_report <- 10L
     }
+    param_refit_cadence <- suppressWarnings(as.integer(adaptive_control$param_refit_cadence))
+    if (!is.finite(param_refit_cadence) || is.na(param_refit_cadence) || param_refit_cadence < 1L) {
+      param_refit_cadence <- 1L
+    }
+    do_param_refit <- param_refit_cadence <= 1L ||
+      counter == 0L ||
+      (counter + 1L) >= N_iter ||
+      (counter %% param_refit_cadence) == 0L
+    if (!do_param_refit) {
+      t_params[[length(t_params) + 1L]] <- t_params[[length(t_params)]]
+      if (isTRUE(adaptive_control$update_control_params)) {
+        c_params[[length(c_params) + 1L]] <- c_params[[length(c_params)]]
+      }
+      counter <- counter + 1L
+      next
+    }
 
     if (is_biv_etas) {
       # --- Bivariate ETAS: joint optimization over 15-parameter vector ---
@@ -603,28 +641,108 @@ adaptive_SEM <- function(pp_data,
     run_outer_optim <- function(process_label, zero_bg_region, par_list) {
       split_key <- if (process_label == "control") "post_control" else "post_treated"
       filt_key <- if (process_label == "control") "filt_control" else "filt_treated"
-      obj_fn <- function(params) {
-        liks <- sapply(prepared_labellings, function(parts) {
-          post_part <- parts[[split_key]]
-          if (!is_etas) {
-            filt_part <- if (hawkes_use_filtration_history) {
-              parts[[filt_key]]
-            } else {
-              post_part[0, c("x", "y", "t"), drop = FALSE]
-            }
-            hawkes_loglik_with_filtration(
-              params = params,
-              post_realiz = as.data.frame(post_part),
-              filt_realiz = as.data.frame(filt_part),
-              zero_bg_region = zero_bg_region
+      prepared_for_process <- lapply(prepared_labellings, function(parts) {
+        post_part <- parts[[split_key]]
+        if (!is_etas) {
+          filt_part <- if (hawkes_use_filtration_history) {
+            parts[[filt_key]]
+          } else {
+            post_part[0, c("x", "y", "t"), drop = FALSE]
+          }
+          if (nrow(post_part) < 1L) return(NULL)
+          post_part <- post_part[order(post_part$t), , drop = FALSE]
+          filt_part <- filt_part[filt_part$t < treatment_time, , drop = FALSE]
+          filt_part <- filt_part[order(filt_part$t), , drop = FALSE]
+
+          W_post <- if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(post_part)) {
+            as.numeric(post_part[[hawkes_bg_var]])
+          } else {
+            rep(1, nrow(post_part))
+          }
+          W_post[!is.finite(W_post)] <- 0
+          total_area <- spatstat.geom::area(statespace)
+          active_area <- total_area
+          if (!is.null(zero_bg_region)) {
+            zero_area <- spatstat.geom::area(zero_bg_region)
+            active_area <- max(1e-12, total_area - zero_area)
+            W_post[inside.owin(post_part$x, post_part$y, w = zero_bg_region)] <- 0
+          }
+
+          list(
+            post_t = as.numeric(post_part$t),
+            post_x = as.numeric(post_part$x),
+            post_y = as.numeric(post_part$y),
+            W_post = as.numeric(W_post),
+            parent_t = as.numeric(c(filt_part$t, post_part$t)),
+            parent_x = as.numeric(c(filt_part$x, post_part$x)),
+            parent_y = as.numeric(c(filt_part$y, post_part$y)),
+            active_area = active_area
+          )
+        } else {
+          pc <- precompute_loglik_args(post_part, statespace, zero_bg_region)
+          list(
+            post_part = post_part,
+            precomp = list(
+              active_area = pc$active_area,
+              in_zero_bg = pc$in_zero_bg_all
             )
+          )
+        }
+      })
+      obj_fn <- function(params) {
+        liks <- sapply(prepared_for_process, function(parts) {
+          if (is.null(parts)) return(-Inf)
+          if (!is_etas) {
+            par_obj <- as_hawkes_params(params, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
+            mu <- par_obj$mu
+            alpha <- par_obj$alpha
+            beta <- par_obj$beta
+            K <- par_obj$K
+            cc <- par_obj[["c"]]
+            p <- par_obj$p
+            q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+            d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
+            if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-Inf)
+            if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-Inf)
+            if (identical(hawkes_kernel, "power_law")) {
+              if (!is.finite(cc) || !is.finite(p) || cc <= 0 || p <= 1) return(-Inf)
+            } else {
+              if (!is.finite(beta) || beta <= 0) return(-Inf)
+            }
+            loglik <- hawkes_loglik_inhom_filtration_cpp(
+              post_t = parts$post_t,
+              post_x = parts$post_x,
+              post_y = parts$post_y,
+              W_val = parts$W_post,
+              parent_t = parts$parent_t,
+              parent_x = parts$parent_x,
+              parent_y = parts$parent_y,
+              mu = mu,
+              alpha = alpha,
+              beta = beta,
+              K = K,
+              areaS = parts$active_area,
+              t_start = treatment_time,
+              t_end = max_data_t,
+              adjust_factor = 1.0,
+              t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+              kernel_type = hawkes_kernel_type(hawkes_kernel),
+              cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+              p = if (is.null(p)) 2.0 else as.numeric(p),
+              spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+              spatial_q = q_spatial,
+              spatial_d = d_spatial
+            )
+            if (!is.finite(loglik)) return(-Inf)
+            loglik
           } else {
             loglik_fn(
               params = params,
-              realiz = post_part,
+              realiz = parts$post_part,
               windowT = sem_windowT,
               windowS = statespace, zero_background_region = zero_bg_region,
               background_rate_var = "W",
+              precomp = parts$precomp,
               t_trunc = t_trunc
             )
           }

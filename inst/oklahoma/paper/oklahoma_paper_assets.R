@@ -2,18 +2,18 @@
 #
 # Usage (from repo root):
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
-#   (defaults to output/oklahoma/for_paper.rds, then inst/oklahoma/paper/for_paper.rds)
+#   (defaults to ../PPDisentangle-output/oklahoma/for_paper.rds, then inst/oklahoma/paper/for_paper.rds)
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R --input /path/to/other.rds
 #
 # Or in R: setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")
 #
-# Writes (default: figures next to table fragments under generated/):
-#   inst/oklahoma/paper/generated/figures/*.pdf:
+# Writes (default: figures next to table fragments under PPDisentangle-output/):
+#   oklahoma/paper/generated/figures/*.pdf:
 #     ATE_diff, ok_bootstrap_*, ok_sim_* — require bootstrap_ate in RDS
 #     cumulative_count — events CSV + jsonlite
 #     ok_partition_county, ok_point_patterns — sf + tigris + AOI geojson under --data-dir
 #     ok_sem_f_confusion_trace, ok_sem_f_metric_trace, ok_sem_f_flips — fits_named$F$fit$adaptive
-#   inst/oklahoma/paper/generated/*.tex:
+#   oklahoma/paper/generated/*.tex:
 #     tab_ok_counts, tab_ok_sem_config, tab_ok_confusion_F, tab_ok_ef_params
 #     tab_ok_bootstrap_summary — only if bootstrap present
 #   Override PDF location: --plots-dir <path>
@@ -44,18 +44,20 @@ get_arg_val <- function(args, flag, default = NULL) {
 
 args <- commandArgs(trailingOnly = TRUE)
 repo_root <- find_repo_root()
+source(file.path(repo_root, "R", "paths.R"), local = FALSE)
 input_arg <- get_arg_val(args, "--input", NULL)
 if (!is.null(input_arg) && nzchar(input_arg)) {
   input_rds <- normalizePath(input_arg, winslash = "/", mustWork = TRUE)
 } else {
   input_candidates <- c(
-    file.path(repo_root, "output", "oklahoma", "for_paper.rds"),
+    pp_output_path("oklahoma", "for_paper.rds", repo_root = repo_root),
     file.path(repo_root, "inst", "oklahoma", "paper", "for_paper.rds")
   )
   input_hit <- input_candidates[file.exists(input_candidates)][1L]
   if (is.na(input_hit)) {
     stop(
-      "No results RDS found. Place for_paper.rds in output/oklahoma/ or inst/oklahoma/paper/, ",
+      "No results RDS found. Place for_paper.rds in ",
+      pp_output_path("oklahoma", repo_root = repo_root), " or inst/oklahoma/paper/, ",
       "or pass --input /path/to/results.rds"
     )
   }
@@ -65,13 +67,13 @@ plots_dir <- normalizePath(
   get_arg_val(
     args,
     "--plots-dir",
-    file.path(repo_root, "inst", "oklahoma", "paper", "generated", "figures")
+    pp_output_path("oklahoma", "paper", "generated", "figures", repo_root = repo_root)
   ),
   winslash = "/",
   mustWork = FALSE
 )
 tex_dir <- normalizePath(
-  get_arg_val(args, "--tex-dir", file.path(repo_root, "inst", "oklahoma", "paper", "generated")),
+  get_arg_val(args, "--tex-dir", pp_output_path("oklahoma", "paper", "generated", repo_root = repo_root)),
   winslash = "/",
   mustWork = FALSE
 )
@@ -719,6 +721,19 @@ fmt_scaled_num <- function(x, digits = 5) {
   format(round(xv[[1]], digits), scientific = FALSE, trim = TRUE)
 }
 
+# Fixed significant figures (keeps trailing zeros, e.g. 2.00 not 2).
+fmt_sigfig <- function(x, digits = 3L) {
+  if (is.null(x)) return("---")
+  xv <- suppressWarnings(as.numeric(unlist(x, use.names = FALSE)))
+  xv <- xv[is.finite(xv)]
+  if (length(xv) < 1L) return("---")
+  v <- signif(xv[[1]], digits)
+  if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+  order <- floor(log10(abs(v)))
+  dp <- max(0L, as.integer(digits) - order - 1L)
+  sprintf(paste0("%.", dp, "f"), v)
+}
+
 to_named_num <- function(x) {
   if (is.null(x)) return(setNames(numeric(0), character(0)))
   if (is.list(x)) x <- unlist(x, use.names = TRUE)
@@ -817,8 +832,8 @@ write_tex_ok_ef_params <- function(E_vec, F_vec, path) {
       sprintf(
         "%s & %s & %s\\\\",
         tex_escape_cfg(pn),
-        fmt_scaled_num(ev, 5L),
-        fmt_scaled_num(fv, 5L)
+        fmt_sigfig(ev, 3L),
+        fmt_sigfig(fv, 3L)
       )
     )
   }
@@ -961,7 +976,13 @@ if (have_boot) {
   message("Skipped tab_ok_bootstrap_summary.tex and ef_bootstrap_summary.csv (no bootstrap in RDS).")
 }
 
-fig_rel <- function(nm) paste0("inst/oklahoma/paper/generated/figures/", nm)
+repo_rel <- function(path) {
+  path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  root <- paste0(normalizePath(repo_root, winslash = "/", mustWork = TRUE), "/")
+  if (startsWith(path, root)) substring(path, nchar(root) + 1L) else path
+}
+
+fig_rel <- function(nm) repo_rel(file.path(plots_dir, nm))
 gen_plots <- c(
   fig_rel("cumulative_count.pdf"),
   fig_rel("ok_partition_county.pdf"),
@@ -980,13 +1001,13 @@ if (isTRUE(have_boot)) {
   )
 }
 gen_tex <- c(
-  "inst/oklahoma/paper/generated/tab_ok_counts.tex",
-  "inst/oklahoma/paper/generated/tab_ok_sem_config.tex",
-  "inst/oklahoma/paper/generated/tab_ok_confusion_F.tex",
-  "inst/oklahoma/paper/generated/tab_ok_ef_params.tex"
+  repo_rel(file.path(tex_dir, "tab_ok_counts.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_sem_config.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_confusion_F.tex")),
+  repo_rel(file.path(tex_dir, "tab_ok_ef_params.tex"))
 )
 if (isTRUE(have_boot)) {
-  gen_tex <- c(gen_tex, "inst/oklahoma/paper/generated/tab_ok_bootstrap_summary.tex")
+  gen_tex <- c(gen_tex, repo_rel(file.path(tex_dir, "tab_ok_bootstrap_summary.tex")))
 }
 
 meta_out <- list(

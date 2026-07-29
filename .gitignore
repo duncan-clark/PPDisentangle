@@ -1,10 +1,14 @@
 src/*.o
 src/*.so
 src/*.dll
+src/*.dylib
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
+*.Rcheck/
+*.tar.gz
+..Rcheck/
 
 # macOS
 .DS_Store
@@ -13,23 +17,25 @@ src/*.dll
 # R session plot sink
 Rplots.pdf
 
-# Sim study generated files
+# Legacy in-repo output paths (outputs now live in ../PPDisentangle-output/)
+artifacts/
+output/
 cluster_output/
+
 inst/sim_study/worker_log.txt
 inst/sim_study/sim_*_progress.txt
 inst/sim_study/tmp_prof.out
 inst/sim_study/output/
+inst/sim_study/generated/
 
-# Gambia study output
-inst/gambia/output/
-
-# Local run logs & sim outputs (A)
-output/run_logs/
+# Manuscript snapshots (Overleaf is canonical; keep locally for context only)
+docs/paper/*
+!docs/paper/README.md
 
 # Oklahoma: optional local results copy for paper assets (large)
 inst/oklahoma/paper/for_paper.rds
 
-# Oklahoma: rendered report + local pipeline output (D)
+# Oklahoma: rendered report + local pipeline output
 inst/oklahoma/oklahoma_report.html
 inst/oklahoma/oklahoma_report.pdf
 inst/oklahoma/oklahoma_report_*.html
@@ -37,10 +43,14 @@ inst/oklahoma/oklahoma_report_*.pdf
 inst/oklahoma/oklahoma_report.tex
 inst/oklahoma/oklahoma_report_files/
 inst/oklahoma/output/
+inst/oklahoma/paper/generated/
 
-# Repo-root analysis outputs (D)
-output/*.rds
-output/plots/
-output/last_run_sync_stamp.txt
-output/oklahoma/
-output/sim_study/
+# NeSI local config and credentials (never commit)
+inst/nesi/*.env
+!inst/nesi/config.example.env
+inst/nesi/.env
+inst/nesi/secrets*
+inst/nesi/*credentials*
+inst/nesi/*secret*
+inst/nesi/local.*
+inst/nesi/*.local

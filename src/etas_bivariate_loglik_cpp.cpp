@@ -109,23 +109,42 @@ double etas_bivariate_loglik_cpp(
     double lambda_i = (k == 0) ? mu_base_0 * W_val_0[i]
                                 : mu_base_1 * W_val_1[i];
 
-    for (int j = 0; j < i; ++j) {
-      double dt = t[i] - t[j];
-      if (dt <= 0.0) continue;
-      if (do_trunc && dt > t_trunc) continue;
+    if (do_trunc) {
+      for (int j = i - 1; j >= 0; --j) {
+        double dt = t[i] - t[j];
+        if (dt > t_trunc) break;
 
-      double kappa_j = kappa_mat(k, j);
-      if (kappa_j < 1e-20) continue;
-      double d_j = d_parent[j];
+        double kappa_j = kappa_mat(k, j);
+        if (kappa_j < 1e-20) continue;
+        double d_j = d_parent[j];
 
-      double temporal = std::pow(1.0 + dt / cc, -p);
+        double temporal = std::pow(1.0 + dt / cc, -p);
 
-      double dx = x[i] - x[j];
-      double dy = y[i] - y[j];
-      double r2 = dx * dx + dy * dy;
-      double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
+        double dx = x[i] - x[j];
+        double dy = y[i] - y[j];
+        double r2 = dx * dx + dy * dy;
+        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
 
-      lambda_i += base_const * kappa_j * temporal * spatial;
+        lambda_i += base_const * kappa_j * temporal * spatial;
+      }
+    } else {
+      for (int j = 0; j < i; ++j) {
+        double dt = t[i] - t[j];
+        if (dt <= 0.0) continue;
+
+        double kappa_j = kappa_mat(k, j);
+        if (kappa_j < 1e-20) continue;
+        double d_j = d_parent[j];
+
+        double temporal = std::pow(1.0 + dt / cc, -p);
+
+        double dx = x[i] - x[j];
+        double dy = y[i] - y[j];
+        double r2 = dx * dx + dy * dy;
+        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
+
+        lambda_i += base_const * kappa_j * temporal * spatial;
+      }
     }
 
     if (lambda_i <= 1e-15) lambda_i = 1e-15;

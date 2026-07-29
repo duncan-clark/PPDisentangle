@@ -97,8 +97,10 @@ estimation. The free parameters are:
 |------|---------|
 | `Oklahoma_data_and_viz.R` | Downloads USGS earthquake catalog and OCC AOI geometry, builds regional grid, saves CSVs and GeoJSON |
 | `oklahoma_analysis.R` | Main analysis: county tessellation, four-way fits, ATE simulation, plots, results |
-| `oklahoma_report.qmd` | Quarto report (HTML + PDF) |
-| `etas_consistency_study.R` | Simulation study verifying `fit_etas` recovers known ETAS parameters |
+| `oklahoma_report.qmd` | Quarto report source (HTML + PDF) |
+| `render_oklahoma_report.R` | Render report into `PPDisentangle-output/oklahoma/` |
+| `paper/oklahoma_paper_assets.R` | Builds publication figures and LaTeX table fragments from saved analysis results |
+| `../sim_study/consistency_study.R` | Simulation study verifying point-process parameter recovery |
 
 ## Usage
 
@@ -113,39 +115,64 @@ Rscript oklahoma_analysis.R --test
 # 3. Run full analysis
 Rscript oklahoma_analysis.R
 
-# 4. Optional manual render (analysis auto-renders by default)
-quarto render oklahoma_report.qmd
+# 4. Render HTML report from saved results (no re-analysis)
+Rscript render_oklahoma_report.R
+Rscript render_oklahoma_report.R --results ../../../PPDisentangle-output/oklahoma/for_paper.rds
 ```
+
+### NeSI (from your laptop)
+
+```bash
+bash inst/nesi/submit.sh oklahoma --cores 32 --mode long
+bash inst/nesi/wait_and_fetch.sh oklahoma JOB_ID
+```
+
+See [`../nesi/README.md`](../nesi/README.md).
 
 ## Output
 
 Running `oklahoma_analysis.R` now does the following automatically on success:
 
-1. Saves results and plots to `output/oklahoma/`
-2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX)
+1. Saves results and plots to `../PPDisentangle-output/oklahoma/`
+2. Renders `oklahoma_report.qmd` (HTML + PDF + TeX) into the same output folder
 3. Writes `last_run_sync_stamp.txt` in canonical output to trigger cloud sync tools
 
 Primary artifacts:
 
-- `output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
-- `output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
-- `output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
-- `output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)
-- `output/oklahoma/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
-- `output/oklahoma/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
-- `output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
-- `output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
+- `PPDisentangle-output/oklahoma/oklahoma_results.rds` — full results (fits A–D, ATE, config, counties)
+- `PPDisentangle-output/oklahoma/oklahoma_report.html` — interactive review report (Quarto)
+- `PPDisentangle-output/oklahoma/oklahoma_report.pdf` — PDF report (when PDF render enabled)
+- `PPDisentangle-output/oklahoma/plots/partition_map.png` — county partition (treated vs control)
+- `PPDisentangle-output/oklahoma/plots/pp_pre_treatment.png` — pre-treatment point pattern
+- `PPDisentangle-output/oklahoma/plots/pp_post_treatment.png` — post-treatment (location labels)
+- `PPDisentangle-output/oklahoma/plots/pp_post_sem_indep.png` — post-treatment (SEM independent labels)
+- `PPDisentangle-output/oklahoma/plots/pp_post_sem_biv.png` — post-treatment (SEM bivariate labels)
+- `PPDisentangle-output/oklahoma/plots/sem_flips_indep.png` — SEM convergence (independent)
+- `PPDisentangle-output/oklahoma/plots/sem_flips_biv.png` — SEM convergence (bivariate)
+
+Publication-ready paper figures and tables are written under
+`PPDisentangle-output/oklahoma/paper/generated/` (outside this repo). Regenerate from
+the repository root with:
+
+```bash
+Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
+```
 
 ## Data
 
 The prepared data lives in
-`oklahoma_induced_seismicity_data_regional20150318/`:
+`oklahoma_induced_seismicity_data_regional20150318/`. This is a small
+versioned input snapshot for reproducibility; rerun `Oklahoma_data_and_viz.R`
+to refresh it from USGS/OCC sources.
 
 | File | Contents |
 |------|----------|
 | `events_all.csv` | All earthquakes (pre + post) with projected coords |
 | `events_pre.csv` | Pre-treatment events |
 | `events_post.csv` | Post-treatment events |
+| `events_raw_usgs.csv` | Raw downloaded USGS events before analysis filtering |
+| `cells.csv`, `grid_cells.gpkg` | Regional grid outputs from the data-prep script |
+| `analysis_window.gpkg`, `aoi.gpkg` | Analysis and AOI geometries |
 | `metadata.json` | Design parameters and counts |
 | `occ_aoi_layer_2.geojson` | OCC AOI boundary |
 

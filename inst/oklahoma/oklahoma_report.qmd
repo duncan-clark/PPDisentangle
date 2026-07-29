@@ -38,6 +38,19 @@ execute:
 ```{r setup}
 #| label: setup
 #| include: false
+SCRIPT_DIR <- getwd()
+REPO_ROOT <- if (basename(SCRIPT_DIR) == "oklahoma" &&
+                  basename(dirname(SCRIPT_DIR)) == "inst") {
+  normalizePath(file.path(SCRIPT_DIR, "..", ".."), winslash = "/", mustWork = FALSE)
+} else {
+  normalizePath(SCRIPT_DIR, winslash = "/", mustWork = FALSE)
+}
+if (!requireNamespace("PPDisentangle", quietly = TRUE)) {
+  if (!requireNamespace("pkgload", quietly = TRUE)) {
+    stop("PPDisentangle is not installed and pkgload is unavailable.")
+  }
+  pkgload::load_all(REPO_ROOT, quiet = TRUE, export_all = FALSE, helpers = FALSE, attach_testthat = FALSE)
+}
 library(PPDisentangle)
 library(spatstat)
 library(sf)
@@ -52,11 +65,10 @@ library(kableExtra)
 knitr::opts_chunk$set(fig.align = "center", out.width = "100%")
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-SCRIPT_DIR <- getwd()
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
 candidate_out_dirs <- unique(c(
-  file.path(dirname(dirname(SCRIPT_DIR)), "output", "oklahoma")
+  PPDisentangle::pp_output_path("oklahoma", repo_root = find_repo_root(SCRIPT_DIR))
 ))
 explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
 if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {
@@ -67,7 +79,8 @@ result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_sensitivity(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_sensitivity_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap(_[0-9]+)?\\.rds$",
-                     "^oklahoma_results_pre_bootstrap_job([0-9]+)?\\.rds$")
+                     "^oklahoma_results_pre_bootstrap_job([0-9]+)?\\.rds$",
+                     "^for_paper\\.rds$")
 candidate_result_files <- unlist(lapply(candidate_out_dirs, function(d) {
   if (!dir.exists(d)) return(character(0))
   unique(unlist(lapply(result_patterns, function(pat) {
@@ -201,21 +214,39 @@ using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")
   grepl("pre_sensitivity", basename(result_file), fixed = TRUE) ||
   grepl("pre_bootstrap", basename(result_file), fixed = TRUE)
 
+path_rel_to <- function(path, start) {
+  path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  start <- normalizePath(start, winslash = "/", mustWork = FALSE)
+  path_seg <- strsplit(path, "/", fixed = TRUE)[[1L]]
+  start_seg <- strsplit(start, "/", fixed = TRUE)[[1L]]
+  path_seg <- path_seg[nzchar(path_seg)]
+  start_seg <- start_seg[nzchar(start_seg)]
+  n <- min(length(path_seg), length(start_seg))
+  i <- 1L
+  while (i <= n && identical(path_seg[[i]], start_seg[[i]])) i <- i + 1L
+  rel_parts <- c(rep("..", length(start_seg) - i + 1L), path_seg[i:length(path_seg)])
+  if (length(rel_parts) < 1L) "." else paste(rel_parts, collapse = "/")
+}
+
 resolve_plot_file <- function(filename) {
-  candidates <- file.path(candidate_plot_dirs, filename)
+  plot_dirs <- unique(c(file.path(OUT_DIR, "plots"), candidate_plot_dirs))
+  candidates <- file.path(plot_dirs, filename)
   existing <- candidates[file.exists(candidates)]
-  if (length(existing) > 0) return(existing[which.max(file.info(existing)$mtime)])
+  if (length(existing) > 0) {
+    abs_path <- existing[which.max(file.info(existing)$mtime)]
+    return(path_rel_to(abs_path, SCRIPT_DIR))
+  }
   stem <- sub("\\.[^.]+$", "", filename)
   ext <- sub("^.*(\\.[^.]+)$", "\\1", filename)
   ext <- if (identical(ext, filename)) "" else ext
   tagged_pat <- paste0("^", gsub("([.|()\\^{}+$*?\\[\\]\\\\])", "\\\\\\1", stem), "_job[0-9]+", gsub("([.|()\\^{}+$*?\\[\\]\\\\])", "\\\\\\1", ext), "$")
-  tagged <- unlist(lapply(candidate_plot_dirs, function(d) {
+  tagged <- unlist(lapply(plot_dirs, function(d) {
     if (!dir.exists(d)) return(character(0))
     list.files(d, pattern = tagged_pat, full.names = TRUE)
   }), use.names = FALSE)
   tagged <- tagged[file.exists(tagged)]
   if (length(tagged) == 0) return(NA_character_)
-  tagged[which.max(file.info(tagged)$mtime)]
+  path_rel_to(tagged[which.max(file.info(tagged)$mtime)], SCRIPT_DIR)
 }
 
 render_timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
@@ -2012,8 +2043,16 @@ if (length(E_vec) > 0 || length(F_vec) > 0) {
     `F: SEM Biv+KDE (all-free)` = as.numeric(F_vec[ef_param_order]),
     check.names = FALSE
   )
-  ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_scaled_num(v, digits = 5), character(1))
-  ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_scaled_num(v, digits = 5), character(1))
+  fmt_sigfig <- function(x, digits = 3L) {
+    if (is.null(x) || !is.finite(x)) return("N/A")
+    v <- signif(as.numeric(x), digits)
+    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+    order <- floor(log10(abs(v)))
+    dp <- max(0L, as.integer(digits) - order - 1L)
+    sprintf(paste0("%.", dp, "f"), v)
+  }
+  ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_sigfig(v, 3L), character(1))
+  ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_sigfig(v, 3L), character(1))
   kable(
     ef_tbl,
     caption = "All fitted bivariate ETAS parameters for Models E and F.",

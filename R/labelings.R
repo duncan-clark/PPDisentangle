@@ -486,6 +486,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    temporal_scale_days = NULL,
                                                    points_tile_index = NULL,
                                                    model_type = "hawkes",
+                                                   proposal_sim_cache = NULL,
+                                                   return_proposal_sim_cache = FALSE,
                                                    ...) {
   proposal_trace <- isTRUE(verbose) &&
     (tolower(Sys.getenv("OK_SEM_PROPOSAL_TIMING", "true")) %in% c("1", "true", "yes", "y"))
@@ -539,6 +541,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   if (is.null(temporal_scale_days) || !is.finite(temporal_scale_days) || temporal_scale_days <= 0) {
     temporal_scale_days <- max(1, as.numeric(windowT[2] - windowT[1]) / 5)
   }
+  proposal_sim_cache_out <- list(model_type = model_type)
   use_precompute <- (proximity_weight > 0 || temporal_weight > 0)
   inds_int <- as.integer(inds)
   tile_members <- NULL
@@ -557,6 +560,15 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 
   # For bivariate ETAS, simulate jointly and compare per-process counts
   if (is_biv_etas) {
+    if (!is.null(proposal_sim_cache) &&
+        identical(proposal_sim_cache$model_type, model_type) &&
+        !is.null(proposal_sim_cache$control$where_to_thin) &&
+        !is.null(proposal_sim_cache$treated$where_to_thin)) {
+      where_to_thin <- proposal_sim_cache$control$where_to_thin
+      thin_control <- proposal_sim_cache$control$thin
+      sim_treat_inds <- proposal_sim_cache$treated$sim_inds
+      proposal_sim_cache_out <- proposal_sim_cache
+    } else {
     if (proposal_trace) {
       cat(sprintf("    [proposal-sim] start model=etas_bivariate n_pts=%d t_window=[%.3f, %.3f]\n",
                   nrow(dat), windowT[1], windowT[2]))
@@ -617,6 +629,18 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     where_to_thin <- tabulate(control_inds, nbins = partition$n) -
                      tabulate(sim_ctrl_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_ctrl_inds)
+    where_to_thin_t_biv <- tabulate(treated_inds, nbins = partition$n) -
+                           tabulate(sim_treat_inds, nbins = partition$n)
+    proposal_sim_cache_out <- list(
+      model_type = model_type,
+      control = list(where_to_thin = where_to_thin, thin = thin_control),
+      treated = list(
+        where_to_thin = where_to_thin_t_biv,
+        thin = length(treated_inds) - length(sim_treat_inds),
+        sim_inds = sim_treat_inds
+      )
+    )
+    }
   } else {
 
   if (is_etas) {
@@ -629,7 +653,13 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   }
   params_key <- if (is_etas) "etas_params" else "hawkes_params"
 
-  if (is.null(hawkes_params_control)) {
+  if (!is.null(proposal_sim_cache) &&
+      identical(proposal_sim_cache$model_type, model_type) &&
+      !is.null(proposal_sim_cache$control$where_to_thin)) {
+    where_to_thin <- proposal_sim_cache$control$where_to_thin
+    thin_control <- proposal_sim_cache$control$thin
+    proposal_sim_cache_out$control <- proposal_sim_cache$control
+  } else if (is.null(hawkes_params_control)) {
     thin_control <- 0
     sim_inds <- numeric(0)
   } else {
@@ -662,6 +692,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_inds)
+    proposal_sim_cache_out$control <- list(
+      where_to_thin = where_to_thin,
+      thin = thin_control
+    )
   }
 
   } # end non-bivariate branch
@@ -782,7 +816,12 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     }
   }
 
-  if (is.null(hawkes_params_treated) && !is_biv_etas) return(dat)
+  if (is.null(hawkes_params_treated) && !is_biv_etas) {
+    if (isTRUE(return_proposal_sim_cache)) {
+      return(list(data = dat, proposal_sim_cache = proposal_sim_cache_out))
+    }
+    return(dat)
+  }
 
   treated_inds <- inds[dat$inferred_process == "treated"]
   control_tiles <- which(partition_process == "control")
@@ -791,6 +830,13 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     sim_inds_t <- sim_treat_inds
     where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) -
                        tabulate(sim_inds_t, nbins = partition$n)
+  } else {
+  if (!is.null(proposal_sim_cache) &&
+      identical(proposal_sim_cache$model_type, model_type) &&
+      !is.null(proposal_sim_cache$treated$where_to_thin)) {
+    where_to_thin_t <- proposal_sim_cache$treated$where_to_thin
+    thin_treated <- proposal_sim_cache$treated$thin
+    proposal_sim_cache_out$treated <- proposal_sim_cache$treated
   } else {
   gen_args_t <- list(
     Omega = statespace, partition = partition, time_window = windowT,
@@ -820,8 +866,16 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   sim_data_t <- sim_data_t[sim_data_t$t > windowT[1], ]
   sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition))
   where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
+  proposal_sim_cache_out$treated <- list(
+    where_to_thin = where_to_thin_t,
+    thin = length(treated_inds) - length(sim_inds_t)
+  )
+  }
   } # end non-bivariate branch
-  thin_treated <- (length(treated_inds) - length(sim_inds_t)) * change_factor
+  if (!exists("thin_treated", inherits = FALSE)) {
+    thin_treated <- length(treated_inds) - length(sim_inds_t)
+  }
+  thin_treated <- thin_treated * change_factor
   if (!is.finite(thin_treated) || is.na(thin_treated)) thin_treated <- 0
   if (thin_treated < 0) {
     n_total_t <- rpois(1, max(-thin_treated, 1))
@@ -874,6 +928,9 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
         dat$inferred_process[changes] <- ifelse(dat$location_process[changes] == "control", "treated", "control")
       }
     }
+  }
+  if (isTRUE(return_proposal_sim_cache)) {
+    return(list(data = dat, proposal_sim_cache = proposal_sim_cache_out))
   }
   return(dat)
 }
@@ -1027,10 +1084,14 @@ em_style_labelling <- function(pp_data,
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
   biv_etas_params <- dots$etas_bivariate_params
+  hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
+  hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
+  hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
+  hawkes_spatial_d <- dots$spatial_d
 
   all_names <- if (is_biv_etas) .etas_bivariate_par_names
                else if (is_etas) .etas_par_names
-               else c("mu", "alpha", "beta", "K")
+               else hawkes_param_names(hawkes_kernel)
   fixed_idx <- if (!is.null(fixed_params)) {
     idx <- match(names(fixed_params), all_names)
     idx[!is.na(idx)]
@@ -1100,10 +1161,14 @@ em_style_labelling <- function(pp_data,
   hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
     if (nrow(post_realiz) < 1L) return(-Inf)
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
-    p <- suppressWarnings(as.numeric(params_vec[c("mu", "alpha", "beta", "K")]))
-    names(p) <- c("mu", "alpha", "beta", "K")
-    if (any(!is.finite(p))) return(-Inf)
-    if (p[["mu"]] < 0 || p[["alpha"]] < 0 || p[["beta"]] <= 0 || p[["K"]] < 0 || p[["K"]] >= 1) return(-Inf)
+    par_obj <- as_hawkes_params(params_vec, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
+    if (!is.finite(par_obj$mu) || !is.finite(par_obj$alpha) || !is.finite(par_obj$K)) return(-Inf)
+    if (par_obj$mu < 0 || par_obj$alpha < 0 || par_obj$K < 0 || par_obj$K >= 1) return(-Inf)
+    if (identical(hawkes_kernel, "power_law")) {
+      if (!is.finite(par_obj[["c"]]) || !is.finite(par_obj$p) || par_obj[["c"]] <= 0 || par_obj$p <= 1) return(-Inf)
+    } else if (!is.finite(par_obj$beta) || par_obj$beta <= 0) {
+      return(-Inf)
+    }
     if (is.null(pre_hist)) pre_hist <- post_realiz[0, c("x", "y", "t"), drop = FALSE]
     pre_hist <- pre_hist[pre_hist$t < time_window[1], c("x", "y", "t"), drop = FALSE]
     pre_hist <- pre_hist[order(pre_hist$t), , drop = FALSE]
@@ -1124,6 +1189,8 @@ em_style_labelling <- function(pp_data,
     parent_x <- c(pre_hist$x, post_realiz$x)
     parent_y <- c(pre_hist$y, post_realiz$y)
     parent_t <- c(pre_hist$t, post_realiz$t)
+    q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+    d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
     loglik <- hawkes_loglik_inhom_filtration_cpp(
       post_t = as.numeric(post_realiz$t),
       post_x = as.numeric(post_realiz$x),
@@ -1132,15 +1199,21 @@ em_style_labelling <- function(pp_data,
       parent_t = as.numeric(parent_t),
       parent_x = as.numeric(parent_x),
       parent_y = as.numeric(parent_y),
-      mu = p[["mu"]],
-      alpha = p[["alpha"]],
-      beta = p[["beta"]],
-      K = p[["K"]],
+      mu = par_obj$mu,
+      alpha = par_obj$alpha,
+      beta = par_obj$beta,
+      K = par_obj$K,
       areaS = active_area,
       t_start = time_window[1],
       t_end = time_window[2],
       adjust_factor = 1.0,
-      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+      kernel_type = hawkes_kernel_type(hawkes_kernel),
+      cc = if (is.null(par_obj[["c"]])) 1.0 else as.numeric(par_obj[["c"]]),
+      p = if (is.null(par_obj$p)) 2.0 else as.numeric(par_obj$p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     if (!is.finite(loglik)) return(-Inf)
     loglik
@@ -1197,9 +1270,15 @@ em_style_labelling <- function(pp_data,
         } else {
           NULL
         }
-        post_proposals <- lapply(1:n_props, function(j) {
+        proposal_sim_cache <- NULL
+        # NOTE: this must stay a for-loop. With lapply, the cache assignment
+        # inside the closure only creates a local binding, so proposals 2..n
+        # silently re-run the full Hawkes simulations instead of reusing the
+        # first proposal's simulation discrepancies.
+        post_proposals <- vector("list", n_props)
+        for (j in seq_len(n_props)) {
           t_prop <- proc.time()[3]
-          prop_out <- simulation_labeling_hawkes_hawkes_fast(
+          prop_result <- simulation_labeling_hawkes_hawkes_fast(
             post_data, partition = partition, partition_process = partition_processes,
             statespace = statespace, state_spaces = state_spaces,
             windowT = time_window,
@@ -1210,15 +1289,21 @@ em_style_labelling <- function(pp_data,
             temporal_weight = temporal_weight,
             temporal_scale_days = temporal_scale_days,
             points_tile_index = post_inds, filt_by_proc = filt_by_proc,
-            model_type = model_type, ...
+            model_type = model_type,
+            proposal_sim_cache = proposal_sim_cache,
+            return_proposal_sim_cache = TRUE,
+            ...
           )
+          post_proposals[[j]] <- prop_result$data
+          if (is.null(proposal_sim_cache)) {
+            proposal_sim_cache <- prop_result$proposal_sim_cache
+          }
           if (verbose && sem_timing_verbose) {
-            flips_j <- sum(post_data$inferred_process != prop_out$inferred_process, na.rm = TRUE)
+            flips_j <- sum(post_data$inferred_process != post_proposals[[j]]$inferred_process, na.rm = TRUE)
             cat(sprintf("    [proposal %d/%d] done in %.2fs flips=%d\n",
                         j, n_props, proc.time()[3] - t_prop, flips_j))
           }
-          prop_out
-        })
+        }
         # Proposals preserve post_data ordering; avoid redundant per-proposal sort.
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
@@ -1257,8 +1342,8 @@ em_style_labelling <- function(pp_data,
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
       ref_post <- post_data
-      ctrl_params_vec <- unlist(hawkes_params_control)
-      treat_params_vec <- unlist(treated_par[[length(treated_par)]])
+      ctrl_params_vec <- unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
+      treat_params_vec <- unlist(as_hawkes_params(treated_par[[length(treated_par)]], hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
       metric <- rep(NA_real_, length(labelling_proposals))
       unchanged_idx <- which(flips_per_proposal == 0)
       changed_idx <- which(flips_per_proposal != 0)
@@ -1358,16 +1443,20 @@ em_style_labelling <- function(pp_data,
         post_ctrl <- y[y$inferred_process == "control", ]
         if (hawkes_use_filtration_history && !is_etas && !is_biv_etas) {
           hawkes_conditional_loglik(
-            params_vec = unlist(hawkes_params_control),
+            params_vec = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]),
             post_realiz = post_ctrl,
             zero_background_region = treated_state_space,
             pre_hist = select_pre_history_by_label("control")
           )
         } else {
           loglik_hawk_fast(
-            params = unlist(hawkes_params_control), realiz = post_ctrl,
+            params = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]), realiz = post_ctrl,
             windowT = time_window, windowS = statespace,
-            zero_background_region = treated_state_space, ...
+            zero_background_region = treated_state_space,
+            spatial_kernel = hawkes_spatial_kernel,
+            spatial_q = hawkes_spatial_q,
+            spatial_d = hawkes_spatial_d,
+            ...
           )
         }
       }, numeric(1))
@@ -1536,7 +1625,12 @@ em_style_labelling <- function(pp_data,
             D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
         } else {
         profile_optim <- function(full_par, obj_fn, label) {
-          full_vec <- unlist(full_par)
+          full_vec <- if (is_etas) {
+            as.numeric(unlist(as.list(full_par)[all_names]))
+          } else {
+            as.numeric(unlist(as_hawkes_params(full_par, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[all_names]))
+          }
+          names(full_vec) <- all_names
           if (length(fixed_idx) > 0) {
             free_par <- full_vec[free_idx]
             wrap_fn <- function(fp, ...) {

@@ -335,3 +335,82 @@ test_that("loglik_hawk_fast with precomp is faster than without", {
   expect_true(t_new <= t_old,
     info = paste0("precomp should be faster: ", round(t_new, 4), " <= ", round(t_old, 4)))
 })
+
+test_that("fit_hawkes uses precomputed spatial masks without changing the fitted objective", {
+  params_init <- c(mu = 25, alpha = 0.4, beta = 4, K = 0.25)
+  true_params <- list(mu = 30, alpha = 0.5, beta = 5, K = 0.3)
+  windowT <- c(0, 8)
+  windowS <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+  zero_region <- spatstat.geom::owin(xrange = c(0, 5), yrange = c(0, 10))
+  set.seed(166)
+  sim <- sim_hawkes(true_params, windowT, windowS)
+  realiz <- data.frame(x = sim$x, y = sim$y, t = sim$t, W = rep(1, length(sim$t)))
+
+  fit <- fit_hawkes(params_init, realiz, windowT, windowS,
+                    maxit = 5, zero_background_region = zero_region)
+  pc <- precompute_loglik_args(realiz[order(realiz$t), ], windowS, zero_region)
+  ll_direct <- loglik_hawk_fast(unlist(fit$par), realiz, windowT, windowS,
+                                zero_background_region = zero_region)
+  ll_precomp <- loglik_hawk_fast(unlist(fit$par), realiz, windowT, windowS,
+                                 precomp = list(active_area = pc$active_area,
+                                                in_zero_bg = pc$in_zero_bg_all))
+
+  expect_true(all(is.finite(unlist(fit$par))))
+  expect_equal(ll_precomp, ll_direct)
+})
+
+test_that("fit_etas uses precomputed spatial masks without changing the fitted objective", {
+  params <- list(mu = 12, A = 0.08, alpha_m = 0.2, c = 0.1,
+                 p = 2.2, D = 0.5, gamma = 0.1, q = 1.8)
+  windowT <- c(0, 8)
+  windowS <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+  zero_region <- spatstat.geom::owin(xrange = c(0, 5), yrange = c(0, 10))
+  set.seed(177)
+  sim <- sim_etas(params, windowT, windowS, beta_gr = 1.5, m0 = 1)
+  realiz <- data.frame(x = sim$x, y = sim$y, t = sim$t,
+                       mag = sim$mag, W = rep(1, length(sim$t)))
+
+  fit <- fit_etas(params, realiz, windowT, windowS, m0 = 1, maxit = 3,
+                  zero_background_region = zero_region, beta_gr = 1.5)
+  realiz <- realiz[order(realiz$t), ]
+  pc <- precompute_loglik_args(realiz, windowS, zero_region)
+  ll_direct <- loglik_etas(fit$par, realiz, windowT, windowS, m0 = 1,
+                           zero_background_region = zero_region, beta_gr = 1.5)
+  ll_precomp <- loglik_etas(fit$par, realiz, windowT, windowS, m0 = 1,
+                            precomp = list(active_area = pc$active_area,
+                                           in_zero_bg = pc$in_zero_bg_all),
+                            beta_gr = 1.5)
+
+  expect_true(all(is.finite(fit$par)))
+  expect_equal(ll_precomp, ll_direct)
+})
+
+test_that("adaptive_SEM outer hot path runs with cached filtration inputs", {
+  d <- make_test_data(seed = 242)
+  set.seed(242)
+  result <- adaptive_SEM(
+    pp_data = d$obs_data,
+    partition = d$partition,
+    partition_processes = d$partition_processes,
+    statespace = d$OMEGA,
+    time_window = c(d$TREATMENT_TIME, d$END_TIME),
+    treatment_time = d$TREATMENT_TIME,
+    hawkes_params_control = d$hawkes_par_1,
+    hawkes_params_treated = d$hawkes_par_2,
+    N_labellings = 1,
+    N_iter = 1,
+    verbose = FALSE,
+    adaptive_control = list(
+      iter = 1,
+      n_props = 2,
+      outer_maxit = 2,
+      update_control_params = FALSE,
+      state_spaces = d$state_spaces,
+      verbose = FALSE
+    )
+  )
+
+  expect_true(!is.null(result$labellings))
+  expect_true(length(result$weights) > 0)
+  expect_true(all(is.finite(result$weights)))
+})

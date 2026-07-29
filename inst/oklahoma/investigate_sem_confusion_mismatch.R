@@ -2,11 +2,17 @@
 
 suppressPackageStartupMessages({
   library(data.table)
+  library(PPDisentangle)
 })
 
 args <- commandArgs(trailingOnly = TRUE)
-rds_path <- if (length(args) >= 1L) args[[1]] else "output/oklahoma/oklahoma_results_pre_bootstrap_job5206299.rds"
-out_prefix <- if (length(args) >= 2L) args[[2]] else file.path("output", "oklahoma", "sem_mismatch_investigation")
+default_rds <- PPDisentangle::pp_output_path(
+  "oklahoma",
+  "oklahoma_results_pre_bootstrap_job5206299.rds"
+)
+default_out <- PPDisentangle::pp_output_path("oklahoma", "sem_mismatch_investigation")
+rds_path <- if (length(args) >= 1L) args[[1]] else default_rds
+out_prefix <- if (length(args) >= 2L) args[[2]] else default_out
 
 if (!file.exists(rds_path)) {
   stop("RDS file not found: ", rds_path)

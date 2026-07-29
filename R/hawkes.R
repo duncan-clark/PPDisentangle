@@ -213,6 +213,102 @@ loglik_hawk <- function(params,
 #' @param ... Additional arguments
 #' @return Scalar log-likelihood value
 #' @export
+normalize_hawkes_kernel <- function(kernel = NULL, params = NULL) {
+  if (is.null(kernel) && is.list(params) && !is.null(params$kernel)) kernel <- params$kernel
+  if (is.null(kernel) && is.list(params) && !is.null(params$kernel_type)) {
+    kernel <- if (as.integer(params$kernel_type) == 1L) "power_law" else "exponential"
+  }
+  if (is.null(kernel) && !is.null(names(params)) && all(c("c", "p") %in% names(params))) {
+    kernel <- "power_law"
+  }
+  if (is.null(kernel)) kernel <- "exponential"
+  kernel <- tolower(gsub("-", "_", as.character(kernel)[[1]]))
+  if (kernel %in% c("exp", "exponential")) return("exponential")
+  if (kernel %in% c("power", "powerlaw", "power_law", "omori", "lomax")) return("power_law")
+  stop("Unsupported Hawkes kernel: ", kernel)
+}
+
+hawkes_kernel_type <- function(kernel) {
+  if (identical(normalize_hawkes_kernel(kernel), "power_law")) 1L else 0L
+}
+
+normalize_hawkes_spatial_kernel <- function(kernel = NULL, params = NULL) {
+  if (is.null(kernel) && is.list(params) && !is.null(params$spatial_kernel)) kernel <- params$spatial_kernel
+  if (is.null(kernel) && is.list(params) && !is.null(params$spatial_kernel_type)) {
+    kernel <- if (as.integer(params$spatial_kernel_type) == 1L) "power_law" else "exponential"
+  }
+  if (is.null(kernel)) kernel <- "exponential"
+  kernel <- tolower(gsub("-", "_", as.character(kernel)[[1]]))
+  if (kernel %in% c("exp", "exponential", "gaussian")) return("exponential")
+  if (kernel %in% c("power", "powerlaw", "power_law", "zhuang")) return("power_law")
+  stop("Unsupported Hawkes spatial kernel: ", kernel)
+}
+
+hawkes_spatial_kernel_type <- function(kernel) {
+  if (identical(normalize_hawkes_spatial_kernel(kernel), "power_law")) 1L else 0L
+}
+
+hawkes_power_law_spatial_d <- function(alpha, q) {
+  alpha <- as.numeric(alpha)[1]
+  q <- as.numeric(q)[1]
+  if (!is.finite(alpha) || alpha <= 0 || !is.finite(q) || q <= 1.5) return(NA_real_)
+  exp(2 * (lgamma(q) - log(q - 1) - lgamma(q - 1.5)) - log(alpha))
+}
+
+hawkes_param_names <- function(kernel) {
+  if (identical(normalize_hawkes_kernel(kernel), "power_law")) {
+    c("mu", "alpha", "c", "p", "K")
+  } else {
+    c("mu", "alpha", "beta", "K")
+  }
+}
+
+as_hawkes_params <- function(params, kernel = NULL, spatial_kernel = NULL,
+                             spatial_q = NULL, spatial_d = NULL) {
+  kernel <- normalize_hawkes_kernel(kernel, params)
+  spatial_kernel <- normalize_hawkes_spatial_kernel(spatial_kernel, params)
+  if (is.list(params)) {
+    out <- params
+  } else {
+    vals <- suppressWarnings(as.numeric(params))
+    nms <- names(params)
+    if (is.null(nms)) {
+      nms <- hawkes_param_names(kernel)
+      if (length(vals) == 4L && identical(kernel, "power_law")) {
+        nms <- c("mu", "alpha", "c", "K")
+      }
+    }
+    names(vals) <- nms[seq_along(vals)]
+    out <- as.list(vals)
+  }
+  out$kernel <- kernel
+  out$spatial_kernel <- spatial_kernel
+  if (is.null(out$mu)) out$mu <- NA_real_
+  if (is.null(out$alpha)) out$alpha <- NA_real_
+  if (identical(kernel, "power_law")) {
+    if (is.null(out[["c"]])) out[["c"]] <- if (!is.null(out$beta)) out$beta else 1
+    if (is.null(out$p)) out$p <- 2
+    if (is.null(out$beta)) out$beta <- out[["c"]]
+  } else {
+    if (is.null(out$beta)) out$beta <- if (!is.null(out[["c"]])) out[["c"]] else NA_real_
+  }
+  if (is.null(out$K)) out$K <- NA_real_
+  if (identical(spatial_kernel, "power_law")) {
+    if (is.null(out$spatial_q) || !is.finite(out$spatial_q)) {
+      out$spatial_q <- if (!is.null(spatial_q)) as.numeric(spatial_q) else 2
+    }
+    out$spatial_d <- if (!is.null(spatial_d) && is.finite(spatial_d) && spatial_d > 0) {
+      as.numeric(spatial_d)
+    } else {
+      hawkes_power_law_spatial_d(out$alpha, out$spatial_q)
+    }
+  } else {
+    if (is.null(out$spatial_q) && !is.null(spatial_q)) out$spatial_q <- as.numeric(spatial_q)
+    if (is.null(out$spatial_d) && !is.null(spatial_d)) out$spatial_d <- as.numeric(spatial_d)
+  }
+  out
+}
+
 loglik_hawk_fast <- function(params,
                              realiz,
                              windowT,
@@ -223,12 +319,18 @@ loglik_hawk_fast <- function(params,
                              alpha_max = NULL,
                              beta_min = NULL,
                              t_trunc = NULL,
+                             kernel = NULL,
+                             spatial_kernel = NULL,
+                             spatial_q = NULL,
+                             spatial_d = NULL,
                              ...) {
-  if (is.list(params)) {
-    mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
-  } else {
-    mu <- params[1]; alpha <- params[2]; beta <- params[3]; K <- params[4]
-  }
+  params <- as_hawkes_params(params, kernel, spatial_kernel, spatial_q, spatial_d)
+  kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
+  mu <- params$mu; alpha <- params$alpha; beta <- params$beta; K <- params$K
+  cc <- params[["c"]]; p <- params$p
+  q_spatial <- if (is.null(params$spatial_q)) 2.0 else as.numeric(params$spatial_q)
+  d_spatial <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
 
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
 
@@ -240,8 +342,9 @@ loglik_hawk_fast <- function(params,
     if (verbose_trace) cat("[loglik_hawk_fast REJECT] n==0\n")
     return(-1e15)
   }
-  if (min(mu, K, alpha, beta) < 0 || K >= 1) {
-    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] param bounds: mu=%g alpha=%g beta=%g K=%g\n", mu, alpha, beta, K))
+  bound_vals <- if (identical(kernel, "power_law")) c(mu, K, alpha, cc, p - 1) else c(mu, K, alpha, beta)
+  if (min(bound_vals) < 0 || K >= 1) {
+    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] param bounds: mu=%g alpha=%g beta/c=%g p=%g K=%g kernel=%s\n", mu, alpha, beta, p, K, kernel))
     return(-1e15)
   }
 
@@ -282,9 +385,13 @@ loglik_hawk_fast <- function(params,
   if (is.null(beta_min)) {
     beta_min <- 0.1 / tval
   }
-  if (mu > 1e6 || alpha > alpha_max || beta < beta_min || beta > 1e6) {
-    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] constraint: mu=%g alpha=%g (max=%g) beta=%g (min=%g) K=%g\n",
-                                   mu, alpha, alpha_max, beta, beta_min, K))
+  beta_bad <- identical(kernel, "exponential") && (beta < beta_min || beta > 1e6)
+  power_bad <- identical(kernel, "power_law") && (cc <= 0 || p <= 1 || cc > 1e6 || p > 1e3)
+  spatial_bad <- identical(spatial_kernel, "power_law") &&
+    (!is.finite(q_spatial) || q_spatial <= 1.5 || !is.finite(d_spatial) || d_spatial <= 0)
+  if (mu > 1e6 || alpha > alpha_max || beta_bad || power_bad || spatial_bad) {
+    if (verbose_trace) cat(sprintf("[loglik_hawk_fast REJECT] constraint: mu=%g alpha=%g (max=%g) beta/c=%g p=%g K=%g kernel=%s\n",
+                                   mu, alpha, alpha_max, beta, p, K, kernel))
     return(-1e15)
   }
 
@@ -299,7 +406,13 @@ loglik_hawk_fast <- function(params,
     K = K,
     areaS = active_area,
     t_max = tval,
-    t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+    t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+    kernel_type = hawkes_kernel_type(kernel),
+    cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+    p = if (is.null(p)) 2.0 else as.numeric(p),
+    spatial_kernel_type = hawkes_spatial_kernel_type(spatial_kernel),
+    spatial_q = q_spatial,
+    spatial_d = d_spatial
   )
 
   if (verbose_trace && loglik <= -1e14) {
@@ -484,16 +597,33 @@ fit_hawkes <- function(params_init,
                        beta_min = NULL,
                        fixed_params = NULL,
                        t_trunc = NULL,
+                       kernel = NULL,
+                       spatial_kernel = NULL,
+                       spatial_q = NULL,
+                       spatial_d = NULL,
                        ...) {
-  if (inherits(params_init, "list")) { params_init <- unlist(params_init) }
+  spatial_d_input <- spatial_d
+  params_init_list <- as_hawkes_params(params_init, kernel, spatial_kernel, spatial_q, spatial_d)
+  kernel <- params_init_list$kernel
+  spatial_kernel <- params_init_list$spatial_kernel
+  spatial_q <- params_init_list$spatial_q
+  spatial_d <- spatial_d_input
+  params_init <- unlist(params_init_list[hawkes_param_names(kernel)])
   if (poisson_flag) {
+    par_out <- if (identical(kernel, "power_law")) {
+      list(mu = dim(realiz)[1] / windowT[2], alpha = 1, c = 1, p = 2, K = 0, beta = 1, kernel = kernel)
+    } else {
+      list(mu = dim(realiz)[1] / windowT[2], alpha = 1, beta = 1, K = 0, kernel = kernel)
+    }
+    par_out <- as_hawkes_params(par_out, kernel, spatial_kernel, spatial_q, spatial_d)
     if (is.null(zero_background_region)) {
-      return(list(par = list(mu = dim(realiz)[1] / windowT[2], alpha = 1, beta = 1, K = 0), converged = TRUE))
+      return(list(par = par_out, converged = TRUE))
     } else {
       win_area <- spatstat.geom::area(windowS)
       non_zero_area <- spatstat.geom::area.owin(zero_background_region)
       adjust_factor <- (win_area - non_zero_area) / win_area
-      return(list(par = list(mu = dim(realiz)[1] / (adjust_factor * windowT[2]), alpha = 1, beta = 1, K = 0), converged = TRUE))
+      par_out$mu <- dim(realiz)[1] / (adjust_factor * windowT[2])
+      return(list(par = par_out, converged = TRUE))
     }
   } else {
     realiz <- realiz[order(realiz$t), ]
@@ -504,13 +634,18 @@ fit_hawkes <- function(params_init,
       if (is.null(dot_names)) rep(TRUE, length(dots)) else (dot_names == "" | !dot_names %in% optim_formals)
     } else TRUE
     extra <- if (length(dots)) dots[keep_extra] else list()
+    extra$precomp <- NULL
 
-    all_names <- c("mu", "alpha", "beta", "K")
+    all_names <- hawkes_param_names(kernel)
     if (!is.null(names(params_init))) {
       full_init <- params_init[all_names]
     } else {
       full_init <- params_init
       names(full_init) <- all_names
+    }
+    if (identical(kernel, "power_law")) {
+      if (!is.finite(full_init[["c"]])) full_init[["c"]] <- params_init_list[["c"]]
+      if (!is.finite(full_init[["p"]])) full_init[["p"]] <- params_init_list[["p"]]
     }
     if (!is.null(fixed_params)) {
       for (nm in names(fixed_params)) full_init[nm] <- fixed_params[[nm]]
@@ -519,14 +654,22 @@ fit_hawkes <- function(params_init,
     fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
     free_idx  <- setdiff(seq_along(all_names), fixed_idx)
     free_init <- full_init[free_idx]
+    fast_precomp <- if (use_fast) {
+      precompute_loglik_args(realiz, windowS, zero_background_region)
+    } else {
+      NULL
+    }
 
     profile_fn <- function(free_par, ...) {
-      par4 <- full_init
-      par4[free_idx] <- free_par
+      par_vec <- full_init
+      par_vec[free_idx] <- free_par
       if (use_fast) {
-        loglik_hawk_fast(par4, ...)
+        loglik_hawk_fast(par_vec, ...)
       } else {
-        loglik_hawk(par4, ...)
+        if (!identical(kernel, "exponential")) {
+          stop("The R Hawkes likelihood supports only the exponential kernel; use use_fast=TRUE for power_law.")
+        }
+        loglik_hawk(par_vec, ...)
       }
     }
 
@@ -541,9 +684,17 @@ fit_hawkes <- function(params_init,
           windowT = windowT,
           windowS = windowS,
           zero_background_region = zero_background_region,
+          precomp = list(
+            active_area = fast_precomp$active_area,
+            in_zero_bg = fast_precomp$in_zero_bg_all
+          ),
           alpha_max = alpha_max,
           beta_min = beta_min,
-          t_trunc = t_trunc
+          t_trunc = t_trunc,
+          kernel = kernel,
+          spatial_kernel = spatial_kernel,
+          spatial_q = spatial_q,
+          spatial_d = spatial_d
         ),
         extra
       )
@@ -575,9 +726,15 @@ fit_hawkes <- function(params_init,
       ))
     }
 
-    par4 <- full_init
-    par4[free_idx] <- fit$par
-    fit$par <- par4
+    par_out <- full_init
+    par_out[free_idx] <- fit$par
+    if (identical(kernel, "power_law")) {
+      par_out <- c(par_out, beta = par_out[["c"]])
+    }
+    par_out <- as_hawkes_params(as.list(par_out), kernel, spatial_kernel, spatial_q, spatial_d)
+    fit$par <- par_out
+    fit$kernel <- kernel
+    fit$spatial_kernel <- spatial_kernel
   }
   return(fit)
 }
@@ -608,11 +765,33 @@ sim_hawkes <- function(params,
       yrange = c(windowS[3], windowS[4])
     )
   }
-  if (!is.list(params)) params <- as.list(params)
+  params <- as_hawkes_params(params)
   mu <- params$mu
   alpha <- params$alpha
   beta <- params$beta
   K <- params$K
+  kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
+  spatial_q <- if (is.null(params$spatial_q)) 2 else as.numeric(params$spatial_q)
+  spatial_d <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
+  cc <- params[["c"]]
+  p <- params$p
+  draw_hawkes_delays <- function(n) {
+    if (identical(kernel, "power_law")) {
+      u <- runif(n)
+      cc * ((1 - u)^(-1 / (p - 1)) - 1)
+    } else {
+      rexp(n, rate = beta)
+    }
+  }
+  draw_hawkes_distances <- function(n) {
+    if (identical(spatial_kernel, "power_law")) {
+      u <- runif(n)
+      sqrt(spatial_d * ((1 - u)^(-1 / (spatial_q - 1)) - 1))
+    } else {
+      sqrt(rexp(n, rate = alpha))
+    }
+  }
   events <- list()
   events$n <- 0
   events$t <- numeric()
@@ -675,8 +854,8 @@ sim_hawkes <- function(params,
 
       num_aftershocks <- rpois(1, K)
       if (num_aftershocks > 0) {
-        delay <- rexp(num_aftershocks, rate = beta)
-        dist <- sqrt(rexp(num_aftershocks, rate = alpha))
+        delay <- draw_hawkes_delays(num_aftershocks)
+        dist <- draw_hawkes_distances(num_aftershocks)
         angle <- runif(num_aftershocks, min = 0, max = 2 * pi)
         new_lon <- current_event$x + dist * cos(angle)
         new_lat <- current_event$y + dist * sin(angle)
@@ -724,8 +903,8 @@ sim_hawkes <- function(params,
       parent_time <- rep(event_queue$time[idx_nonzero], num_aftershocks[idx_nonzero])
       total_aftershocks <- length(parent_x)
 
-      delay <- rexp(total_aftershocks, rate = beta)
-      dist <- sqrt(rexp(total_aftershocks, rate = alpha))
+      delay <- draw_hawkes_delays(total_aftershocks)
+      dist <- draw_hawkes_distances(total_aftershocks)
       angle <- runif(total_aftershocks, min = 0, max = 2 * pi)
       new_lon <- parent_x + dist * cos(angle)
       new_lat <- parent_y + dist * sin(angle)
@@ -781,8 +960,12 @@ sim_hawkes_fast <- function(params,
                             filtration = NULL,
                             covariate_lookup = NULL,
                             t_trunc = NULL,
+                            kernel = NULL,
+                            spatial_kernel = NULL,
+                            spatial_q = NULL,
+                            spatial_d = NULL,
                             ...) {
-  if (!is.list(params)) params <- as.list(params)
+  params <- as_hawkes_params(params, kernel, spatial_kernel, spatial_q, spatial_d)
   mu <- params$mu
   K  <- params$K
 
@@ -803,6 +986,12 @@ sim_hawkes_fast <- function(params,
 
   alpha <- params$alpha
   beta  <- params$beta
+  kernel <- params$kernel
+  spatial_kernel <- params$spatial_kernel
+  q_spatial <- if (is.null(params$spatial_q)) 2.0 else as.numeric(params$spatial_q)
+  d_spatial <- if (is.null(params$spatial_d)) NA_real_ else as.numeric(params$spatial_d)
+  cc <- params[["c"]]
+  p <- params$p
 
   bg_generated <- FALSE
 
@@ -890,7 +1079,13 @@ sim_hawkes_fast <- function(params,
       alpha = alpha, beta = beta, K = K,
       t_min = windowT[1], t_max = windowT[2],
       x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max,
-      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+      kernel_type = hawkes_kernel_type(kernel),
+      cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+      p = if (is.null(p)) 2.0 else as.numeric(p),
+      spatial_kernel_type = hawkes_spatial_kernel_type(spatial_kernel),
+      spatial_q = q_spatial,
+      spatial_d = d_spatial
     )
     n_ch <- length(children$x)
     if (n_ch > 0) {
@@ -986,6 +1181,11 @@ generate_inhomogeneous_hawkes <- function(Omega,
   dots_no_trunc$t_trunc <- NULL
   has_covariate <- !is.null(dots$covariate_lookup) && is.function(dots$covariate_lookup)
   filt_by_proc_precomputed <- dots$filt_by_proc
+  use_rect_tile_cpp <- identical(partition$type, "rect") &&
+    !is.null(partition$xgrid) && !is.null(partition$ygrid) &&
+    length(partition$xgrid) > 1L && length(partition$ygrid) > 1L &&
+    (length(unique(round(diff(partition$xgrid), 12))) == 1L) &&
+    (length(unique(round(diff(partition$ygrid), 12))) == 1L)
 
   all_bg_x <- list(); all_bg_y <- list(); all_bg_t <- list()
   all_bg_w <- list(); all_bg_proc <- list()
@@ -1011,7 +1211,12 @@ generate_inhomogeneous_hawkes <- function(Omega,
   filt_by_proc <- filt_by_proc_precomputed
   if (is.null(filt_by_proc) && !is.null(filtration)) {
     if (is.null(filtration$location_process)) {
-      filtration$location_process <- partition_processes[tileindex(filtration$x, filtration$y, partition)]
+      filt_tile <- if (use_rect_tile_cpp) {
+        tile_index_rect_cpp(filtration$x, filtration$y, partition$xgrid, partition$ygrid)
+      } else {
+        tileindex(filtration$x, filtration$y, partition)
+      }
+      filtration$location_process <- partition_processes[filt_tile]
     }
     if (is.data.frame(filtration)) {
       filt_by_proc <- split(filtration, filtration$location_process)
@@ -1047,7 +1252,11 @@ generate_inhomogeneous_hawkes <- function(Omega,
     n_new <- length(new_events$t)
     if (n_new == 0) next
 
-    tile_idx <- as.integer(tileindex(new_events$x, new_events$y, partition))
+    tile_idx <- if (use_rect_tile_cpp) {
+      tile_index_rect_cpp(new_events$x, new_events$y, partition$xgrid, partition$ygrid)
+    } else {
+      as.integer(tileindex(new_events$x, new_events$y, partition))
+    }
     loc_proc <- partition_processes[tile_idx]
 
     w_vals <- if (has_covariate) {

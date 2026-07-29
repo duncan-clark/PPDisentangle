@@ -1,3 +1,13 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^LICENSE\.md$
+^\.gitignore$
+^artifacts$
+^\.\.Rcheck$
+^docs$
+^inst/oklahoma/paper/generated$
+^inst/sim_study/generated$
+^inst/oklahoma/oklahoma_report\.html$
+^inst/oklahoma/oklahoma_report\.pdf$
+^inst/oklahoma/oklahoma_report\.tex$
+^inst/oklahoma/oklahoma_report_files$

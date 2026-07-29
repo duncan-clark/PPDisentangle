@@ -3,6 +3,7 @@
 suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
+  library(PPDisentangle)
 })
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -37,7 +38,7 @@ repo_dir <- if (basename(script_dir) == "sim_study" && basename(dirname(script_d
 } else {
   normalizePath(getwd(), winslash = "/", mustWork = FALSE)
 }
-out_dir <- file.path(repo_dir, "output", "sim_study")
+out_dir <- PPDisentangle::pp_output_path("sim_study", repo_root = repo_dir)
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 old_wd <- getwd()
 setwd(repo_dir)

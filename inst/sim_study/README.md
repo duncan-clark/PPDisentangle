@@ -4,6 +4,7 @@
 
 - **R script:** `sim_study.R` — adapts to environment via `ON_CLUSTER` and flags. Supports `--sims N`, `--test`.
 - **NeSI cluster:** `run_nesi.sh` — submits via `sbatch`; when in SLURM, runs `sim_study.R --cluster --sims N`. Use `--mode long` (default long profile) or `--mode test` (lightweight path check), and optionally override with `--sims N`.
+- **Laptop → NeSI → laptop:** `inst/nesi/submit.sh`, `fetch.sh`, `wait_and_fetch.sh` — see [`../nesi/README.md`](../nesi/README.md).
 
 ```bash
 cd /path/to/PPDisentangle
@@ -13,16 +14,278 @@ bash inst/sim_study/run_nesi.sh --mode test       # lightweight mode preset
 bash inst/sim_study/run_nesi.sh --mode long       # long-run mode preset
 ```
 
+For robustness runs, `--sims` controls the number of independent replications.
+Use `--cpus` only when you want to request a larger SLURM allocation without
+increasing replications. The robustness launcher uses extra CPUs by running
+multiple scenarios concurrently. By default it uses
+`floor(SLURM_CPUS_PER_TASK / sims)` scenario workers; override with
+`--scenario-workers`. SEM worker parallelism inside each scenario is naturally
+capped by the number of replications. Extra CPUs within a scenario can also help
+ATE/off-support work via `--ate-workers`.
+
 ## Output layout
 
-Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs):
+Each run is identified by its SLURM job ID (or `local_YYYYMMDD_HHMMSS` for local runs).
+All paths are under **`../PPDisentangle-output/sim_study/`** (sibling to this repo):
 
 ```
-output/sim_study/
+PPDisentangle-output/sim_study/
   <JOB_ID>.rds           # full results and plots
   <JOB_ID>.log           # R log
   <JOB_ID>_slurm.out     # SLURM stdout
   <JOB_ID>_slurm.err     # SLURM stderr
+```
+
+Override the output root with `PPDISENTANGLE_OUTPUT_ROOT`. See [`../OUTPUT.md`](../OUTPUT.md).
+
+## Publication outputs
+
+Paper-canonical main run: **`time_sweep_5228509`** (`*_summary_FOR_PAPER.rds` +
+raw horizon `tmp*.rds`). Robustness appendix: **`robustness_merged_tcal`**.
+
+To regenerate all paper figures from a Zenodo unpack, see
+[`../zenodo/README.md`](../zenodo/README.md):
+
+```bash
+Rscript inst/zenodo/reproduce_paper_figures.R
+```
+
+(`robustness.pdf` is a local preview only and is not part of Zenodo.)
+
+The publication plotting helper reads a time-sweep summary from
+`PPDisentangle-output/sim_study/` and writes paper figures/tables to
+`PPDisentangle-output/sim_study/generated/`:
+
+```bash
+Rscript inst/sim_study/plot_time_sweep_publication.R
+```
+
+Default outputs:
+
+```text
+PPDisentangle-output/sim_study/generated/figures/results_true_control.{pdf,png}
+PPDisentangle-output/sim_study/generated/figures/results_estimated_control.{pdf,png}
+PPDisentangle-output/sim_study/generated/tab_sim_time_sweep_param_tables.tex
+PPDisentangle-output/sim_study/generated/tab_sim_all_nothing_true_control.tex
+```
+
+`tab_sim_all_nothing_true_control.tex` is a table counterpart to
+`results_true_control` (`fig:all_nothing`): naive vs SEM only (no oracle),
+with nested rows per post-treatment horizon reporting Monte Carlo mean,
+median, and IQR.
+
+## Robustness suite
+
+The robustness launcher runs the complete robustness suite in one job: grids
+over K separation, signal-to-noise, K-separation × spatial range,
+a $4\times 4$ spatiotemporal kernel misspecification matrix
+(temporal × spatial, each exponential or power-law, under sim and fit),
+pretreatment-informed treatment assignment
+(highest count, lowest count, count propensity, contiguous AOI, Voronoi random),
+off-support allocation contrasts (including the
+all-or-nothing DTAITE as the global contrast), label recovery,
+binary-covariate effect modification,
+and transport across balanced allocation geometries. It writes per-scenario
+result objects, summary CSV/RDS files, and
+paper-ready figures/LaTeX fragments.
+Decay forward simulations are not part of the production robustness run;
+`--refresh-decay` remains available for an explicit standalone diagnostic.
+
+**K-separation grid (default):** control `K = 0.8`, treated `K ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7}` (treatment lowers `K`) with post-treatment horizon time-calibrated to `target_points`. Fixed-K scenarios use `(0.8, 0.2)`. Override with `PP_K_VALUES` or `--k-values`.
+
+**SNR grid (default):** `μ_scale ∈ {0.25, 0.5, 1, 1.5, 2}` at fixed `K = (0.8, 0.2)`, also time-calibrated. Override with `PP_MU_SCALES` or `--mu-scales`.
+
+**K × spatial-range grid (`k_spatial_range`, default):** treated
+`K ∈ {0.2, 0.3, 0.4, 0.5, 0.6}` at control `K = 0.8`, crossed with spatial
+scale multipliers `α/α₀ ∈ {0.25, 0.5, 1, 2, 4}` (`α₀ = 0.01`, exponential
+spatial kernel). Time-calibrated abundance; 25 scenarios. Override scales with
+`PP_ALPHA_SCALES` or `--alpha-scales`. Scenario IDs encode `_as…` so they do
+not collide with plain `k_separation` resumes.
+
+**Pretreatment assignment family (`pretreatment_assignment`):** five rules at
+`K = (0.8, 0.2)`, each treating 50% of cells from a reference pre-treatment
+catalogue — `highest_count_50pct`, `lowest_count_50pct`,
+`count_propensity_50pct`, `contiguous_aoi_50pct`, `voronoi_random_50pct`
+(`PP_TREATMENT_ASSIGNMENT` / scenario column `treatment_assignment`).
+Legacy `--scenario-set high_count_assignment` is aliased to this family.
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --sims 32 --target-points 2500
+```
+
+Default generated assets:
+
+```text
+PPDisentangle-output/sim_study/generated/robustness/figures/
+  robustness_all_scenarios_label_recovery.{pdf,png}
+  robustness_parameter_sweep_support_contrasts.{pdf,png}
+  robustness_k_spatial_range_heatmap.{pdf,png}
+  robustness_spatiotemporal_kernel_mismatch_heatmap.{pdf,png}
+  robustness_pretreatment_assignment_support_contrasts.{pdf,png}
+  robustness_effect_modification.{pdf,png}
+  robustness_geometry_transport.{pdf,png}
+PPDisentangle-output/sim_study/generated/robustness/simulation_robustness_appendix.tex
+```
+
+Effect modification and geometry transport are ordinary rows in the same
+scenario grid (67 scenarios when all families are selected: prior 42 plus the
+25-cell `k_spatial_range` surface). They can still be rerun independently
+for inspection or debugging:
+
+```bash
+Rscript inst/sim_study/sim_study_structured_robustness.R --study both --sims 32
+Rscript inst/sim_study/sim_study_structured_robustness.R --study both --pilot-only
+bash inst/sim_study/run_nesi.sh --structured-inspect
+bash inst/sim_study/run_nesi.sh --structured-robustness --structured-study both --sims 32
+```
+
+For a standard-family-only timing probe, pass an explicit `--scenario-set`
+that excludes `effect_modification` and `geometry_transport`.
+
+They add two composite figures:
+
+```text
+generated/robustness/figures/robustness_effect_modification.{pdf,png}
+generated/robustness/figures/robustness_geometry_transport.{pdf,png}
+```
+
+Label recovery is summarised once across all scenarios (naive vs SEM). Bias support
+figures report naive vs SEM only (oracle omitted) for the all-or-nothing DTAITE.
+Standalone absolute ATE error figures are not generated.
+
+Copy `simulation_robustness_appendix.tex` and `figures/*.pdf` to
+`plots/sim_study/robustness/` on Overleaf, then
+`\input{plots/sim_study/robustness/simulation_robustness_appendix.tex}` inside
+`\section{Additional simulation results}`.
+
+Local PDF preview:
+
+```bash
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+```
+
+Small NeSI inspection run, intended to finish quickly enough to inspect before
+an overnight run:
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness-inspect
+```
+
+Quick-mode timing probe (one scenario from each of three standard families;
+use this only for grid timing, not as the complete appendix):
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness-quick-probe
+```
+
+K-separation and SNR scenarios hold expected catalogue size at
+`PP_TARGET_POINTS` by calibrating the **post-treatment horizon** (fixed
+`mu = mu_anchor * mu_scale`), not by rescaling `mu` alone. Other families still
+calibrate `mu` at the default window. New scenario IDs include `_acaltime` so
+they do not collide with older mu-calibrated RDS files under `--resume-from`.
+
+Full NeSI robustness run (67 unified scenarios). Recommended resources:
+**64 CPUs / 24h / 128G**:
+
+```bash
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau
+```
+
+Refit only the time-calibrated families (12 scenarios: 7 K + 5 SNR), or reuse
+the previous production job for everything else:
+
+```bash
+# k_separation + snr_scale only
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 12:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --scenario-set k_separation,snr_scale
+
+# K × spatial-range surface only (25 scenarios)
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --scenario-set k_spatial_range
+
+# full grid; resume non-tcal scenarios from the prior completed job
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --resume-from robustness_7762623
+```
+
+After fetching a `k_spatial_range` job, replot that basename (or merge its RDS
+into the paper archive alongside `robustness_merged_tcal`) and rebuild the
+appendix PDF:
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<JOBID>
+# optional merge: copy new *_k_spatial_range_*.rds into paper/robustness_merged_tcal/
+# then --replot robustness_merged_tcal
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+```
+
+Larger-node alternative (100 CPUs / default 72h wall):
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness --mode long \
+  --sims 32 --cpus 100 --target-points 2500 --skip-ate-tau
+```
+
+Quick NeSI run for the full `robustness.pdf` appendix (all families,
+structured rows with reduced forward Monte Carlo, no estimated
+`tau_i`):
+
+```bash
+bash inst/nesi/submit.sh sim_study \
+  --robustness --mode quick \
+  --sims 32 --cpus 100 --target-points 2500
+```
+
+After fetch, replot and compile locally:
+
+```bash
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<JOBID>
+cd PPDisentangle-output/sim_study/generated/robustness
+pdflatex -jobname=robustness '\def\robustnessstandalone{}\input{simulation_robustness_appendix.tex}'
+```
+
+Resume from one or more prior jobs without rerunning completed scenarios.
+Comma-separated basenames are searched in order and the replication count is
+validated before reuse. The production continuation below combines the 32
+standard scenarios from job 7671212 with the fixed Voronoi scenario from
+job 7718420, leaving only the nine structured scenarios:
+
+```bash
+PP_NESI_PUSH=1 bash inst/nesi/submit.sh sim_study \
+  --robustness --mode long \
+  --sims 32 --cpus 64 --time 24:00:00 \
+  --target-points 2500 --sem-inner 2000 --skip-ate-tau \
+  --resume-from robustness_7671212,robustness_7718420
+```
+
+If the prior job never wrote a manifest CSV, build one from the completed RDS
+files before a local replot:
+
+```bash
+Rscript inst/sim_study/build_manifest_from_rds.R robustness_<OLDJOB>
+Rscript inst/sim_study/sim_study_robustness.R --replot robustness_<OLDJOB>
+```
+
+Partial timing probe (subset only — not sufficient for the full PDF):
+
+```bash
+bash inst/sim_study/run_nesi.sh --robustness --mode quick \
+  --scenario-set pretreatment_assignment,snr_scale --target-points 2500 \
+  --sims 32 --cpus 100 --ate-workers 32 --skip-ate-tau --skip-structured
 ```
 
 ## OOM during ATE estimation
@@ -51,4 +314,4 @@ PP_LOG_MEMORY=1 bash inst/sim_study/run_nesi.sh --test
 PP_SKIP_CRAZY_PARAMS=1 bash inst/sim_study/run_nesi.sh --test
 ```
 
-Check `output/sim_study/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.
+Check `PPDisentangle-output/sim_study/<JOB_ID>.log` for `[CRAZY PARAMS]` and `[MEM ...]` lines.

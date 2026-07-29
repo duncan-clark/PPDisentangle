@@ -12,9 +12,21 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
                                   double t_max,
                                   double x_min, double x_max,
                                   double y_min, double y_max,
-                                  double t_trunc = -1.0) {
+                                  double t_trunc = -1.0,
+                                  int kernel_type = 0,
+                                  double cc = 1.0,
+                                  double p = 2.0,
+                                  int spatial_kernel_type = 0,
+                                  double spatial_q = 2.0,
+                                  double spatial_d = -1.0) {
 
   bool do_trunc = (t_trunc > 0.0);
+  bool power_law = (kernel_type == 1);
+  bool spatial_power_law = (spatial_kernel_type == 1);
+  if (cc <= 0.0) cc = 1.0;
+  if (p <= 1.0) p = 1.000001;
+  if (spatial_q <= 1.5) spatial_q = 1.500001;
+  if (spatial_d <= 0.0) spatial_power_law = false;
 
   std::vector<double> out_x;
   std::vector<double> out_y;
@@ -30,8 +42,34 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
   std::vector<double> q_y = as<std::vector<double>>(parent_y);
   std::vector<double> q_t = as<std::vector<double>>(parent_t);
 
-  // CDF at t_trunc for truncated exponential inverse-CDF sampling
-  double cdf_max = do_trunc ? (1.0 - std::exp(-beta * t_trunc)) : 0.0;
+  auto temporal_cdf = [&](double dt) {
+    if (dt <= 0.0) return 0.0;
+    if (power_law) {
+      return 1.0 - std::pow(1.0 + dt / cc, 1.0 - p);
+    }
+    return 1.0 - std::exp(-beta * dt);
+  };
+  auto temporal_quantile = [&](double u) {
+    if (u <= 0.0) return 0.0;
+    if (u >= 1.0) u = 1.0 - 1e-15;
+    if (power_law) {
+      return cc * (std::pow(1.0 - u, -1.0 / (p - 1.0)) - 1.0);
+    }
+    return -std::log(1.0 - u) / beta;
+  };
+  auto spatial_r2_quantile = [&](double u) {
+    if (!spatial_power_law) {
+      return R::rexp(1.0 / alpha);
+    }
+    if (u <= 0.0) return 0.0;
+    if (u >= 1.0) u = 1.0 - 1e-15;
+    return spatial_d * (std::pow(1.0 - u, -1.0 / (spatial_q - 1.0)) - 1.0);
+  };
+
+  // CDF normalisation for the triggering-time law. With truncation the
+  // temporal density is renormalised onto [0, t_trunc].
+  double cdf_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
+  if (cdf_norm < 1e-15) cdf_norm = 1e-15;
 
   size_t head = 0;
 
@@ -41,23 +79,26 @@ DataFrame sim_hawkes_children_cpp(NumericVector parent_x,
     double pt = q_t[head];
     head++;
 
-    int n_kids = R::rpois(K);
+    double lower_dt = t_min - pt;
+    if (lower_dt < 0.0) lower_dt = 0.0;
+    double upper_dt = t_max - pt;
+    if (do_trunc && upper_dt > t_trunc) upper_dt = t_trunc;
+    if (upper_dt <= lower_dt) continue;
+
+    double cdf_lower = temporal_cdf(lower_dt);
+    double cdf_upper = temporal_cdf(upper_dt);
+    double observable_mass = (cdf_upper - cdf_lower) / cdf_norm;
+    if (observable_mass <= 0.0) continue;
+
+    int n_kids = R::rpois(K * observable_mass);
     if(n_kids == 0) continue;
 
     for(int k = 0; k < n_kids; ++k) {
-      double dt;
-      if(do_trunc) {
-        double u = R::runif(0.0, 1.0);
-        dt = -std::log(1.0 - u * cdf_max) / beta;
-      } else {
-        dt = R::rexp(1.0/beta);
-      }
+      double u = R::runif(cdf_lower, cdf_upper);
+      double dt = temporal_quantile(u);
       double new_t = pt + dt;
 
-      if(new_t > t_max) continue;
-      if(new_t < t_min) continue;
-
-      double r2 = R::rexp(1.0/alpha);
+      double r2 = spatial_r2_quantile(R::runif(0.0, 1.0));
       double dist = std::sqrt(r2);
       double angle = R::runif(0.0, 2.0 * 3.14159265358979323846);
 
