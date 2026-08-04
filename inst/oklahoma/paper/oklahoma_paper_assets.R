@@ -265,6 +265,11 @@ theme_pub <- theme_minimal(base_size = 13) +
     strip.text = element_text(face = "bold")
   )
 
+boot_x_rng <- range(boot_df$ate_total_mean, finite = TRUE)
+if (!all(is.finite(boot_x_rng))) boot_x_rng <- c(-400, 700)
+boot_x_pad <- max(50, 0.08 * diff(boot_x_rng))
+boot_xlim <- c(min(-50, boot_x_rng[1] - boot_x_pad), max(50, boot_x_rng[2] + boot_x_pad))
+
 p_boot_hist <- ggplot(boot_df, aes(x = .data$ate_total_mean, fill = .data$model)) +
   geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
   geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.9) +
@@ -277,7 +282,7 @@ p_boot_hist <- ggplot(boot_df, aes(x = .data$ate_total_mean, fill = .data$model)
     y = "Count",
     fill = "Model"
   ) +
-  xlim(-400, 700) +
+  xlim(boot_xlim[1], boot_xlim[2]) +
   theme_ok_boot_hist
 
 p_boot_ecdf <- ggplot(boot_df, aes(x = .data$ate_total_mean, colour = .data$model)) +

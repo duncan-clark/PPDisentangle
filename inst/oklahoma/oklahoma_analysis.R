@@ -2930,17 +2930,29 @@ ate_F <- ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
 ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
 add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
 
-# Compute ATE/saved estimands for all KDE fix-profile pairs (C/D, E/F, G/H).
+# Keep kde_variant_fits$E/F$all_free$ate aligned with the canonical bivariate
+# estimands. fits_named$E/F are built from these lists, so a later marginal
+# overwrite would otherwise clobber ate_E/ate_F in report/paper outputs.
+if (!is.null(kde_variant_fits$E$all_free)) {
+  kde_variant_fits$E$all_free$ate <- ate_E
+  kde_variant_fits$E$all_free$marginals <- E_marginals
+}
+if (!is.null(kde_variant_fits$F$all_free)) {
+  kde_variant_fits$F$all_free$ate <- ate_F
+  kde_variant_fits$F$all_free$marginals <- F_marginals
+}
+
+# Compute ATE/saved estimands for remaining KDE fix-profile pairs (C/D, G/H).
 for (vid in names(kde_variant_specs)) {
+  if (identical(vid, "all_free")) next
   if (!is.null(kde_variant_fits$E[[vid]])) {
     p_e <- kde_variant_fits$E[[vid]]$params
     m_e <- extract_marginals(p_e)
     letter_e <- KDE_FIT_LETTERS[[vid]]$E
     kde_variant_fits$E[[vid]]$marginals <- m_e
-    kde_variant_fits$E[[vid]]$ate <- ate_estim_fast(
-      m_e$ctrl, m_e$treat, pp_post_bg,
-      label = sprintf("Fit %s (naive biv+KDE, %s)", letter_e, vid),
-      quiet = FALSE
+    kde_variant_fits$E[[vid]]$ate <- ate_biv_or_marginal(
+      p_e, m_e, pp_post_bg,
+      label = sprintf("Fit %s (naive biv+KDE, %s)", letter_e, vid)
     )
   }
   if (!is.null(kde_variant_fits$F[[vid]])) {
@@ -2955,10 +2967,9 @@ for (vid in names(kde_variant_specs)) {
     post_sem_local <- post_sem_local[post_sem_local$t >= 0, , drop = FALSE]
     letter_f <- KDE_FIT_LETTERS[[vid]]$F
     kde_variant_fits$F[[vid]]$marginals <- m_f
-    kde_variant_fits$F[[vid]]$ate <- ate_estim_fast(
-      m_f$ctrl, m_f$treat, post_sem_local,
-      label = sprintf("Fit %s (SEM biv+KDE, %s)", letter_f, vid),
-      quiet = FALSE
+    kde_variant_fits$F[[vid]]$ate <- ate_biv_or_marginal(
+      p_f, m_f, post_sem_local,
+      label = sprintf("Fit %s (SEM biv+KDE, %s)", letter_f, vid)
     )
   }
 }
@@ -3779,17 +3790,23 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) {
       return(list(ok = FALSE, rep = rep_id, msg = "ATE estimation failed"))
     }
+    # Bivariate ATE sets analytic=NULL; coerce missing scalars to length-1 NA
+    # so make_boot_block's data.frame() never sees 0-length columns.
+    eta_ctrl <- tryCatch(as.numeric(ate_obj$analytic$eta_ctrl)[1L], error = function(e) NA_real_)
+    eta_treat <- tryCatch(as.numeric(ate_obj$analytic$eta_treat)[1L], error = function(e) NA_real_)
+    if (length(eta_ctrl) != 1L || !is.finite(eta_ctrl)) eta_ctrl <- NA_real_
+    if (length(eta_treat) != 1L || !is.finite(eta_treat)) eta_treat <- NA_real_
     list(
       ok = TRUE,
-      rep = rep_id,
-      n_pre_sim = nrow(pre_df),
-      n_post_ctrl_sim = nrow(post_ctrl_df),
-      n_post_treat_sim = nrow(post_treat_df),
-      ate_total_mean = mean(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE),
-      ate_total_sd = stats::sd(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE),
-      ate_tile_mean = mean(ate_obj$all_nothing_sim$ATE, na.rm = TRUE),
-      eta_ctrl = ate_obj$analytic$eta_ctrl,
-      eta_treat = ate_obj$analytic$eta_treat,
+      rep = as.integer(rep_id)[1L],
+      n_pre_sim = as.integer(nrow(pre_df))[1L],
+      n_post_ctrl_sim = as.integer(nrow(post_ctrl_df))[1L],
+      n_post_treat_sim = as.integer(nrow(post_treat_df))[1L],
+      ate_total_mean = as.numeric(mean(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE))[1L],
+      ate_total_sd = as.numeric(stats::sd(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE))[1L],
+      ate_tile_mean = as.numeric(mean(ate_obj$all_nothing_sim$ATE, na.rm = TRUE))[1L],
+      eta_ctrl = eta_ctrl,
+      eta_treat = eta_treat,
       params = par_obj
     )
   }
@@ -3962,19 +3979,41 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     model_res <- Filter(Negate(is.null), model_res)
     ok <- Filter(function(x) isTRUE(x$ok), model_res)
     fail <- Filter(function(x) !isTRUE(x$ok), model_res)
+    scalar1 <- function(x, default = NA_real_) {
+      if (is.null(x) || length(x) < 1L) return(default)
+      out <- x[[1L]]
+      if (length(out) != 1L) out <- default
+      out
+    }
     rep_df <- if (length(ok) > 0) {
-      do.call(rbind, lapply(ok, function(z) data.frame(
-        rep = z$rep,
-        n_pre_sim = z$n_pre_sim,
-        n_post_ctrl_sim = z$n_post_ctrl_sim,
-        n_post_treat_sim = z$n_post_treat_sim,
-        ate_total_mean = z$ate_total_mean,
-        ate_total_sd = z$ate_total_sd,
-        ate_tile_mean = z$ate_tile_mean,
-        eta_ctrl = z$eta_ctrl,
-        eta_treat = z$eta_treat
-      )))
-    } else data.frame()
+      do.call(rbind, lapply(ok, function(z) {
+        data.frame(
+          rep = as.integer(scalar1(z$rep, NA_integer_)),
+          n_pre_sim = as.integer(scalar1(z$n_pre_sim, NA_integer_)),
+          n_post_ctrl_sim = as.integer(scalar1(z$n_post_ctrl_sim, NA_integer_)),
+          n_post_treat_sim = as.integer(scalar1(z$n_post_treat_sim, NA_integer_)),
+          ate_total_mean = as.numeric(scalar1(z$ate_total_mean, NA_real_)),
+          ate_total_sd = as.numeric(scalar1(z$ate_total_sd, NA_real_)),
+          ate_tile_mean = as.numeric(scalar1(z$ate_tile_mean, NA_real_)),
+          eta_ctrl = as.numeric(scalar1(z$eta_ctrl, NA_real_)),
+          eta_treat = as.numeric(scalar1(z$eta_treat, NA_real_)),
+          stringsAsFactors = FALSE
+        )
+      }))
+    } else {
+      data.frame(
+        rep = integer(),
+        n_pre_sim = integer(),
+        n_post_ctrl_sim = integer(),
+        n_post_treat_sim = integer(),
+        ate_total_mean = numeric(),
+        ate_total_sd = numeric(),
+        ate_tile_mean = numeric(),
+        eta_ctrl = numeric(),
+        eta_treat = numeric(),
+        stringsAsFactors = FALSE
+      )
+    }
     list(
       replicate_summary = rep_df,
       params = lapply(ok, function(z) z$params),
