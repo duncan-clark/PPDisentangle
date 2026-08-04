@@ -234,6 +234,9 @@ FIT_VARIABILITY_CORES_RAW <- Sys.getenv("OK_FIT_VARIABILITY_CORES", "")
 FIT_VARIABILITY_PATCH_FILE <- trimws(Sys.getenv("OK_FIT_VARIABILITY_PATCH_FILE", ""))
 FIT_VARIABILITY_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+BOOTSTRAP_PATCH_FILE <- trimws(Sys.getenv("OK_BOOTSTRAP_PATCH_FILE", ""))
+BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
@@ -377,6 +380,37 @@ if (isTRUE(FIT_VARIABILITY_ONLY)) {
   if (is.null(chk)) {
     stop("OK_FIT_VARIABILITY_ONLY: could not readRDS patch file: ", patch_check)
   }
+}
+if (isTRUE(BOOTSTRAP_ONLY) && isTRUE(FIT_VARIABILITY_ONLY)) {
+  stop("OK_BOOTSTRAP_ONLY and OK_FIT_VARIABILITY_ONLY cannot both be enabled.")
+}
+if (isTRUE(BOOTSTRAP_ONLY)) {
+  RUN_BOOTSTRAP_ATE <- TRUE
+  RUN_SENSITIVITY <- FALSE
+  RUN_FIT_VARIABILITY <- FALSE
+  if (!nzchar(BOOTSTRAP_PATCH_FILE)) {
+    stop("OK_BOOTSTRAP_ONLY=1 requires OK_BOOTSTRAP_PATCH_FILE (path to existing for_paper/oklahoma_results*.rds).")
+  }
+  boot_patch_check <- normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = FALSE)
+  if (!file.exists(boot_patch_check)) {
+    stop("OK_BOOTSTRAP_ONLY: patch file does not exist: ", boot_patch_check)
+  }
+  boot_chk <- tryCatch(readRDS(boot_patch_check), error = function(e) NULL)
+  if (is.null(boot_chk)) {
+    stop("OK_BOOTSTRAP_ONLY: could not readRDS patch file: ", boot_patch_check)
+  }
+  has_E <- !is.null(boot_chk$fits_named$E$params) || !is.null(boot_chk$fitE$params)
+  has_F <- !is.null(boot_chk$fits_named$F$params) || !is.null(boot_chk$fitF$params)
+  if (!isTRUE(has_E) || !isTRUE(has_F)) {
+    stop("OK_BOOTSTRAP_ONLY: patch RDS must contain fits_named$E/F$params (or fitE/fitF$params).")
+  }
+  if (BOOT_N_REPS < 1L) {
+    stop("OK_BOOTSTRAP_ONLY requires OK_BOOT_N_REPS >= 1.")
+  }
+  # Faster early KDE setup; main E/F params come from the patch.
+  KDE_VARIANT_MODE <- "single"
+  RUN_KDE_PROFILE_SWEEP <- FALSE
+  rm(boot_chk)
 }
 PARALLEL_BACKEND <- tolower(trimws(Sys.getenv(
   "OK_PARALLEL_BACKEND",
@@ -598,6 +632,12 @@ cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d\n",
 if (isTRUE(FIT_VARIABILITY_ONLY)) {
   cat(sprintf("Fit variability ONLY mode: will skip main county fits; patch into %s\n",
               FIT_VARIABILITY_PATCH_FILE))
+}
+if (isTRUE(BOOTSTRAP_ONLY)) {
+  cat(sprintf(
+    "Bootstrap ONLY mode: skip main county fits; hydrate E/F from %s; bivariate=%s contrast=%s reps=%d scope=%s\n",
+    BOOTSTRAP_PATCH_FILE, OK_ATE_BIVARIATE, OK_ATE_CONTRAST, BOOT_N_REPS, BOOT_REFIT_SCOPE
+  ))
 }
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
 sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
@@ -2043,7 +2083,7 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
   }
 }
 
-if (!isTRUE(FIT_VARIABILITY_ONLY)) {
+if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY)) {
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
 fit_jobs_all <- list(
   list(kind = "A_hom_naive", variant_id = NA_character_),
@@ -2993,7 +3033,48 @@ if (exists("t_ate_J", inherits = FALSE)) {
 }
 
 } else {
-  cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, I/J, partition sensitivities, main ATEs) ---\n")
+  if (isTRUE(BOOTSTRAP_ONLY)) {
+    cat("\n--- BOOTSTRAP_ONLY: skipped Steps 4-6 (county fits / main ATEs); hydrating E/F from patch ---\n")
+    boot_patch <- readRDS(normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = TRUE))
+    E_params <- if (!is.null(boot_patch$fits_named$E$params)) {
+      boot_patch$fits_named$E$params
+    } else {
+      boot_patch$fitE$params
+    }
+    F_params <- if (!is.null(boot_patch$fits_named$F$params)) {
+      boot_patch$fits_named$F$params
+    } else {
+      boot_patch$fitF$params
+    }
+    if (is.null(E_params) || is.null(F_params)) {
+      stop("BOOTSTRAP_ONLY: failed to hydrate E_params/F_params from patch.")
+    }
+    E_marginals <- extract_marginals(E_params)
+    F_marginals <- extract_marginals(F_params)
+    ate_E <- boot_patch$fits_named$E$ate
+    ate_F <- boot_patch$fits_named$F$ate
+    if (is.null(ate_E)) ate_E <- boot_patch$fitE$ate
+    if (is.null(ate_F)) ate_F <- boot_patch$fitF$ate
+    # Prefer archived pre50 seed params when present (exact match to original paper run).
+    pre50 <- boot_patch$control_snapshot_fits$pre50$params
+    if (!is.null(pre50)) {
+      PRE_CTRL_BOOT_PARAMS <- as.list(pre50)
+      cat("  Hydrated PRE_CTRL_BOOT_PARAMS from patch$control_snapshot_fits$pre50\n")
+    }
+    trunc_from_patch <- suppressWarnings(as.numeric(boot_patch$config$SEM_T_TRUNC_DAYS))
+    if (length(trunc_from_patch) == 1L && is.finite(trunc_from_patch) && trunc_from_patch > 0) {
+      SEM_T_TRUNC_DAYS <- trunc_from_patch
+      cat(sprintf("  Using SEM_T_TRUNC_DAYS=%.4f from patch config\n", SEM_T_TRUNC_DAYS))
+    }
+    cat(sprintf(
+      "  Hydrated E/F params for bivariate bootstrap (E ate_method=%s, F ate_method=%s)\n",
+      if (!is.null(ate_E$ate_method)) ate_E$ate_method else "NA",
+      if (!is.null(ate_F$ate_method)) ate_F$ate_method else "NA"
+    ))
+    rm(boot_patch)
+  } else {
+    cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, I/J, partition sensitivities, main ATEs) ---\n")
+  }
 }
 
 # ============================================================================
@@ -3241,7 +3322,13 @@ if (isTRUE(FIT_VARIABILITY_ONLY)) {
   quit(save = "no", status = 0)
 }
 
+if (isTRUE(BOOTSTRAP_ONLY)) {
+  ensure_ate_psock_pool()
+  cat("\n--- BOOTSTRAP_ONLY: skipping Step 6b/7 sensitivity checkpoints; jumping to Step 8 bootstrap ---\n")
+}
+
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
+if (!isTRUE(BOOTSTRAP_ONLY)) {
 cat("\n--- Step 6b checkpoint: saving pre-sensitivity results ---\n")
 pre_sens_saved_at <- as.character(Sys.time())
 fits_named_pre_sensitivity <- list(
@@ -3663,6 +3750,7 @@ saveRDS(results_pre_bootstrap, pre_bootstrap_out_file)
 cat(sprintf("Pre-bootstrap checkpoint saved to: %s\n", pre_bootstrap_out_file))
 rm(results_pre_bootstrap)
 invisible(gc(verbose = FALSE))
+} # !BOOTSTRAP_ONLY: skip sensitivity / pre-bootstrap checkpoints
 
 # Parametric bootstrap ATEs for the all-free KDE pair (E/F).
 bootstrap_ate <- NULL
@@ -4077,6 +4165,70 @@ if (is.finite(bootstrap_elapsed)) {
                  "requested but no eligible targets")
 } else {
   add_timing_row("bootstrap_ate_total", NA_real_, "skipped", "disabled")
+}
+
+if (isTRUE(BOOTSTRAP_ONLY)) {
+  if (is.null(bootstrap_ate)) {
+    stop("BOOTSTRAP_ONLY: bootstrap_ate is NULL after Step 8.")
+  }
+  patch_file <- normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = TRUE)
+  bak <- paste0(
+    tools::file_path_sans_ext(patch_file),
+    "_pre_biv_bootstrap_",
+    format(Sys.time(), "%Y%m%d%H%M%S"),
+    ".rds"
+  )
+  ok_bak <- file.copy(patch_file, bak, overwrite = FALSE)
+  cat(sprintf("BOOTSTRAP_ONLY backup of patch: %s (copied=%s)\n", bak, ok_bak))
+  patched <- readRDS(patch_file)
+  bootstrap_ate$note <- paste0(
+    "Parametric bootstrap under bivariate ", OK_ATE_CONTRAST,
+    " ATE; main E/F fits frozen from ", basename(patch_file), "."
+  )
+  bootstrap_ate$config$ate_bivariate <- isTRUE(OK_ATE_BIVARIATE)
+  bootstrap_ate$config$ate_contrast <- OK_ATE_CONTRAST
+  patched$bootstrap_ate <- bootstrap_ate
+  if (is.null(patched$config)) patched$config <- list()
+  patched$config$ATE_BIVARIATE <- isTRUE(OK_ATE_BIVARIATE)
+  patched$config$ATE_CONTRAST <- OK_ATE_CONTRAST
+  patched$config$ATE_N_SIMS <- ATE_N_SIMS
+  patched$config$BOOT_N_REPS <- BOOT_N_REPS
+  patched$config$BOOT_REFIT_SCOPE <- BOOT_REFIT_SCOPE
+  patched$config$BOOT_SEM_INNER_ITER <- BOOT_SEM_INNER_ITER
+  patched$config$BOOT_OUTER_CORES <- BOOT_OUTER_CORES
+  patched$config$BOOTSTRAP_ONLY <- TRUE
+  patched$metadata$bivariate_bootstrap <- list(
+    patched_at = as.character(Sys.time()),
+    source_patch = patch_file,
+    job_id = Sys.getenv("SLURM_JOB_ID", ""),
+    ate_method = paste0("bivariate_", OK_ATE_CONTRAST),
+    n_reps = BOOT_N_REPS,
+    refit_scope = BOOT_REFIT_SCOPE
+  )
+  saveRDS(patched, patch_file)
+  out_tagged <- file.path(OUT_DIR, add_file_tag("oklahoma_results.rds"))
+  saveRDS(patched, out_tagged)
+  # Canonical paper pointer when running on NeSI/local output tree.
+  for_paper_out <- file.path(OUT_DIR, "for_paper.rds")
+  saveRDS(patched, for_paper_out)
+  cat(sprintf("BOOTSTRAP_ONLY wrote bootstrap into:\n  %s\n  %s\n  %s\n",
+              patch_file, out_tagged, for_paper_out))
+  if (!is.null(bootstrap_ate$fit_E$replicate_summary) &&
+      nrow(bootstrap_ate$fit_E$replicate_summary) > 0) {
+    cat(sprintf("  E boot mean=%.1f sd=%.1f (n=%d)\n",
+                mean(bootstrap_ate$fit_E$replicate_summary$ate_total_mean, na.rm = TRUE),
+                stats::sd(bootstrap_ate$fit_E$replicate_summary$ate_total_mean, na.rm = TRUE),
+                nrow(bootstrap_ate$fit_E$replicate_summary)))
+  }
+  if (!is.null(bootstrap_ate$fit_F$replicate_summary) &&
+      nrow(bootstrap_ate$fit_F$replicate_summary) > 0) {
+    cat(sprintf("  F boot mean=%.1f sd=%.1f (n=%d)\n",
+                mean(bootstrap_ate$fit_F$replicate_summary$ate_total_mean, na.rm = TRUE),
+                stats::sd(bootstrap_ate$fit_F$replicate_summary$ate_total_mean, na.rm = TRUE),
+                nrow(bootstrap_ate$fit_F$replicate_summary)))
+  }
+  cat("\n=== BOOTSTRAP_ONLY: finished successfully ===\n")
+  quit(save = "no", status = 0)
 }
 
 # Sensitivity ATE payloads are already computed in Step 6a so they are
