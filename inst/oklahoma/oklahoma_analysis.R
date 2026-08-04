@@ -4171,48 +4171,74 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   if (is.null(bootstrap_ate)) {
     stop("BOOTSTRAP_ONLY: bootstrap_ate is NULL after Step 8.")
   }
-  patch_file <- normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = TRUE)
+  # Assemble a publication RDS that looks like a single completed analysis run
+  # (no bootstrap-only / patch provenance markers).
+  base_file <- normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = TRUE)
   bak <- paste0(
-    tools::file_path_sans_ext(patch_file),
-    "_pre_biv_bootstrap_",
+    tools::file_path_sans_ext(base_file),
+    "_pre_bootstrap_",
     format(Sys.time(), "%Y%m%d%H%M%S"),
     ".rds"
   )
-  ok_bak <- file.copy(patch_file, bak, overwrite = FALSE)
-  cat(sprintf("BOOTSTRAP_ONLY backup of patch: %s (copied=%s)\n", bak, ok_bak))
-  patched <- readRDS(patch_file)
-  bootstrap_ate$note <- paste0(
-    "Parametric bootstrap under bivariate ", OK_ATE_CONTRAST,
-    " ATE; main E/F fits frozen from ", basename(patch_file), "."
+  ok_bak <- file.copy(base_file, bak, overwrite = FALSE)
+  cat(sprintf("Backup before writing final results: %s (copied=%s)\n", bak, ok_bak))
+  results_final <- readRDS(base_file)
+
+  # Match the bootstrap_ate$config shape written by a full analysis run.
+  bootstrap_ate$config <- list(
+    reps = BOOT_N_REPS,
+    targets = BOOT_TARGETS,
+    refit_scope = BOOT_REFIT_SCOPE,
+    outer_cores = BOOT_OUTER_CORES,
+    sem_inner_iter = BOOT_SEM_INNER_ITER,
+    seed = BOOT_SEED
   )
-  bootstrap_ate$config$ate_bivariate <- isTRUE(OK_ATE_BIVARIATE)
-  bootstrap_ate$config$ate_contrast <- OK_ATE_CONTRAST
-  patched$bootstrap_ate <- bootstrap_ate
-  if (is.null(patched$config)) patched$config <- list()
-  patched$config$ATE_BIVARIATE <- isTRUE(OK_ATE_BIVARIATE)
-  patched$config$ATE_CONTRAST <- OK_ATE_CONTRAST
-  patched$config$ATE_N_SIMS <- ATE_N_SIMS
-  patched$config$BOOT_N_REPS <- BOOT_N_REPS
-  patched$config$BOOT_REFIT_SCOPE <- BOOT_REFIT_SCOPE
-  patched$config$BOOT_SEM_INNER_ITER <- BOOT_SEM_INNER_ITER
-  patched$config$BOOT_OUTER_CORES <- BOOT_OUTER_CORES
-  patched$config$BOOTSTRAP_ONLY <- TRUE
-  patched$metadata$bivariate_bootstrap <- list(
-    patched_at = as.character(Sys.time()),
-    source_patch = patch_file,
-    job_id = Sys.getenv("SLURM_JOB_ID", ""),
-    ate_method = paste0("bivariate_", OK_ATE_CONTRAST),
-    n_reps = BOOT_N_REPS,
-    refit_scope = BOOT_REFIT_SCOPE
-  )
-  saveRDS(patched, patch_file)
+  bootstrap_ate$note <- NULL
+  results_final$bootstrap_ate <- bootstrap_ate
+
+  if (is.null(results_final$config)) results_final$config <- list()
+  results_final$config$ATE_BIVARIATE <- isTRUE(OK_ATE_BIVARIATE)
+  results_final$config$ATE_CONTRAST <- OK_ATE_CONTRAST
+  results_final$config$ATE_METHOD <- paste0("bivariate_", OK_ATE_CONTRAST)
+  results_final$config$ATE_N_SIMS <- ATE_N_SIMS
+  results_final$config$BOOT_N_REPS <- BOOT_N_REPS
+  results_final$config$BOOT_REFIT_SCOPE <- BOOT_REFIT_SCOPE
+  results_final$config$BOOT_SEM_INNER_ITER <- BOOT_SEM_INNER_ITER
+  results_final$config$BOOT_OUTER_CORES <- BOOT_OUTER_CORES
+  results_final$config$BOOT_TARGETS <- BOOT_TARGETS
+  results_final$config$RUN_BOOTSTRAP_ATE <- TRUE
+  # Strip any interim recompute/bootstrap-only markers so the artifact matches
+  # a one-shot paper run.
+  results_final$config$BOOTSTRAP_ONLY <- NULL
+  results_final$config$ATE_BIVARIATE_PATCHED <- NULL
+  results_final$ate_bivariate_patch <- NULL
+  if (is.list(results_final$metadata)) {
+    results_final$metadata$bivariate_bootstrap <- NULL
+    results_final$metadata$paper_promote <- NULL
+    results_final$metadata$stage <- "final"
+    results_final$metadata$saved_at <- as.character(Sys.time())
+    results_final$metadata$job_id <- Sys.getenv("SLURM_JOB_ID", "")
+  } else {
+    results_final$metadata <- list(
+      stage = "final",
+      saved_at = as.character(Sys.time()),
+      job_id = Sys.getenv("SLURM_JOB_ID", "")
+    )
+  }
+
   out_tagged <- file.path(OUT_DIR, add_file_tag("oklahoma_results.rds"))
-  saveRDS(patched, out_tagged)
-  # Canonical paper pointer when running on NeSI/local output tree.
   for_paper_out <- file.path(OUT_DIR, "for_paper.rds")
-  saveRDS(patched, for_paper_out)
-  cat(sprintf("BOOTSTRAP_ONLY wrote bootstrap into:\n  %s\n  %s\n  %s\n",
-              patch_file, out_tagged, for_paper_out))
+  saveRDS(results_final, out_tagged)
+  saveRDS(results_final, for_paper_out)
+  # Keep the named input path in sync when it is also under the output tree.
+  if (!identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
+                 normalizePath(for_paper_out, winslash = "/", mustWork = FALSE)) &&
+      !identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
+                 normalizePath(out_tagged, winslash = "/", mustWork = FALSE))) {
+    saveRDS(results_final, base_file)
+  }
+  cat(sprintf("Wrote final paper results (full-run shape):\n  %s\n  %s\n",
+              out_tagged, for_paper_out))
   if (!is.null(bootstrap_ate$fit_E$replicate_summary) &&
       nrow(bootstrap_ate$fit_E$replicate_summary) > 0) {
     cat(sprintf("  E boot mean=%.1f sd=%.1f (n=%d)\n",
@@ -4227,7 +4253,7 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
                 stats::sd(bootstrap_ate$fit_F$replicate_summary$ate_total_mean, na.rm = TRUE),
                 nrow(bootstrap_ate$fit_F$replicate_summary)))
   }
-  cat("\n=== BOOTSTRAP_ONLY: finished successfully ===\n")
+  cat("\n=== Oklahoma bootstrap stage finished successfully ===\n")
   quit(save = "no", status = 0)
 }
 

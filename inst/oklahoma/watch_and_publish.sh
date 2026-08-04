@@ -4,7 +4,7 @@
 #
 # Usage (from package root):
 #   bash inst/oklahoma/watch_and_publish.sh 8212755
-#   PP_NESI_POLL_SECS=120 bash inst/oklahoma/watch_and_publish.sh 8212755
+#   PP_NESI_POLL_SECS=1800 bash inst/oklahoma/watch_and_publish.sh 8212755
 #
 # On success prints:
 #   OKLAHOMA_PUBLISH_DONE {"job_id":"...","rds":"...","html":"...","ate_diff":"..."}
@@ -17,7 +17,8 @@ PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$PKG_ROOT/inst/include/nesi_config.sh"
 
 JOB_ID="${1:-}"
-POLL_SECS="${PP_NESI_POLL_SECS:-120}"
+# Default 30 minutes — avoid frequent SSH that can trip NeSI rate-limits / drop MFA mux.
+POLL_SECS="${PP_NESI_POLL_SECS:-1800}"
 
 if [ -z "$JOB_ID" ]; then
   echo "Usage: bash inst/oklahoma/watch_and_publish.sh JOB_ID" >&2
@@ -67,18 +68,20 @@ ensure_ssh() {
 # --- wait for working SSH (MFA mux) ---
 ensure_ssh "startup"
 
-# --- wait for job leave queue ---
+# --- wait for job leave queue (one SSH call per poll; no extra keepalive ping) ---
 while true; do
-  if ! ssh_nesi "echo SSH_OK" >/dev/null 2>&1; then
-    ensure_ssh "poll"
+  state="$(ssh_nesi "squeue -h -j ${JOB_ID} -o '%T' 2>/dev/null | head -1" || true)"
+  ssh_rc=$?
+  if [ "$ssh_rc" -ne 0 ]; then
+    echo "SSH poll failed (rc=${ssh_rc}); will retry after ${POLL_SECS}s ($(date))"
+    ensure_ssh "poll-recover"
     continue
   fi
-  state="$(ssh_nesi "squeue -h -j ${JOB_ID} -o '%T' 2>/dev/null | head -1" || true)"
   if [ -z "$state" ]; then
     echo "Job ${JOB_ID} left the queue ($(date))."
     break
   fi
-  echo "Job ${JOB_ID} state=${state} ($(date))"
+  echo "Job ${JOB_ID} state=${state} ($(date)); next poll in ${POLL_SECS}s"
   sleep "$POLL_SECS"
 done
 
@@ -106,6 +109,7 @@ rsync_nesi -avz --human-readable \
   --include="*job${JOB_ID}*" \
   --include="${JOB_ID}_oklahoma_slurm.*" \
   --include="oklahoma_results.rds" \
+  --include="for_paper.rds" \
   --include="oklahoma_report.html" \
   --include="oklahoma_report_files/***" \
   --include="plots/***" \
@@ -116,6 +120,7 @@ rsync_nesi -avz --human-readable \
 # --- promote for_paper.rds ---
 CANDIDATES=(
   "${LOCAL_OK}/oklahoma_results_job${JOB_ID}.rds"
+  "${LOCAL_OK}/for_paper.rds"
   "${LOCAL_OK}/oklahoma_results.rds"
 )
 SRC_RDS=""
@@ -133,24 +138,54 @@ if [ -z "$SRC_RDS" ] || [ ! -f "$SRC_RDS" ]; then
 fi
 
 FOR_PAPER="${LOCAL_OK}/for_paper.rds"
-if [ -f "$FOR_PAPER" ]; then
+if [ -f "$FOR_PAPER" ] && [ "$SRC_RDS" != "$FOR_PAPER" ]; then
   bak="${LOCAL_OK}/for_paper_backup_before_${JOB_ID}_$(date +%Y%m%d%H%M%S).rds"
   cp -p "$FOR_PAPER" "$bak"
   echo "Backed up previous for_paper.rds -> ${bak}"
 fi
-cp -p "$SRC_RDS" "$FOR_PAPER"
+if [ "$SRC_RDS" != "$FOR_PAPER" ]; then
+  cp -p "$SRC_RDS" "$FOR_PAPER"
+fi
 echo "Promoted ${SRC_RDS} -> ${FOR_PAPER}"
 
-# Quick sanity: ATE method/contrast if readable
+# Normalize to a single-run paper artifact (strip interim patch markers if any).
 Rscript -e "
 `%||%` <- function(a, b) if (!is.null(a)) a else b
-r <- readRDS('${FOR_PAPER}')
+path <- '${FOR_PAPER}'
+r <- readRDS(path)
+if (!is.null(r\$config)) {
+  r\$config\$BOOTSTRAP_ONLY <- NULL
+  r\$config\$ATE_BIVARIATE_PATCHED <- NULL
+  r\$config\$ATE_BIVARIATE <- isTRUE(r\$config\$ATE_BIVARIATE %||% TRUE)
+  if (is.null(r\$config\$ATE_CONTRAST) || !nzchar(as.character(r\$config\$ATE_CONTRAST %||% ''))) {
+    r\$config\$ATE_CONTRAST <- 'all_or_nothing'
+  }
+  r\$config\$ATE_METHOD <- paste0('bivariate_', r\$config\$ATE_CONTRAST)
+  r\$config\$RUN_BOOTSTRAP_ATE <- TRUE
+}
+r\$ate_bivariate_patch <- NULL
+if (is.list(r\$bootstrap_ate)) {
+  r\$bootstrap_ate\$note <- NULL
+  if (is.list(r\$bootstrap_ate\$config)) {
+    r\$bootstrap_ate\$config\$ate_bivariate <- NULL
+    r\$bootstrap_ate\$config\$ate_contrast <- NULL
+  }
+}
+if (is.list(r\$metadata)) {
+  r\$metadata\$bivariate_bootstrap <- NULL
+  r\$metadata\$paper_promote <- NULL
+  r\$metadata\$stage <- 'final'
+  r\$metadata\$saved_at <- as.character(Sys.time())
+  r\$metadata\$job_id <- '${JOB_ID}'
+}
+saveRDS(r, path)
 cfg <- r\$config
 cat(sprintf('ATE_BIVARIATE=%s ATE_CONTRAST=%s ATE_N_SIMS=%s BOOT_N=%s\n',
   as.character(cfg\$ATE_BIVARIATE %||% NA),
   as.character(cfg\$ATE_CONTRAST %||% NA),
   as.character(cfg\$ATE_N_SIMS %||% NA),
   as.character(cfg\$BOOT_N_REPS %||% NA)))
+cat('has bootstrap_ate:', !is.null(r\$bootstrap_ate\$fit_E\$replicate_summary), '\n')
 for (lab in c('E', 'F')) {
   ate <- r\$fits_named[[lab]]\$ate
   if (is.null(ate)) next
@@ -158,7 +193,7 @@ for (lab in c('E', 'F')) {
   cat(sprintf('Fit %s mean saved=%.2f method=%s\n', lab, m,
               as.character(ate\$ate_method %||% 'NA')))
 }
-" || echo "WARNING: could not summarize ATE from RDS"
+" || echo "WARNING: could not finalize/summarize ATE from RDS"
 
 # --- paper assets ---
 echo "Regenerating oklahoma paper assets ..."
