@@ -45,13 +45,16 @@ REPO_ROOT <- if (basename(SCRIPT_DIR) == "oklahoma" &&
 } else {
   normalizePath(SCRIPT_DIR, winslash = "/", mustWork = FALSE)
 }
-if (!requireNamespace("PPDisentangle", quietly = TRUE)) {
-  if (!requireNamespace("pkgload", quietly = TRUE)) {
-    stop("PPDisentangle is not installed and pkgload is unavailable.")
-  }
+# Prefer the local package source so report rendering matches the repo
+# (installed PPDisentangle can lag behind and miss helpers like pp_output_path).
+if (file.exists(file.path(REPO_ROOT, "DESCRIPTION")) &&
+    requireNamespace("pkgload", quietly = TRUE)) {
   pkgload::load_all(REPO_ROOT, quiet = TRUE, export_all = FALSE, helpers = FALSE, attach_testthat = FALSE)
+} else if (requireNamespace("PPDisentangle", quietly = TRUE)) {
+  library(PPDisentangle)
+} else {
+  stop("PPDisentangle is not available via local source or installed package.")
 }
-library(PPDisentangle)
 library(spatstat)
 library(sf)
 library(tigris)
@@ -68,7 +71,7 @@ knitr::opts_chunk$set(fig.align = "center", out.width = "100%")
 DATA_DIR <- file.path(SCRIPT_DIR,
                        "oklahoma_induced_seismicity_data_regional20150318")
 candidate_out_dirs <- unique(c(
-  PPDisentangle::pp_output_path("oklahoma", repo_root = find_repo_root(SCRIPT_DIR))
+  PPDisentangle::pp_output_path("oklahoma", repo_root = REPO_ROOT)
 ))
 explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
 if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {
@@ -2119,6 +2122,8 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 #| label: fig-ate-bootstrap-cd
 #| fig-cap: "Bias-corrected bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to observed ATE)."
 #| fig-height: 4
+# If results were patched with bivariate observed ATEs, centers use those means while
+# bootstrap replicate shape remains from the archived (marginal) bootstrap run.
 if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
     nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
     "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {
@@ -2170,10 +2175,21 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
       scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(boot_naive_label, boot_sem_label))) +
       labs(x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
            y = "Bootstrap replicate count",
-           title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")")) +
+           title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")"),
+           subtitle = if (!is.null(results$ate_bivariate_patch)) {
+             ctr <- results$ate_bivariate_patch$contrast
+             if (is.null(ctr)) ctr <- "observed"
+             sprintf(
+               "Centers: bivariate/%s ATE (E=%.1f, F=%.1f); bootstrap shape from archived run",
+               ctr, naive_obs_mean, sem_obs_mean
+             )
+           } else {
+             NULL
+           }) +
       theme_minimal(base_size = 13) +
       theme(legend.position = "top",
-            plot.title = element_text(hjust = 0.5, face = "bold"))
+            plot.title = element_text(hjust = 0.5, face = "bold"),
+            plot.subtitle = element_text(hjust = 0.5, size = 10))
   } else {
     plot.new()
     text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s replicate means are present but non-finite.", boot_pair_label))

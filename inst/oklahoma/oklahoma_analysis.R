@@ -290,6 +290,17 @@ OK_ATE_USE_CRN <- tolower(Sys.getenv("OK_ATE_USE_CRN", "true")) %in% c("1", "tru
 OK_ATE_CRN_PAIR <- tolower(Sys.getenv("OK_ATE_CRN_PAIR", "true")) %in% c("1", "true", "yes", "y")
 OK_ATE_CONDITIONAL_ON_PRE <- tolower(Sys.getenv("OK_ATE_CONDITIONAL_ON_PRE", "true")) %in% c("1", "true", "yes", "y")
 OK_ATE_CRN_BASE <- suppressWarnings(as.integer(Sys.getenv("OK_ATE_CRN_BASE", "")))
+# Full bivariate forward sim for ATE (default: all-control vs all-treated).
+# OK_ATE_CONTRAST=all_or_nothing|observed
+# Set OK_ATE_BIVARIATE=false only for legacy marginal/univariate ATE sims.
+OK_ATE_BIVARIATE <- tolower(Sys.getenv("OK_ATE_BIVARIATE", "true")) %in% c("1", "true", "yes", "y")
+OK_ATE_CONTRAST <- tolower(trimws(Sys.getenv("OK_ATE_CONTRAST", "all_or_nothing")))
+if (!OK_ATE_CONTRAST %in% c("all_or_nothing", "observed")) {
+  stop("OK_ATE_CONTRAST must be 'all_or_nothing' or 'observed', got: ", OK_ATE_CONTRAST)
+}
+source(file.path(SCRIPT_DIR, "ate_bivariate.R"), local = FALSE)
+cat(sprintf("ATE evaluation: bivariate=%s contrast=%s\n",
+            OK_ATE_BIVARIATE, OK_ATE_CONTRAST))
 BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_BOOT_BRANCHING_MAX", "0.98")))
 if (!is.finite(BOOT_BRANCHING_MAX) || is.na(BOOT_BRANCHING_MAX) || BOOT_BRANCHING_MAX <= 0) {
   BOOT_BRANCHING_MAX <- 0.98
@@ -2867,24 +2878,55 @@ I_marginals <- extract_marginals_indep(I_params)
 J_marginals <- extract_marginals_indep(J_params)
 
 ensure_ate_psock_pool()
+ate_crn_base_seed <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
+  as.integer(OK_ATE_CRN_BASE)
+} else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+  as.integer(100000L + 1000L * OK_GLOBAL_SEED)
+} else {
+  100000L
+}
+ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
+  if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
+    ate_estim_bivariate(
+      biv_params = biv_params,
+      windowT = windowT_ate,
+      windowS = win_km,
+      state_spaces_obs = state_spaces,
+      label = label,
+      n_sims = ATE_N_SIMS,
+      m0 = ETAS_M0,
+      beta_gr = BETA_GR,
+      filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+      t_trunc = SEM_T_TRUNC_DAYS,
+      n_tiles = partition$n,
+      crn_base_seed = ate_crn_base_seed,
+      use_crn = OK_ATE_USE_CRN,
+      crn_pair = OK_ATE_CRN_PAIR,
+      quiet = FALSE,
+      contrast = OK_ATE_CONTRAST
+    )
+  } else {
+    ate_estim_fast(marg$ctrl, marg$treat, observed_data, label)
+  }
+}
 t_ate_B <- proc.time()[["elapsed"]]
-ate_B <- ate_estim_fast(B_marginals$ctrl, B_marginals$treat, pp_post,
-                        "Fit A (naive bivariate)")
+ate_B <- ate_biv_or_marginal(B_params, B_marginals, pp_post,
+                             "Fit B (naive bivariate)")
 ate_B_elapsed <- proc.time()[["elapsed"]] - t_ate_B
 add_timing_row("ate_B", ate_B_elapsed, if (!is.null(ate_B)) "ok" else "failed")
 t_ate_D <- proc.time()[["elapsed"]]
-ate_D <- ate_estim_fast(D_marginals$ctrl, D_marginals$treat, pp_post_sem_D,
-                        "Fit B (SEM bivariate)")
+ate_D <- ate_biv_or_marginal(D_params, D_marginals, pp_post_sem_D,
+                             "Fit D (SEM bivariate)")
 ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
 add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
 t_ate_E <- proc.time()[["elapsed"]]
-ate_E <- ate_estim_fast(E_marginals$ctrl, E_marginals$treat, pp_post_bg,
-                        "Fit C (naive biv+KDE, control-only fixed)")
+ate_E <- ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
+                             "Fit E (naive biv+KDE, all-free)")
 ate_E_elapsed <- proc.time()[["elapsed"]] - t_ate_E
 add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else "failed")
 t_ate_F <- proc.time()[["elapsed"]]
-ate_F <- ate_estim_fast(F_marginals$ctrl, F_marginals$treat, pp_post_sem_F,
-                        "Fit D (SEM biv+KDE, control-only fixed)")
+ate_F <- ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
+                             "Fit F (SEM biv+KDE, all-free)")
 ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
 add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
 
@@ -3321,6 +3363,7 @@ results_pre_sensitivity <- list(
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
+    ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
     BOOT_TARGETS = BOOT_TARGETS,
@@ -3578,6 +3621,7 @@ results_pre_bootstrap <- list(
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
+    ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
     BOOT_TARGETS = BOOT_TARGETS,
@@ -3783,16 +3827,37 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           if (!is.null(fit_c_boot) && !is.null(fit_c_boot$par)) c_params_boot <- fit_c_boot$par
         }
         c_marg_boot <- extract_marginals(c_params_boot)
-        ate_c_boot <- ate_estim_fast(
-          c_marg_boot$ctrl, c_marg_boot$treat, sim_C$pp_post_bg_sim,
-          label = sprintf("Boot E #%d", rep_id),
-          filtration_history = sim_C$pre_df,
-          crn_base_seed = boot_ate_crn_seed,
-          phase = "bootstrap",
-          n_tiles_used = partition$n,
-          treated_idx_used = treated_idx,
-          quiet = TRUE
-        )
+        ate_c_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          ate_estim_bivariate(
+            biv_params = c_params_boot,
+            windowT = windowT_ate,
+            windowS = win_km,
+            state_spaces_obs = state_spaces,
+            label = sprintf("Boot E #%d", rep_id),
+            n_sims = ATE_N_SIMS,
+            m0 = ETAS_M0,
+            beta_gr = BETA_GR,
+            filtration_history = sim_C$pre_df,
+            t_trunc = SEM_T_TRUNC_DAYS,
+            n_tiles = partition$n,
+            crn_base_seed = boot_ate_crn_seed,
+            use_crn = OK_ATE_USE_CRN,
+            crn_pair = OK_ATE_CRN_PAIR,
+            quiet = TRUE,
+            contrast = OK_ATE_CONTRAST
+          )
+        } else {
+          ate_estim_fast(
+            c_marg_boot$ctrl, c_marg_boot$treat, sim_C$pp_post_bg_sim,
+            label = sprintf("Boot E #%d", rep_id),
+            filtration_history = sim_C$pre_df,
+            crn_base_seed = boot_ate_crn_seed,
+            phase = "bootstrap",
+            n_tiles_used = partition$n,
+            treated_idx_used = treated_idx,
+            quiet = TRUE
+          )
+        }
         summarize_boot(ate_c_boot, rep_id, sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df, c_params_boot)
       }, error = function(e) {
         list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap E failed: ", conditionMessage(e)))
@@ -3826,16 +3891,37 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           }
         }
         d_marg_boot <- extract_marginals(d_params_boot)
-        ate_d_boot <- ate_estim_fast(
-          d_marg_boot$ctrl, d_marg_boot$treat, pp_post_d_boot,
-          label = sprintf("Boot F #%d", rep_id),
-          filtration_history = sim_D$pre_df,
-          crn_base_seed = boot_ate_crn_seed,
-          phase = "bootstrap",
-          n_tiles_used = partition$n,
-          treated_idx_used = treated_idx,
-          quiet = TRUE
-        )
+        ate_d_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          ate_estim_bivariate(
+            biv_params = d_params_boot,
+            windowT = windowT_ate,
+            windowS = win_km,
+            state_spaces_obs = state_spaces,
+            label = sprintf("Boot F #%d", rep_id),
+            n_sims = ATE_N_SIMS,
+            m0 = ETAS_M0,
+            beta_gr = BETA_GR,
+            filtration_history = sim_D$pre_df,
+            t_trunc = SEM_T_TRUNC_DAYS,
+            n_tiles = partition$n,
+            crn_base_seed = boot_ate_crn_seed,
+            use_crn = OK_ATE_USE_CRN,
+            crn_pair = OK_ATE_CRN_PAIR,
+            quiet = TRUE,
+            contrast = OK_ATE_CONTRAST
+          )
+        } else {
+          ate_estim_fast(
+            d_marg_boot$ctrl, d_marg_boot$treat, pp_post_d_boot,
+            label = sprintf("Boot F #%d", rep_id),
+            filtration_history = sim_D$pre_df,
+            crn_base_seed = boot_ate_crn_seed,
+            phase = "bootstrap",
+            n_tiles_used = partition$n,
+            treated_idx_used = treated_idx,
+            quiet = TRUE
+          )
+        }
         summarize_boot(ate_d_boot, rep_id, sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df, d_params_boot)
       }, error = function(e) {
         list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap F failed: ", conditionMessage(e)))
@@ -4192,6 +4278,7 @@ results <- list(
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
+    ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
     RUN_BOOTSTRAP_ATE = RUN_BOOTSTRAP_ATE,
     BOOT_N_REPS = BOOT_N_REPS,
     BOOT_TARGETS = BOOT_TARGETS,

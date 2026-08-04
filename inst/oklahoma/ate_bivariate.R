@@ -1,0 +1,232 @@
+# Bivariate ATE via forward simulation of the full 2x2 ETAS law (cross-excitation on).
+#
+# contrast:
+#   "observed"       — control-everywhere vs observed mixed allocation
+#   "all_or_nothing" — control-everywhere vs treated-everywhere
+#                      (same AoN estimand as the original marginal code, but bivariate)
+
+ate_estim_bivariate <- function(
+    biv_params,
+    windowT,
+    windowS,
+    state_spaces_obs,
+    label = "bivariate",
+    n_sims = 500L,
+    m0 = 2.5,
+    beta_gr = 2.3,
+    filtration_history = NULL,
+    t_trunc = NULL,
+    n_tiles = 1L,
+    crn_base_seed = 100000L,
+    use_crn = TRUE,
+    crn_pair = TRUE,
+    quiet = FALSE,
+    contrast = c("all_or_nothing", "observed")
+) {
+  contrast <- match.arg(contrast)
+  if (is.null(biv_params)) stop("biv_params is NULL")
+  pv <- unlist(biv_params)
+  needed <- c(
+    "mu_0", "mu_1", "A_00", "A_11", "A_01", "A_10",
+    "alpha_m_00", "alpha_m_11", "alpha_m_01", "alpha_m_10",
+    "c", "p", "D", "gamma", "q"
+  )
+  miss <- setdiff(needed, names(pv))
+  if (length(miss) > 0L) {
+    stop("Missing bivariate params: ", paste(miss, collapse = ", "))
+  }
+  params <- as.list(pv[needed])
+
+  if (is.null(filtration_history)) {
+    pre_history <- data.frame(
+      x = numeric(0), y = numeric(0), t = numeric(0),
+      mag = numeric(0), process_id = integer(0)
+    )
+  } else {
+    fh <- as.data.frame(filtration_history)
+    pre_history <- data.frame(
+      x = fh$x, y = fh$y, t = fh$t,
+      mag = if ("mag" %in% names(fh)) fh$mag else rep(m0, nrow(fh)),
+      process_id = if ("process_id" %in% names(fh)) {
+        as.integer(fh$process_id)
+      } else if ("inferred_process" %in% names(fh)) {
+        as.integer(fh$inferred_process == "treated")
+      } else {
+        # Pre-treatment history is control-component by convention.
+        rep(0L, nrow(fh))
+      }
+    )
+  }
+
+  # Control everywhere: immigrants only on full window; treated support empty.
+  # Right-hand regime: observed mixed supports, or treated-everywhere.
+  # Triggering (incl. cross) unrestricted in both cases.
+  ss_all_control <- list(control = windowS, treated = NULL)
+  ss_right <- if (identical(contrast, "all_or_nothing")) {
+    list(control = NULL, treated = windowS)
+  } else {
+    if (is.null(state_spaces_obs)) {
+      stop("state_spaces_obs required for contrast='observed'")
+    }
+    list(
+      control = state_spaces_obs$control,
+      treated = state_spaces_obs$treated
+    )
+  }
+  right_lab <- if (identical(contrast, "all_or_nothing")) "all-treated" else "obs-regime"
+
+  sim_one <- function(ss) {
+    sim_etas_bivariate(
+      params = params,
+      windowT = windowT,
+      windowS = windowS,
+      state_spaces = ss,
+      m0 = m0,
+      beta_gr = beta_gr,
+      filtration = pre_history,
+      t_trunc = t_trunc
+    )
+  }
+
+  if (!isTRUE(quiet)) {
+    cat(sprintf(
+      "  [ATE:bivariate/%s] %s: sims=%d window=[%.1f,%.1f] t_trunc=%s\n",
+      contrast, label, as.integer(n_sims), windowT[1], windowT[2],
+      if (is.null(t_trunc)) "NULL" else format(t_trunc, digits = 4)
+    ))
+  }
+
+  run_one <- function(s) {
+    s_int <- as.integer(s)
+    if (isTRUE(use_crn)) {
+      seed_s <- as.integer(crn_base_seed + s_int)
+      if (isTRUE(crn_pair)) {
+        set.seed(seed_s)
+        c_sim <- sim_one(ss_all_control)
+        set.seed(seed_s)
+        t_sim <- sim_one(ss_right)
+      } else {
+        set.seed(seed_s)
+        c_sim <- sim_one(ss_all_control)
+        set.seed(as.integer(seed_s + 1000000L))
+        t_sim <- sim_one(ss_right)
+      }
+    } else {
+      c_sim <- sim_one(ss_all_control)
+      t_sim <- sim_one(ss_right)
+    }
+    c(c_count = nrow(c_sim), t_count = nrow(t_sim))
+  }
+
+  sim_results <- lapply(seq_len(as.integer(n_sims)), run_one)
+  c_counts <- vapply(sim_results, function(z) as.numeric(z[["c_count"]]), numeric(1))
+  t_counts <- vapply(sim_results, function(z) as.numeric(z[["t_count"]]), numeric(1))
+  total_saved <- c_counts - t_counts
+
+  if (!isTRUE(quiet)) {
+    cat(sprintf(
+      "    %s: ctrl mean=%.1f | %s mean=%.1f | saved mean=%.1f\n",
+      label,
+      mean(c_counts, na.rm = TRUE),
+      right_lab,
+      mean(t_counts, na.rm = TRUE),
+      mean(total_saved, na.rm = TRUE)
+    ))
+  }
+
+  n_tiles_used <- max(1L, as.integer(n_tiles))
+  all_nothing_sim <- data.frame(
+    c_total = c_counts,
+    t_total = t_counts,
+    total_saved = total_saved,
+    total_effect = total_saved,
+    c_mean = c_counts / n_tiles_used,
+    t_mean = t_counts / n_tiles_used,
+    saved_per_tile = total_saved / n_tiles_used,
+    ATE = total_saved / n_tiles_used
+  )
+
+  list(
+    all_nothing_sim = all_nothing_sim,
+    saved_naive = NA_real_,
+    saved_spillover = NA_real_,
+    total_saved_naive = NA_real_,
+    total_saved_spillover = NA_real_,
+    ATE_naive = NA_real_,
+    ATE_spillover = NA_real_,
+    total_naive = NA_real_,
+    total_spillover = NA_real_,
+    n_tiles_used = n_tiles_used,
+    treated_pp = NULL,
+    control_pp = NULL,
+    analytic = NULL,
+    analytic_saved = c(
+      eta_ctrl_minus_treat = NA_real_,
+      total_ctrl_minus_treat = NA_real_
+    ),
+    ate_method = paste0("bivariate_", contrast),
+    contrast = contrast,
+    biv_params = params
+  )
+}
+
+# Rebuild spatstat window + observed control/treated supports (km).
+oklahoma_build_state_spaces <- function(data_dir, crs_proj = 5070L) {
+  if (!requireNamespace("sf", quietly = TRUE)) stop("sf required")
+  if (!requireNamespace("tigris", quietly = TRUE)) stop("tigris required")
+  if (!requireNamespace("spatstat.geom", quietly = TRUE)) stop("spatstat required")
+
+  options(tigris_use_cache = TRUE)
+  counties_sf <- tigris::counties(state = "OK", cb = TRUE, year = 2022)
+  counties_sf <- sf::st_transform(counties_sf, crs_proj)
+  counties_sf <- sf::st_make_valid(counties_sf)
+  ok_boundary <- sf::st_make_valid(sf::st_union(counties_sf))
+  bb <- sf::st_bbox(ok_boundary)
+  win_km <- spatstat.geom::owin(
+    xrange = c(bb["xmin"], bb["xmax"]) / 1000,
+    yrange = c(bb["ymin"], bb["ymax"]) / 1000
+  )
+
+  county_owins <- lapply(seq_len(nrow(counties_sf)), function(i) {
+    geom <- sf::st_geometry(counties_sf[i, ])
+    coords_list <- sf::st_coordinates(geom)
+    x_km <- coords_list[, 1] / 1000
+    y_km <- coords_list[, 2] / 1000
+    tryCatch(
+      spatstat.geom::owin(poly = list(x = rev(x_km), y = rev(y_km))),
+      error = function(e) {
+        tryCatch(
+          spatstat.geom::owin(poly = list(x = x_km, y = y_km)),
+          error = function(e2) NULL
+        )
+      }
+    )
+  })
+  valid_idx <- !vapply(county_owins, is.null, logical(1))
+  county_owins_valid <- county_owins[valid_idx]
+  counties_sf_valid <- counties_sf[valid_idx, ]
+  names(county_owins_valid) <- counties_sf_valid$NAME
+  partition <- spatstat.geom::tess(tiles = county_owins_valid, window = win_km)
+
+  aoi_sf <- sf::st_read(file.path(data_dir, "occ_aoi_layer_2.geojson"), quiet = TRUE)
+  aoi_sf <- sf::st_transform(aoi_sf, crs_proj)
+  aoi_sf <- sf::st_make_valid(aoi_sf)
+  aoi_union <- sf::st_union(aoi_sf)
+  county_centroids <- sf::st_centroid(counties_sf_valid)
+  inside_aoi <- lengths(sf::st_within(county_centroids, aoi_union)) > 0
+  partition_processes <- ifelse(inside_aoi, "treated", "control")
+  names(partition_processes) <- counties_sf_valid$NAME
+  treated_idx <- partition_processes == "treated"
+
+  list(
+    win_km = win_km,
+    partition = partition,
+    partition_processes = partition_processes,
+    treated_idx = treated_idx,
+    state_spaces = list(
+      control = spatstat.geom::as.owin(partition[!treated_idx]),
+      treated = spatstat.geom::as.owin(partition[treated_idx])
+    ),
+    n_tiles = partition$n
+  )
+}

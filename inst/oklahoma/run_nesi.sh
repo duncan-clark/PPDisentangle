@@ -655,12 +655,16 @@ export OK_KDE_VARIANT_MODE="$PP_KDE_VARIANT_MODE"
 export OK_BOOT_SEM_INNER_ITER="$PP_BOOT_SEM_INNER"
 export OK_BOOT_OUTER_CORES="$PP_BOOT_OUTER_CORES"
 export OK_ATE_N_SIMS="$PP_ATE_N_SIMS"
+# Paper ATE: full bivariate forward sim, all-control vs all-treated (not marginal).
+export OK_ATE_BIVARIATE="${OK_ATE_BIVARIATE:-true}"
+export OK_ATE_CONTRAST="${OK_ATE_CONTRAST:-all_or_nothing}"
 export OK_GLOBAL_SEED="$PP_SEED"
 export OK_BOOT_SEED="$PP_SEED"
 export OK_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_GUARD_DEGENERATE=true
 export OK_REPORT_FORMATS=html
+echo "ATE settings: OK_ATE_BIVARIATE=$OK_ATE_BIVARIATE OK_ATE_CONTRAST=$OK_ATE_CONTRAST OK_ATE_N_SIMS=$OK_ATE_N_SIMS"
 
 if [ "${PP_BOOT_REPS:-0}" -le 0 ]; then
   export OK_RUN_BOOTSTRAP_ATE=false
