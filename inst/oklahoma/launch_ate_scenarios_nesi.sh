@@ -75,16 +75,18 @@ else
   echo "Using existing immutable seed: $REMOTE_SEED_IMMUTABLE"
 fi
 
+# 64 CPUs on one node (not 64 nodes — multi-node would queue much longer).
+# 64G mem is ample: prior bootstrap-only MaxRSS was ~6.5G at 32 CPUs / 6 outer workers.
 COMMON=(
   --mode bootstrap-only
-  --cores 32
+  --cores 64
   --boot-reps 64
   --ate-n-sims 500
   --boot-refit-scope full
-  --boot-outer-cores 6
+  --boot-outer-cores 12
   --boot-sem-inner 2000
   --time 24:00:00
-  --mem 200G
+  --mem 64G
 )
 
 submit_one() {
