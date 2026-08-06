@@ -2118,12 +2118,43 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 }
 ```
 
+```{r ate-scenario-compare-note, results='asis'}
+#| echo: false
+scen_html <- file.path(dirname(result_file), "oklahoma_ate_scenarios.html")
+scen_csv <- file.path(dirname(result_file), "ate_scenarios", "scenario_summary.csv")
+if (file.exists(scen_html) || file.exists(scen_csv)) {
+  cat("\n### Four-scenario ATE comparison\n\n")
+  cat("A side-by-side comparison of **univariate vs bivariate** forward simulation ")
+  cat("under **all-or-nothing** and **observed vs control-everywhere**, each with its own ")
+  cat("full debiased bootstrap, is available in ")
+  if (file.exists(scen_html)) {
+    cat(sprintf("[`oklahoma_ate_scenarios.html`](%s)", basename(scen_html)))
+  } else {
+    cat("`oklahoma_ate_scenarios.html` (render with `render_ate_scenario_compare.R`)")
+  }
+  cat(".\n\n")
+  if (file.exists(scen_csv)) {
+    scen_sum <- utils::read.csv(scen_csv, stringsAsFactors = FALSE)
+    if (nrow(scen_sum) > 0) {
+      knitr::kable(
+        scen_sum[, intersect(c("label", "method", "point_E", "point_F",
+                               "boot_bc_mean_E", "boot_bc_sd_E",
+                               "boot_bc_mean_F", "boot_bc_sd_F"), names(scen_sum)),
+                 drop = FALSE],
+        digits = 1,
+        caption = "ATE scenario summary (bias-corrected bootstrap)."
+      ) |>
+        kableExtra::kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+    }
+  }
+}
+```
+
 ```{r fig-ate-bootstrap-cd}
 #| label: fig-ate-bootstrap-cd
-#| fig-cap: "Bias-corrected bootstrap replicate distribution of all-or-nothing total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to observed ATE)."
+#| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to the point ATE for this results file's estimand)."
 #| fig-height: 4
-# If results were patched with bivariate observed ATEs, centers use those means while
-# bootstrap replicate shape remains from the archived (marginal) bootstrap run.
+# Labels / centers follow results$config$ATE_METHOD for this RDS.
 if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
     nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
     "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {

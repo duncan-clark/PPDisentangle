@@ -149,51 +149,54 @@ fi
 echo "Promoted ${SRC_RDS} -> ${FOR_PAPER}"
 
 # Normalize to a single-run paper artifact (strip interim patch markers if any).
-Rscript -e "
+# Use a heredoc so bash does not treat R backticks (e.g. `%||%`) as command substitution.
+Rscript - "${FOR_PAPER}" "${JOB_ID}" <<'RS' || echo "WARNING: could not finalize/summarize ATE from RDS"
 `%||%` <- function(a, b) if (!is.null(a)) a else b
-path <- '${FOR_PAPER}'
+args <- commandArgs(trailingOnly = TRUE)
+path <- args[[1]]
+job_id <- args[[2]]
 r <- readRDS(path)
-if (!is.null(r\$config)) {
-  r\$config\$BOOTSTRAP_ONLY <- NULL
-  r\$config\$ATE_BIVARIATE_PATCHED <- NULL
-  r\$config\$ATE_BIVARIATE <- isTRUE(r\$config\$ATE_BIVARIATE %||% TRUE)
-  if (is.null(r\$config\$ATE_CONTRAST) || !nzchar(as.character(r\$config\$ATE_CONTRAST %||% ''))) {
-    r\$config\$ATE_CONTRAST <- 'all_or_nothing'
+if (!is.null(r$config)) {
+  r$config$BOOTSTRAP_ONLY <- NULL
+  r$config$ATE_BIVARIATE_PATCHED <- NULL
+  r$config$ATE_BIVARIATE <- isTRUE(r$config$ATE_BIVARIATE %||% TRUE)
+  if (is.null(r$config$ATE_CONTRAST) || !nzchar(as.character(r$config$ATE_CONTRAST %||% ""))) {
+    r$config$ATE_CONTRAST <- "all_or_nothing"
   }
-  r\$config\$ATE_METHOD <- paste0('bivariate_', r\$config\$ATE_CONTRAST)
-  r\$config\$RUN_BOOTSTRAP_ATE <- TRUE
+  r$config$ATE_METHOD <- paste0("bivariate_", r$config$ATE_CONTRAST)
+  r$config$RUN_BOOTSTRAP_ATE <- TRUE
 }
-r\$ate_bivariate_patch <- NULL
-if (is.list(r\$bootstrap_ate)) {
-  r\$bootstrap_ate\$note <- NULL
-  if (is.list(r\$bootstrap_ate\$config)) {
-    r\$bootstrap_ate\$config\$ate_bivariate <- NULL
-    r\$bootstrap_ate\$config\$ate_contrast <- NULL
+r$ate_bivariate_patch <- NULL
+if (is.list(r$bootstrap_ate)) {
+  r$bootstrap_ate$note <- NULL
+  if (is.list(r$bootstrap_ate$config)) {
+    r$bootstrap_ate$config$ate_bivariate <- NULL
+    r$bootstrap_ate$config$ate_contrast <- NULL
   }
 }
-if (is.list(r\$metadata)) {
-  r\$metadata\$bivariate_bootstrap <- NULL
-  r\$metadata\$paper_promote <- NULL
-  r\$metadata\$stage <- 'final'
-  r\$metadata\$saved_at <- as.character(Sys.time())
-  r\$metadata\$job_id <- '${JOB_ID}'
+if (is.list(r$metadata)) {
+  r$metadata$bivariate_bootstrap <- NULL
+  r$metadata$paper_promote <- NULL
+  r$metadata$stage <- "final"
+  r$metadata$saved_at <- as.character(Sys.time())
+  r$metadata$job_id <- job_id
 }
 saveRDS(r, path)
-cfg <- r\$config
-cat(sprintf('ATE_BIVARIATE=%s ATE_CONTRAST=%s ATE_N_SIMS=%s BOOT_N=%s\n',
-  as.character(cfg\$ATE_BIVARIATE %||% NA),
-  as.character(cfg\$ATE_CONTRAST %||% NA),
-  as.character(cfg\$ATE_N_SIMS %||% NA),
-  as.character(cfg\$BOOT_N_REPS %||% NA)))
-cat('has bootstrap_ate:', !is.null(r\$bootstrap_ate\$fit_E\$replicate_summary), '\n')
-for (lab in c('E', 'F')) {
-  ate <- r\$fits_named[[lab]]\$ate
+cfg <- r$config
+cat(sprintf("ATE_BIVARIATE=%s ATE_CONTRAST=%s ATE_N_SIMS=%s BOOT_N=%s\n",
+  as.character(cfg$ATE_BIVARIATE %||% NA),
+  as.character(cfg$ATE_CONTRAST %||% NA),
+  as.character(cfg$ATE_N_SIMS %||% NA),
+  as.character(cfg$BOOT_N_REPS %||% NA)))
+cat("has bootstrap_ate:", !is.null(r$bootstrap_ate$fit_E$replicate_summary), "\n")
+for (lab in c("E", "F")) {
+  ate <- r$fits_named[[lab]]$ate
   if (is.null(ate)) next
-  m <- mean(ate\$all_nothing_sim\$total_saved, na.rm = TRUE)
-  cat(sprintf('Fit %s mean saved=%.2f method=%s\n', lab, m,
-              as.character(ate\$ate_method %||% 'NA')))
+  m <- mean(ate$all_nothing_sim$total_saved, na.rm = TRUE)
+  cat(sprintf("Fit %s mean saved=%.2f method=%s\n", lab, m,
+              as.character(ate$ate_method %||% "NA")))
 }
-" || echo "WARNING: could not finalize/summarize ATE from RDS"
+RS
 
 # --- paper assets ---
 echo "Regenerating oklahoma paper assets ..."

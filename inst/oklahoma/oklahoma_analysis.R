@@ -301,6 +301,13 @@ OK_ATE_CONTRAST <- tolower(trimws(Sys.getenv("OK_ATE_CONTRAST", "all_or_nothing"
 if (!OK_ATE_CONTRAST %in% c("all_or_nothing", "observed")) {
   stop("OK_ATE_CONTRAST must be 'all_or_nothing' or 'observed', got: ", OK_ATE_CONTRAST)
 }
+# Optional scenario slug for parallel comparison jobs (e.g. univ_aon, biv_obs).
+OK_ATE_SCENARIO <- tolower(gsub("[^a-z0-9_]+", "_", trimws(Sys.getenv("OK_ATE_SCENARIO", ""))))
+OK_ATE_SCENARIO <- gsub("^_+|_+$", "", OK_ATE_SCENARIO)
+OK_ATE_METHOD_LABEL <- paste0(
+  if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
+  "_", OK_ATE_CONTRAST
+)
 source(file.path(SCRIPT_DIR, "ate_bivariate.R"), local = FALSE)
 cat(sprintf("ATE evaluation: bivariate=%s contrast=%s\n",
             OK_ATE_BIVARIATE, OK_ATE_CONTRAST))
@@ -1582,7 +1589,12 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                            filtration_history = NULL,
                            crn_base_seed = NA_integer_,
                            phase = "main_fit",
-                           quiet = FALSE) {
+                           quiet = FALSE,
+                           contrast = NULL) {
+  if (is.null(contrast) || !nzchar(as.character(contrast)[1])) {
+    contrast <- OK_ATE_CONTRAST
+  }
+  contrast <- match.arg(as.character(contrast)[1], c("all_or_nothing", "observed"))
   phase_tag <- tolower(gsub("[^A-Za-z0-9]+", "_", as.character(phase)))
   if (!nzchar(phase_tag)) phase_tag <- "main_fit"
   phase_label <- switch(
@@ -1592,7 +1604,7 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
     bootstrap = "bootstrap",
     phase_tag
   )
-  ate_prefix <- sprintf("[ATE:%s]", phase_label)
+  ate_prefix <- sprintf("[ATE:%s/univariate/%s]", phase_label, contrast)
   if (!quiet) cat(sprintf("  %s Computing ATE for %s...\n", ate_prefix, label))
   tryCatch({
     safe_q <- function(x, probs) {
@@ -1685,6 +1697,27 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
     ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
     if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
     ate_parallel_label <- sprintf("ate-sim-%s", tolower(substr(ate_label_slug, 1L, 40L)))
+    # Observed contrast under independent univariate margins:
+    # left = control params on full window; right = ctrl on control support
+    # + treat on treated support (no cross-excitation).
+    sim_right_count <- function(seed_right) {
+      if (identical(contrast, "all_or_nothing")) {
+        if (!is.null(seed_right)) set.seed(seed_right)
+        t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+        return(length(t_sim$t))
+      }
+      if (!is.null(seed_right)) set.seed(seed_right)
+      t_ctrl <- sim_etas(ctrl_pp, windowT_ate, windowS = control_ss,
+                         m0 = ETAS_M0, beta_gr = BETA_GR,
+                         filtration = pre_history)
+      if (!is.null(seed_right)) set.seed(as.integer(seed_right + 17L))
+      t_treat <- sim_etas(treat_pp, windowT_ate, windowS = treated_ss,
+                          m0 = ETAS_M0, beta_gr = BETA_GR,
+                          filtration = pre_history)
+      length(t_ctrl$t) + length(t_treat$t)
+    }
     run_one_sim <- function(s) {
       s_int <- suppressWarnings(as.integer(s))
       if (!is.finite(s_int) || is.na(s_int)) s_int <- 1L
@@ -1695,29 +1728,21 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
           c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
                             m0 = ETAS_M0, beta_gr = BETA_GR,
                             filtration = pre_history)
-          set.seed(seed_s)
-          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
+          t_count <- sim_right_count(seed_s)
         } else {
           set.seed(seed_s)
           c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
                             m0 = ETAS_M0, beta_gr = BETA_GR,
                             filtration = pre_history)
-          set.seed(as.integer(seed_s + 1000000L))
-          t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                            m0 = ETAS_M0, beta_gr = BETA_GR,
-                            filtration = pre_history)
+          t_count <- sim_right_count(as.integer(seed_s + 1000000L))
         }
       } else {
         c_sim <- sim_etas(ctrl_pp, windowT_ate, windowS = win_km,
                           m0 = ETAS_M0, beta_gr = BETA_GR,
                           filtration = pre_history)
-        t_sim <- sim_etas(treat_pp, windowT_ate, windowS = win_km,
-                          m0 = ETAS_M0, beta_gr = BETA_GR,
-                          filtration = pre_history)
+        t_count <- sim_right_count(NULL)
       }
-      c(c_count = length(c_sim$t), t_count = length(t_sim$t))
+      c(c_count = length(c_sim$t), t_count = as.numeric(t_count))
     }
     sim_results <- if (N_CORES > 1 && ATE_N_SIMS > 1) {
       if (!is.null(ate_cl_reuse)) {
@@ -1847,7 +1872,9 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
          n_tiles_used = n_tiles_used,
          treated_pp = treat_pp, control_pp = ctrl_pp,
          analytic = analytic,
-         analytic_saved = analytic_saved)
+         analytic_saved = analytic_saved,
+         ate_method = paste0("univariate_", contrast),
+         contrast = contrast)
   }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
 }
 ate_cl_reuse <- NULL
@@ -2946,7 +2973,10 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
       contrast = OK_ATE_CONTRAST
     )
   } else {
-    ate_estim_fast(marg$ctrl, marg$treat, observed_data, label)
+    ate_estim_fast(
+      marg$ctrl, marg$treat, observed_data, label,
+      contrast = OK_ATE_CONTRAST
+    )
   }
 }
 t_ate_B <- proc.time()[["elapsed"]]
@@ -3960,7 +3990,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             phase = "bootstrap",
             n_tiles_used = partition$n,
             treated_idx_used = treated_idx,
-            quiet = TRUE
+            quiet = TRUE,
+            contrast = OK_ATE_CONTRAST
           )
         }
         summarize_boot(ate_c_boot, rep_id, sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df, c_params_boot)
@@ -4024,7 +4055,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             phase = "bootstrap",
             n_tiles_used = partition$n,
             treated_idx_used = treated_idx,
-            quiet = TRUE
+            quiet = TRUE,
+            contrast = OK_ATE_CONTRAST
           )
         }
         summarize_boot(ate_d_boot, rep_id, sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df, d_params_boot)
@@ -4184,6 +4216,67 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   cat(sprintf("Backup before writing final results: %s (copied=%s)\n", bak, ok_bak))
   results_final <- readRDS(base_file)
 
+  # Recompute point ATEs under THIS job's ATE flags so bias-correction
+  # recenters bootstrap clouds to matching scenario centers.
+  cat(sprintf(
+    "\n--- BOOTSTRAP_ONLY: recomputing point ATE under %s ---\n",
+    OK_ATE_METHOD_LABEL
+  ))
+  ensure_ate_psock_pool()
+  ate_crn_base_seed_bootonly <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
+    as.integer(OK_ATE_CRN_BASE)
+  } else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+    as.integer(100000L + 1000L * OK_GLOBAL_SEED)
+  } else {
+    100000L
+  }
+  recompute_point_ate <- function(biv_params, marg, observed_data, label) {
+    if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
+      ate_estim_bivariate(
+        biv_params = biv_params,
+        windowT = windowT_ate,
+        windowS = win_km,
+        state_spaces_obs = state_spaces,
+        label = label,
+        n_sims = ATE_N_SIMS,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        t_trunc = SEM_T_TRUNC_DAYS,
+        n_tiles = partition$n,
+        crn_base_seed = ate_crn_base_seed_bootonly,
+        use_crn = OK_ATE_USE_CRN,
+        crn_pair = OK_ATE_CRN_PAIR,
+        contrast = OK_ATE_CONTRAST
+      )
+    } else {
+      ate_estim_fast(
+        marg$ctrl, marg$treat, observed_data, label,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        crn_base_seed = ate_crn_base_seed_bootonly,
+        contrast = OK_ATE_CONTRAST
+      )
+    }
+  }
+  ate_E <- recompute_point_ate(
+    E_params, E_marginals, pp_post,
+    sprintf("Fit E point (%s)", OK_ATE_METHOD_LABEL)
+  )
+  ate_F <- recompute_point_ate(
+    F_params, F_marginals, pp_post,
+    sprintf("Fit F point (%s)", OK_ATE_METHOD_LABEL)
+  )
+  if (!is.null(results_final$fits_named$E)) {
+    results_final$fits_named$E$ate <- ate_E
+    results_final$fits_named$E$params <- E_params
+  }
+  if (!is.null(results_final$fits_named$F)) {
+    results_final$fits_named$F$ate <- ate_F
+    results_final$fits_named$F$params <- F_params
+  }
+  if (!is.null(results_final$fitE)) results_final$fitE$ate <- ate_E
+  if (!is.null(results_final$fitF)) results_final$fitF$ate <- ate_F
+
   # Match the bootstrap_ate$config shape written by a full analysis run.
   bootstrap_ate$config <- list(
     reps = BOOT_N_REPS,
@@ -4191,7 +4284,11 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     refit_scope = BOOT_REFIT_SCOPE,
     outer_cores = BOOT_OUTER_CORES,
     sem_inner_iter = BOOT_SEM_INNER_ITER,
-    seed = BOOT_SEED
+    seed = BOOT_SEED,
+    ate_bivariate = isTRUE(OK_ATE_BIVARIATE),
+    ate_contrast = OK_ATE_CONTRAST,
+    ate_method = OK_ATE_METHOD_LABEL,
+    ate_scenario = if (nzchar(OK_ATE_SCENARIO)) OK_ATE_SCENARIO else NA_character_
   )
   bootstrap_ate$note <- NULL
   results_final$bootstrap_ate <- bootstrap_ate
@@ -4199,7 +4296,8 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   if (is.null(results_final$config)) results_final$config <- list()
   results_final$config$ATE_BIVARIATE <- isTRUE(OK_ATE_BIVARIATE)
   results_final$config$ATE_CONTRAST <- OK_ATE_CONTRAST
-  results_final$config$ATE_METHOD <- paste0("bivariate_", OK_ATE_CONTRAST)
+  results_final$config$ATE_METHOD <- OK_ATE_METHOD_LABEL
+  results_final$config$ATE_SCENARIO <- if (nzchar(OK_ATE_SCENARIO)) OK_ATE_SCENARIO else NULL
   results_final$config$ATE_N_SIMS <- ATE_N_SIMS
   results_final$config$BOOT_N_REPS <- BOOT_N_REPS
   results_final$config$BOOT_REFIT_SCOPE <- BOOT_REFIT_SCOPE
@@ -4218,27 +4316,60 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     results_final$metadata$stage <- "final"
     results_final$metadata$saved_at <- as.character(Sys.time())
     results_final$metadata$job_id <- Sys.getenv("SLURM_JOB_ID", "")
+    results_final$metadata$ate_scenario <- if (nzchar(OK_ATE_SCENARIO)) OK_ATE_SCENARIO else NA_character_
+    results_final$metadata$ate_method <- OK_ATE_METHOD_LABEL
   } else {
     results_final$metadata <- list(
       stage = "final",
       saved_at = as.character(Sys.time()),
-      job_id = Sys.getenv("SLURM_JOB_ID", "")
+      job_id = Sys.getenv("SLURM_JOB_ID", ""),
+      ate_scenario = if (nzchar(OK_ATE_SCENARIO)) OK_ATE_SCENARIO else NA_character_,
+      ate_method = OK_ATE_METHOD_LABEL
     )
   }
 
   out_tagged <- file.path(OUT_DIR, add_file_tag("oklahoma_results.rds"))
-  for_paper_out <- file.path(OUT_DIR, "for_paper.rds")
   saveRDS(results_final, out_tagged)
-  saveRDS(results_final, for_paper_out)
-  # Keep the named input path in sync when it is also under the output tree.
-  if (!identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
-                 normalizePath(for_paper_out, winslash = "/", mustWork = FALSE)) &&
-      !identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
-                 normalizePath(out_tagged, winslash = "/", mustWork = FALSE))) {
-    saveRDS(results_final, base_file)
+  scenario_outs <- character(0)
+  if (nzchar(OK_ATE_SCENARIO)) {
+    scen_dir <- file.path(OUT_DIR, "ate_scenarios", OK_ATE_SCENARIO)
+    dir.create(scen_dir, recursive = TRUE, showWarnings = FALSE)
+    scen_paper <- file.path(scen_dir, "for_paper.rds")
+    scen_alias <- file.path(OUT_DIR, paste0("for_paper_", OK_ATE_SCENARIO, ".rds"))
+    saveRDS(results_final, scen_paper)
+    saveRDS(results_final, scen_alias)
+    writeLines(
+      c(
+        paste0("scenario=", OK_ATE_SCENARIO),
+        paste0("ate_method=", OK_ATE_METHOD_LABEL),
+        paste0("ate_bivariate=", isTRUE(OK_ATE_BIVARIATE)),
+        paste0("ate_contrast=", OK_ATE_CONTRAST),
+        paste0("job_id=", Sys.getenv("SLURM_JOB_ID", "")),
+        paste0("results=", out_tagged)
+      ),
+      file.path(scen_dir, "scenario.txt")
+    )
+    scenario_outs <- c(scen_paper, scen_alias)
+  } else {
+    for_paper_out <- file.path(OUT_DIR, "for_paper.rds")
+    saveRDS(results_final, for_paper_out)
+    scenario_outs <- for_paper_out
+    # Keep the named input path in sync when it is also under the output tree.
+    if (!identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
+                   normalizePath(for_paper_out, winslash = "/", mustWork = FALSE)) &&
+        !identical(normalizePath(base_file, winslash = "/", mustWork = FALSE),
+                   normalizePath(out_tagged, winslash = "/", mustWork = FALSE))) {
+      saveRDS(results_final, base_file)
+    }
   }
-  cat(sprintf("Wrote final paper results (full-run shape):\n  %s\n  %s\n",
-              out_tagged, for_paper_out))
+  cat(sprintf("Wrote final paper results (full-run shape):\n  %s\n", out_tagged))
+  for (p in scenario_outs) cat(sprintf("  %s\n", p))
+  point_mean <- function(ate) {
+    if (is.null(ate$all_nothing_sim$total_saved)) return(NA_real_)
+    mean(ate$all_nothing_sim$total_saved, na.rm = TRUE)
+  }
+  cat(sprintf("  Point ATE E=%.1f F=%.1f method=%s\n",
+              point_mean(ate_E), point_mean(ate_F), OK_ATE_METHOD_LABEL))
   if (!is.null(bootstrap_ate$fit_E$replicate_summary) &&
       nrow(bootstrap_ate$fit_E$replicate_summary) > 0) {
     cat(sprintf("  E boot mean=%.1f sd=%.1f (n=%d)\n",
