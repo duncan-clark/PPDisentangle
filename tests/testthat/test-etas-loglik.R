@@ -36,13 +36,13 @@ etas_inhom <- data.frame(
 )
 
 etas_ref_params <- c(mu = 5, A = 0.3, alpha_m = 1.0,
-                     c = 0.1, p = 1.2, D = 1.0, gamma = 0.5, q = 1.5)
+                     c = 0.1, p = 2.2, D = 1.0, gamma = 0.5, q = 1.6)
 
 # ---- parameter bounds ----
 
 test_that("loglik_etas rejects negative mu", {
-  params <- c(mu = -1, A = 0.3, alpha_m = 1, c = 0.1, p = 1.2,
-              D = 1, gamma = 0.5, q = 1.5)
+  params <- c(mu = -1, A = 0.3, alpha_m = 1, c = 0.1, p = 2.2,
+              D = 1, gamma = 0.5, q = 1.6)
   ll <- loglik_etas(params, etas_3pt, etas_windowT, etas_windowS, m0 = 2.5)
   expect_true(ll <= -1e10)
 })
@@ -55,15 +55,15 @@ test_that("loglik_etas rejects p <= 1", {
 })
 
 test_that("loglik_etas rejects q <= 1", {
-  params <- c(mu = 5, A = 0.3, alpha_m = 1, c = 0.1, p = 1.2,
+  params <- c(mu = 5, A = 0.3, alpha_m = 1, c = 0.1, p = 2.2,
               D = 1, gamma = 0.5, q = 0.8)
   ll <- loglik_etas(params, etas_3pt, etas_windowT, etas_windowS, m0 = 2.5)
   expect_true(ll <= -1e10)
 })
 
 test_that("loglik_etas rejects negative gamma", {
-  params <- c(mu = 5, A = 0.3, alpha_m = 1, c = 0.1, p = 1.2,
-              D = 1, gamma = -0.5, q = 1.5)
+  params <- c(mu = 5, A = 0.3, alpha_m = 1, c = 0.1, p = 2.2,
+              D = 1, gamma = -0.5, q = 1.6)
   ll <- loglik_etas(params, etas_3pt, etas_windowT, etas_windowS, m0 = 2.5)
   expect_true(ll <= -1e10)
 })
@@ -84,7 +84,7 @@ test_that("loglik_etas returns finite value for 5-point data", {
 })
 
 test_that("loglik_etas returns finite value for tight cluster", {
-  params <- c(mu = 2, A = 0.5, alpha_m = 1.5, c = 0.01, p = 1.3,
+  params <- c(mu = 2, A = 0.5, alpha_m = 1.5, c = 0.01, p = 2.2,
               D = 0.5, gamma = 1.0, q = 2.0)
   ll <- loglik_etas(params, etas_cluster, etas_windowT, etas_windowS,
                     m0 = 2.5)
@@ -94,8 +94,8 @@ test_that("loglik_etas returns finite value for tight cluster", {
 # ---- Poisson special case (A = 0) ----
 
 test_that("A = 0 reduces to homogeneous Poisson log-likelihood", {
-  params <- c(mu = 10, A = 0, alpha_m = 1, c = 0.1, p = 1.2,
-              D = 1, gamma = 0.5, q = 1.5)
+  params <- c(mu = 10, A = 0, alpha_m = 1, c = 0.1, p = 2.2,
+              D = 1, gamma = 0.5, q = 1.6)
   ll <- loglik_etas(params, etas_5pt, etas_windowT, etas_windowS, m0 = 2.5)
   n <- nrow(etas_5pt)
   area <- spatstat.geom::area(etas_windowS)
@@ -115,7 +115,7 @@ test_that("loglik_etas returns exact value for 3-point data", {
 
 test_that("loglik_etas with list params matches vector params", {
   params_list <- list(mu = 5, A = 0.3, alpha_m = 1.0, c = 0.1,
-                      p = 1.2, D = 1.0, gamma = 0.5, q = 1.5)
+                      p = 2.2, D = 1.0, gamma = 0.5, q = 1.6)
   ll_vec  <- loglik_etas(etas_ref_params, etas_3pt, etas_windowT,
                           etas_windowS, m0 = 2.5)
   ll_list <- loglik_etas(params_list, etas_3pt, etas_windowT,
@@ -169,10 +169,7 @@ test_that("t_trunc=NULL gives same result as no truncation", {
 })
 
 test_that("very large t_trunc approximately equals no truncation", {
-  # Power-law tails decay much slower than exponential, so convergence to
-
-  # the untruncated limit requires a very large t_trunc relative to c.
-  # With c=0.1, p=1.2 the temporal norm at t_trunc=1e10 is ~0.9998.
+  # A very large truncation horizon should recover the untruncated limit.
   ll_none <- loglik_etas(etas_ref_params, etas_5pt, etas_windowT,
                           etas_windowS, m0 = 2.5)
   ll_big  <- loglik_etas(etas_ref_params, etas_5pt, etas_windowT,
@@ -185,8 +182,8 @@ test_that("truncation changes likelihood for distant events", {
     x = c(5.0, 5.1), y = c(5.0, 5.1),
     t = c(0.0, 50.0), mag = c(3.0, 3.0), W = c(1.0, 1.0)
   )
-  params <- c(mu = 5, A = 0.3, alpha_m = 1.0, c = 0.5, p = 1.2,
-              D = 1.0, gamma = 0.5, q = 1.5)
+  params <- c(mu = 5, A = 0.3, alpha_m = 1.0, c = 0.5, p = 2.2,
+              D = 1.0, gamma = 0.5, q = 1.6)
   wT <- c(0, 100)
   ll_trunc   <- loglik_etas(params, far_apart, wT, etas_windowS,
                              m0 = 2.5, t_trunc = 30)
@@ -221,9 +218,9 @@ test_that("loglik_etas returns finite value for single point", {
 # ---- monotonicity: more triggering -> higher ll at cluster ----
 
 test_that("higher A increases likelihood at a tightly clustered pattern", {
-  params_low  <- c(mu = 2, A = 0.1, alpha_m = 1, c = 0.01, p = 1.3,
+  params_low  <- c(mu = 2, A = 0.0001, alpha_m = 1, c = 0.01, p = 2.2,
                    D = 0.5, gamma = 0.5, q = 2.0)
-  params_high <- c(mu = 2, A = 0.8, alpha_m = 1, c = 0.01, p = 1.3,
+  params_high <- c(mu = 2, A = 0.0005, alpha_m = 1, c = 0.01, p = 2.2,
                    D = 0.5, gamma = 0.5, q = 2.0)
   ll_low  <- loglik_etas(params_low, etas_cluster, etas_windowT,
                           etas_windowS, m0 = 2.5)

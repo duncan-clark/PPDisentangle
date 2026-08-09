@@ -18,6 +18,52 @@
 # Canonical ordering and names for the 8-element ETAS parameter vector.
 .etas_par_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 
+.etas_resolve_beta_gr <- function(beta_gr, realiz = NULL, m0 = NULL) {
+  beta_eff <- suppressWarnings(as.numeric(beta_gr))
+  beta_eff <- beta_eff[is.finite(beta_eff) & beta_eff > 0]
+  if (length(beta_eff)) return(beta_eff[[1]])
+  if (is.null(realiz) || is.null(realiz$mag)) return(NA_real_)
+  if (is.null(m0) || !is.finite(m0)) {
+    m0 <- suppressWarnings(min(as.numeric(realiz$mag), na.rm = TRUE))
+  }
+  mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
+  mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
+  if (!length(mag_delta)) return(NA_real_)
+  1 / mean(mag_delta)
+}
+
+.etas_univ_branching_ratio <- function(params, beta_gr) {
+  pv <- if (is.list(params)) unlist(params) else params
+  beta_eff <- .etas_resolve_beta_gr(beta_gr)
+  A <- suppressWarnings(as.numeric(pv[["A"]]))
+  alpha <- suppressWarnings(as.numeric(pv[["alpha_m"]]))
+  gap <- beta_eff - alpha
+  if (!is.finite(A) || A < 0 || !is.finite(gap) || gap <= 1e-8) return(Inf)
+  A * beta_eff / gap
+}
+
+.etas_project_subcritical <- function(params,
+                                      beta_gr,
+                                      gap_min = 1e-4,
+                                      eta_max = 0.98) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_par_names
+  beta_eff <- .etas_resolve_beta_gr(beta_gr)
+  if (!is.finite(beta_eff)) return(pv)
+  gap_min <- suppressWarnings(as.numeric(gap_min))
+  if (!is.finite(gap_min) || gap_min < 0) gap_min <- 1e-4
+  eta_max <- suppressWarnings(as.numeric(eta_max))
+  if (!is.finite(eta_max) || eta_max <= 0) eta_max <- 0.98
+  if (is.finite(pv[["alpha_m"]])) {
+    pv[["alpha_m"]] <- min(pv[["alpha_m"]], beta_eff - gap_min - 1e-4)
+  }
+  eta <- .etas_univ_branching_ratio(pv, beta_eff)
+  if (is.finite(eta) && eta > eta_max && eta > 0 && is.finite(pv[["A"]])) {
+    pv[["A"]] <- pv[["A"]] * (eta_max / eta) * (1 - 1e-6)
+  }
+  pv
+}
+
 #' Log-likelihood for a spatio-temporal ETAS process (C++ accelerated)
 #'
 #' Evaluates the log-likelihood of the ETAS conditional intensity model
@@ -81,6 +127,7 @@ loglik_etas <- function(params,
                         alpha_beta_soft_gap = 0.05,
                         alpha_beta_soft_weight = 2000,
                         alpha_beta_soft_power = 2,
+                        max_branching_ratio = Inf,
                         stability_barrier_start = 0.95,
                         stability_barrier_weight = 50000,
                         stability_barrier_power = 4,
@@ -126,16 +173,20 @@ loglik_etas <- function(params,
 
   # --- Reference magnitude ---
   if (is.null(m0)) m0 <- min(realiz$mag)
+  beta_eff <- .etas_resolve_beta_gr(beta_gr, realiz = realiz, m0 = m0)
   if (isTRUE(enforce_alpha_subcritical)) {
-    beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
-    }
     gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
     if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
     if (!is.finite(beta_eff) || is.na(beta_eff) || alpha_m >= (beta_eff - gap_min)) return(-1e15)
+  }
+  eta_max <- suppressWarnings(as.numeric(max_branching_ratio))
+  if (length(eta_max) == 1L && is.finite(eta_max) && eta_max > 0 &&
+      is.finite(beta_eff)) {
+    eta_hat <- .etas_univ_branching_ratio(
+      c(A = as.numeric(A), alpha_m = as.numeric(alpha_m)),
+      beta_eff
+    )
+    if (!is.finite(eta_hat) || eta_hat >= eta_max) return(-1e15)
   }
 
   # --- Background weights ---
@@ -235,19 +286,11 @@ loglik_etas <- function(params,
   # penalty activates before criticality and ramps very sharply beyond 1.
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
   if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
-  if (barrier_weight > 0) {
-    beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else 1
-    }
-    gap <- beta_eff - as.numeric(alpha_m)
-    eta <- if (is.finite(A) && is.finite(gap) && gap > 1e-8) {
-      as.numeric(A) * beta_eff / gap
-    } else {
-      Inf
-    }
+  if (barrier_weight > 0 && is.finite(beta_eff)) {
+    eta <- .etas_univ_branching_ratio(
+      c(A = as.numeric(A), alpha_m = as.numeric(alpha_m)),
+      beta_eff
+    )
     if (!is.finite(eta)) return(-1e15)
     barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
     if (length(barrier_start) != 1L || !is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
@@ -256,12 +299,6 @@ loglik_etas <- function(params,
     excess <- max(0, eta - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
-    }
-    # Keep this soft/continuous while making supercritical fits effectively
-    # unattainable at optimisation convergence.
-    supercritical_excess <- max(0, eta - 0.999)
-    if (supercritical_excess > 0) {
-      loglik <- loglik - barrier_weight * 1e6 * (supercritical_excess ^ 2)
     }
   }
   return(loglik)
@@ -298,6 +335,9 @@ loglik_etas <- function(params,
 #'   \code{alpha_m} init and the magnitude distribution to decompose
 #'   observed event counts into background and triggered components.
 #'   Default \code{FALSE}.
+#' @param hard_subcritical If TRUE (default), constrain
+#'   \code{alpha_m < beta_gr - alpha_beta_gap_min}, initialize inside
+#'   \code{eta < max_branching_ratio}, and return a projected stable fit.
 #' @param ...  Passed through to \code{loglik_etas}.
 #' @return An \code{optim} result list.  \code{$par} is always a length-8
 #'   named vector (including fixed values) on the *original* scale.
@@ -317,6 +357,7 @@ fit_etas <- function(params_init,
                      t_trunc = NULL,
                      log_transform = FALSE,
                      init_decluster = FALSE,
+                     hard_subcritical = TRUE,
                      ...) {
   dots <- list(...)
   dots$precomp <- NULL
@@ -365,16 +406,19 @@ fit_etas <- function(params_init,
     if (is.finite(full_init["p"])) full_init["p"] <- max(full_init["p"], p_min + 1e-3)
     if (is.finite(full_init["q"])) full_init["q"] <- max(full_init["q"], q_min + 1e-3)
   }
-  if (!isFALSE(dots$enforce_alpha_subcritical)) {
-    beta_eff <- suppressWarnings(as.numeric(dots$beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
+  beta_eff <- .etas_resolve_beta_gr(dots$beta_gr, realiz = realiz, m0 = m0)
+  gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+  if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+  eta_max <- suppressWarnings(as.numeric(dots$max_branching_ratio))
+  if (length(eta_max) != 1L || !is.finite(eta_max) || eta_max <= 0) eta_max <- 0.98
+  dots$max_branching_ratio <- eta_max
+  dots$alpha_beta_gap_min <- gap_min
+  if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical)) {
+    if (is.finite(beta_eff)) {
+      full_init <- .etas_project_subcritical(
+        full_init, beta_eff, gap_min = gap_min, eta_max = eta_max
+      )
     }
-    gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
-    if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
-    if (is.finite(beta_eff)) full_init["alpha_m"] <- min(full_init["alpha_m"], beta_eff - gap_min - 1e-4)
   }
 
   fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
@@ -384,6 +428,11 @@ fit_etas <- function(params_init,
 
   # Indices (within the free vector) of params that must be positive
   log_idx <- if (log_transform) which(free_names %in% c("mu", "A", "c", "D")) else integer(0)
+  alpha_free_pos <- if (isTRUE(hard_subcritical) && is.finite(beta_eff)) {
+    which(free_names == "alpha_m")
+  } else {
+    integer(0)
+  }
 
   finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
   if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
@@ -397,10 +446,25 @@ fit_etas <- function(params_init,
   # Transform initial values to optimisation scale
   opt_init <- free_init
   if (length(log_idx) > 0) opt_init[log_idx] <- log(free_init[log_idx])
+  if (length(alpha_free_pos) > 0) {
+    alpha_slack <- pmax(
+      beta_eff - gap_min - free_init[alpha_free_pos],
+      1e-12
+    )
+    opt_init[alpha_free_pos] <- log(alpha_slack)
+  }
 
-  profile_fn <- function(opt_par, ...) {
+  opt_to_natural <- function(opt_par) {
     free_par <- opt_par
     if (length(log_idx) > 0) free_par[log_idx] <- exp(opt_par[log_idx])
+    if (length(alpha_free_pos) > 0) {
+      free_par[alpha_free_pos] <- beta_eff - gap_min - exp(opt_par[alpha_free_pos])
+    }
+    free_par
+  }
+
+  profile_fn <- function(opt_par, ...) {
+    free_par <- opt_to_natural(opt_par)
     par8 <- full_init
     par8[free_idx] <- free_par
     ll_val <- tryCatch(
@@ -437,13 +501,23 @@ fit_etas <- function(params_init,
   fit <- do.call(stats::optim, opt_args)
 
   # Back-transform to original scale
-  free_result <- fit$par
-  if (length(log_idx) > 0) free_result[log_idx] <- exp(fit$par[log_idx])
+  free_result <- opt_to_natural(fit$par)
 
   par8 <- full_init
   par8[free_idx] <- free_result
+  if (isTRUE(hard_subcritical) && is.finite(beta_eff)) {
+    par8 <- .etas_project_subcritical(
+      par8, beta_eff, gap_min = gap_min, eta_max = eta_max
+    )
+  }
   fit$par <- par8
   fit$m0 <- m0
+  fit$hard_subcritical <- isTRUE(hard_subcritical)
+  fit$branching_ratio <- if (is.finite(beta_eff)) {
+    .etas_univ_branching_ratio(par8, beta_eff)
+  } else {
+    NA_real_
+  }
   return(fit)
 }
 

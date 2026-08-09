@@ -24,6 +24,7 @@ loglik_etas(
   alpha_beta_soft_gap = 0.05,
   alpha_beta_soft_weight = 2000,
   alpha_beta_soft_power = 2,
+  max_branching_ratio = Inf,
   stability_barrier_start = 0.95,
   stability_barrier_weight = 50000,
   stability_barrier_power = 4,

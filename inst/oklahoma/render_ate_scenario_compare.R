@@ -67,6 +67,14 @@ load_scenario <- function(scen) {
     if (file.exists(alt)) path <- alt else return(NULL)
   }
   r <- readRDS(path)
+  boot_E_df <- as.data.frame(r$bootstrap_ate$fit_E$replicate_summary)
+  boot_F_df <- as.data.frame(r$bootstrap_ate$fit_F$replicate_summary)
+  if ("is_stable" %in% names(boot_E_df)) {
+    boot_E_df <- boot_E_df[!is.na(boot_E_df$is_stable) & boot_E_df$is_stable, , drop = FALSE]
+  }
+  if ("is_stable" %in% names(boot_F_df)) {
+    boot_F_df <- boot_F_df[!is.na(boot_F_df$is_stable) & boot_F_df$is_stable, , drop = FALSE]
+  }
   list(
     scenario = scen,
     label = scenario_labels[[scen]] %||% scen,
@@ -79,10 +87,16 @@ load_scenario <- function(scen) {
     contrast = as.character(r$config$ATE_CONTRAST %||% NA),
     point_E = point_mean(r$fits_named$E$ate),
     point_F = point_mean(r$fits_named$F$ate),
-    boot_E = r$bootstrap_ate$fit_E$replicate_summary$ate_total_mean,
-    boot_F = r$bootstrap_ate$fit_F$replicate_summary$ate_total_mean,
-    n_E = length(r$bootstrap_ate$fit_E$replicate_summary$ate_total_mean %||% numeric(0)),
-    n_F = length(r$bootstrap_ate$fit_F$replicate_summary$ate_total_mean %||% numeric(0)),
+    boot_E = boot_E_df$ate_total_mean,
+    boot_F = boot_F_df$ate_total_mean,
+    n_E = nrow(boot_E_df),
+    n_F = nrow(boot_F_df),
+    attempted_E = r$bootstrap_ate$fit_E$n_attempted %||%
+      r$bootstrap_ate$config$reps %||% nrow(boot_E_df),
+    attempted_F = r$bootstrap_ate$fit_F$n_attempted %||%
+      r$bootstrap_ate$config$reps %||% nrow(boot_F_df),
+    explosive_E = r$bootstrap_ate$fit_E$n_explosive %||% NA_integer_,
+    explosive_F = r$bootstrap_ate$fit_F$n_explosive %||% NA_integer_,
     job_id = r$metadata$job_id %||% NA_character_
   )
 }
@@ -109,6 +123,10 @@ summ_rows <- lapply(present, function(s) {
     job_id = s$job_id,
     n_E = s$n_E,
     n_F = s$n_F,
+    attempted_E = s$attempted_E,
+    attempted_F = s$attempted_F,
+    explosive_E = s$explosive_E,
+    explosive_F = s$explosive_F,
     point_E = s$point_E,
     point_F = s$point_F,
     boot_raw_mean_E = mean(s$boot_E, na.rm = TRUE),

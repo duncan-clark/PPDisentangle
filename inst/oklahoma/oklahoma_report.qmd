@@ -1,6 +1,6 @@
 ---
 title: "Oklahoma Induced Seismicity: Causal ETAS Analysis"
-subtitle: "Bivariate ETAS with Partition Sensitivity"
+subtitle: "Bivariate ETAS · all-or-nothing DTAITE (E/F)"
 author: "PPDisentangle"
 date: today
 format:
@@ -77,10 +77,14 @@ explicit_result_file <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
 if (nzchar(explicit_result_file) && !file.exists(explicit_result_file)) {
   stop("OK_RESULTS_FILE was provided but does not exist: ", explicit_result_file)
 }
+# Prefer the canonical publication snapshot when present. Scenario job RDS
+# files (univ/obs/biv) can be newer but are not the default main-report source.
+canonical_for_paper <- unlist(lapply(candidate_out_dirs, function(d) {
+  fp <- file.path(d, "for_paper.rds")
+  if (file.exists(fp)) fp else character(0)
+}), use.names = FALSE)
 result_patterns <- c("^oklahoma_results(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_job([0-9]+)?\\.rds$",
-                     "^oklahoma_results_pre_sensitivity(_[0-9]+)?\\.rds$",
-                     "^oklahoma_results_pre_sensitivity_job([0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap(_[0-9]+)?\\.rds$",
                      "^oklahoma_results_pre_bootstrap_job([0-9]+)?\\.rds$",
                      "^for_paper\\.rds$")
@@ -91,48 +95,35 @@ candidate_result_files <- unlist(lapply(candidate_out_dirs, function(d) {
   })))
 }), use.names = FALSE)
 existing_result_files <- candidate_result_files[file.exists(candidate_result_files)]
-if (length(existing_result_files) == 0) {
+if (length(existing_result_files) == 0 && length(canonical_for_paper) == 0) {
   stop("No Oklahoma results RDS file found in expected output directories.")
 }
-result_meta <- data.frame(
-  file = existing_result_files,
-  base = basename(existing_result_files),
-  mtime = as.POSIXct(file.info(existing_result_files)$mtime, origin = "1970-01-01"),
-  stringsAsFactors = FALSE
-)
-result_meta$stage <- ifelse(
-  grepl("pre_sensitivity", result_meta$base, fixed = TRUE), "pre_sensitivity",
-  ifelse(grepl("pre_bootstrap", result_meta$base, fixed = TRUE), "pre_bootstrap", "full")
-)
-result_meta$stage_rank <- match(result_meta$stage, c("pre_sensitivity", "pre_bootstrap", "full"))
-
-# Infer run id from suffixes so we can stay within the newest run:
-# - preferred: _job<id>
-# - fallback: trailing _<digits> before .rds
-# - else: untagged
-job_id <- sub(".*_job([0-9]+).*", "\\1", result_meta$base)
-job_id[!grepl("_job[0-9]+", result_meta$base)] <- NA_character_
-num_id <- sub(".*_([0-9]+)\\.rds$", "\\1", result_meta$base)
-num_id[!grepl("_[0-9]+\\.rds$", result_meta$base)] <- NA_character_
-result_meta$run_key <- ifelse(
-  !is.na(job_id),
-  paste0("job:", job_id),
-  ifelse(!is.na(num_id), paste0("num:", num_id), "untagged")
-)
-
-run_latest_idx <- tapply(seq_len(nrow(result_meta)), result_meta$run_key, function(idx) {
-  idx[which.max(result_meta$mtime[idx])]
-})
-run_latest_rows <- result_meta[as.integer(run_latest_idx), , drop = FALSE]
-newest_run_key <- run_latest_rows$run_key[which.max(run_latest_rows$mtime)]
-
-# Select highest available stage from the newest run (full > pre_bootstrap > pre_sensitivity).
-run_pool <- result_meta[result_meta$run_key == newest_run_key, , drop = FALSE]
-best_stage <- max(run_pool$stage_rank, na.rm = TRUE)
-stage_pool <- run_pool[run_pool$stage_rank == best_stage, , drop = FALSE]
 result_file <- if (nzchar(explicit_result_file)) {
   normalizePath(explicit_result_file, winslash = "/", mustWork = TRUE)
+} else if (length(canonical_for_paper) > 0) {
+  normalizePath(canonical_for_paper[[1]], winslash = "/", mustWork = TRUE)
 } else {
+  result_meta <- data.frame(
+    file = existing_result_files,
+    base = basename(existing_result_files),
+    mtime = as.POSIXct(file.info(existing_result_files)$mtime, origin = "1970-01-01"),
+    stringsAsFactors = FALSE
+  )
+  result_meta$stage <- ifelse(
+    grepl("pre_bootstrap", result_meta$base, fixed = TRUE), "pre_bootstrap", "full"
+  )
+  result_meta$stage_rank <- match(result_meta$stage, c("pre_bootstrap", "full"))
+  job_id <- sub(".*_job([0-9]+).*", "\\1", result_meta$base)
+  job_id[!grepl("_job[0-9]+", result_meta$base)] <- NA_character_
+  result_meta$run_key <- ifelse(!is.na(job_id), paste0("job:", job_id), "untagged")
+  run_latest_idx <- tapply(seq_len(nrow(result_meta)), result_meta$run_key, function(idx) {
+    idx[which.max(result_meta$mtime[idx])]
+  })
+  run_latest_rows <- result_meta[as.integer(run_latest_idx), , drop = FALSE]
+  newest_run_key <- run_latest_rows$run_key[which.max(run_latest_rows$mtime)]
+  run_pool <- result_meta[result_meta$run_key == newest_run_key, , drop = FALSE]
+  best_stage <- max(run_pool$stage_rank, na.rm = TRUE)
+  stage_pool <- run_pool[run_pool$stage_rank == best_stage, , drop = FALSE]
   stage_pool$file[which.max(stage_pool$mtime)]
 }
 OUT_DIR <- dirname(result_file)
@@ -319,14 +310,16 @@ directive **AOI_20150318**, requiring operators within a defined Area of
 Interest (AOI) in central Oklahoma to reduce wastewater disposal volumes.
 This report estimates the **all-or-nothing causal effect** of the
 directive on earthquake rates using the **PPDisentangle** framework.
+Counterfactual evaluations use the **full bivariate** ETAS law
+(including cross-excitation).
 
 ## Estimand
 
-The target quantity is the **all-or-nothing total treatment effect**:
-the expected difference in total earthquake counts between
-a world in which *every* county receives the directive
-($\mathbf{Z}=(1,\dots,1)$) and a world in which *no* county receives it
-($\mathbf{Z}=(0,\dots,0)$):
+The target quantity is the **all-or-nothing total treatment effect**
+under the fitted bivariate law: the expected difference in total
+earthquake counts between a world in which *every* county receives the
+directive ($\mathbf{Z}=(1,\dots,1)$) and a world in which *no* county
+receives it ($\mathbf{Z}=(0,\dots,0)$):
 
 $$
 \Delta_{\text{AoN}}
@@ -341,17 +334,16 @@ assignment $\mathbf{z}$.
 
 ## Models
 
-The analysis fits four bivariate ETAS models on the **county partition**:
+Primary county-partition fits (publication pair):
 
 | Label | Model | Background | Labels |
 |:---:|:---|:---|:---|
-| **B** | Naive bivariate ETAS | Homogeneous | Location-based |
-| **D** | SEM bivariate ETAS | Homogeneous | SEM-corrected |
 | **E** | Naive bivariate ETAS | KDE (non-parametric) | Location-based |
 | **F** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
-Additionally, fits B and D are repeated under alternative **partitioning
-schemes** to assess sensitivity to spatial resolution.
+Partition-sensitivity refits use the same E/F specifications on
+alternative tessellations. Other labelled fits in the RDS (A–D, G–J),
+when present, are retained for diagnostics only.
 
 # Study Design
 
@@ -836,56 +828,6 @@ kable(final_cfg_tbl, align = "lc", caption = "Final SEM settings used for this r
   kable_styling(bootstrap_options = "striped", full_width = FALSE)
 ```
 
-### SEM Pilot Tuning (Model D)
-
-```{r sem-pilot-summary}
-#| label: sem-pilot-summary
-pilot <- results$sem_pilot_tuning
-if (is.null(pilot) || isFALSE(pilot$enabled)) {
-  cat("Pilot tuning not run for this results file.\n")
-} else {
-  best <- pilot$best
-  cat(sprintf(
-    "Pilot ran with %s combos (inner iter = %s, cores = %s).\n\n",
-    if (!is.null(pilot$grid_size)) as.character(pilot$grid_size) else "N/A",
-    if (!is.null(pilot$inner_iter)) as.character(pilot$inner_iter) else "N/A",
-    if (!is.null(pilot$cores)) as.character(pilot$cores) else "N/A"
-  ))
-  if (!is.null(best) && nrow(best) > 0) {
-    cat(sprintf(
-      "Selected settings from pilot: change_factor = %.4f, min_mult = %.3f, max_mult = %.3f, temperature = %.3f\n\n",
-      as.numeric(best$change_factor[[1]]),
-      as.numeric(best$min_mult[[1]]),
-      as.numeric(best$max_mult[[1]]),
-      as.numeric(best$temperature[[1]])
-    ))
-  } else {
-    cat("No successful pilot candidate was selected; defaults were kept.\n\n")
-  }
-  if (!is.null(pilot$results) && nrow(pilot$results) > 0) {
-    top_tbl <- pilot$results
-    if ("pilot_score" %in% names(top_tbl)) {
-      top_tbl <- top_tbl[order(top_tbl$pilot_score, -top_tbl$final_metric), , drop = FALSE]
-    } else {
-      top_tbl <- top_tbl[order(-top_tbl$final_metric), , drop = FALSE]
-    }
-    top_tbl <- head(top_tbl, 5)
-    keep_cols <- intersect(
-      c("change_factor", "min_mult", "max_mult", "temperature", "final_metric",
-        "mean_avg_flips_tail", "mean_acc_flips_tail", "pilot_score"),
-      names(top_tbl)
-    )
-    top_tbl <- top_tbl[, keep_cols, drop = FALSE]
-    names(top_tbl) <- c(
-      "change_factor", "min_mult", "max_mult", "temperature", "final_metric",
-      "tail_avg_flips", "tail_acc_flips", "pilot_score"
-    )[seq_len(ncol(top_tbl))]
-    kable(top_tbl, digits = 4, caption = "Top pilot candidates (Model D).") |>
-      kable_styling(bootstrap_options = "striped", full_width = FALSE)
-  }
-}
-```
-
 # Results — County Partition
 
 ```{r extract}
@@ -1094,32 +1036,6 @@ get_sem_metric_trace <- function(fit_obj) {
   }
   NULL
 }
-
-# Lightweight wiring audit to ensure report labels map to the intended objects.
-build_fit_wiring_audit <- function(results_obj) {
-  defs <- data.frame(
-    Label = c("A", "B", "C", "D", "E", "F", "G", "H", "I", "J"),
-    `Result key` = c("fits_named$A", "fits_named$B", "fits_named$C", "fits_named$D",
-                     "fits_named$E", "fits_named$F", "fits_named$G", "fits_named$H",
-                     "fits_named$I", "fits_named$J"),
-    `Background` = c("Homogeneous", "Homogeneous", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE", "KDE"),
-    `Labelling source` = c("Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM", "Location", "SEM"),
-    check.names = FALSE,
-    stringsAsFactors = FALSE
-  )
-  defs$`Present in RDS` <- vapply(defs$Label, function(lbl) {
-    !is.null(results_obj$fits_named) && !is.null(results_obj$fits_named[[lbl]])
-  }, logical(1))
-  defs
-}
-```
-
-```{r tbl-fit-wiring-audit}
-#| label: tbl-fit-wiring-audit
-wiring_df <- build_fit_wiring_audit(results)
-kable(wiring_df, align = "lcccc",
-      caption = "Model wiring audit for the county-partition report tables/figures.") |>
-  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
 ## Marginal Parameters
@@ -1508,46 +1424,6 @@ cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(results$pp_d
 cm_J <- build_cm(if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, "J")
 ```
 
-### Fit B — SEM Bivariate ETAS
-
-```{r tbl-cm-D}
-#| label: tbl-cm-D
-if (!is.null(cm_D)) {
-  n_post_D <- sum(cm_D)
-  cm_D_pct <- round(cm_D / n_post_D * 100, 1)
-  cm_display_D <- cm_D
-  for (rn in rownames(cm_D)) for (cn in colnames(cm_D)) {
-    cm_display_D[rn, cn] <- paste0(cm_D[rn, cn], "  (", cm_D_pct[rn, cn], "%)")
-  }
-  kable(cm_display_D,
-        caption = paste0("Fit B: Location vs SEM-inferred label (n = ", n_post_D,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_D)))
-}
-```
-
-### Fit D — SEM Bivariate + KDE Background
-
-```{r tbl-cm-F}
-#| label: tbl-cm-F
-if (!is.null(cm_F)) {
-  n_post_F <- sum(cm_F)
-  cm_F_pct <- round(cm_F / n_post_F * 100, 1)
-  cm_display_F <- cm_F
-  for (rn in rownames(cm_F)) for (cn in colnames(cm_F)) {
-    cm_display_F[rn, cn] <- paste0(cm_F[rn, cn], "  (", cm_F_pct[rn, cn], "%)")
-  }
-  kable(cm_display_F,
-        caption = paste0("Fit D: Location vs SEM-inferred label (n = ", n_post_F,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_F)))
-}
-```
-
 ### Fit F — SEM Bivariate + KDE (All-Free)
 
 ```{r tbl-cm-F-allfree}
@@ -1568,77 +1444,12 @@ if (!is.null(cm_H)) {
 }
 ```
 
-### Fit H — SEM Bivariate + KDE (Structural Fixed)
-
-```{r tbl-cm-H-struct}
-#| label: tbl-cm-H-struct
-if (!is.null(cm_K)) {
-  n_post_K <- sum(cm_K)
-  cm_K_pct <- round(cm_K / n_post_K * 100, 1)
-  cm_display_K <- cm_K
-  for (rn in rownames(cm_K)) for (cn in colnames(cm_K)) {
-    cm_display_K[rn, cn] <- paste0(cm_K[rn, cn], "  (", cm_K_pct[rn, cn], "%)")
-  }
-  kable(cm_display_K,
-        caption = paste0("Fit H: Location vs SEM-inferred label (n = ", n_post_K,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_K)))
-}
-```
-
-### Fit I — Naive Univariate ETAS + KDE
-
-```{r tbl-cm-G}
-#| label: tbl-cm-G
-if (!is.null(cm_G)) {
-  n_post_G <- sum(cm_G)
-  cm_G_pct <- round(cm_G / n_post_G * 100, 1)
-  cm_display_G <- cm_G
-  for (rn in rownames(cm_G)) for (cn in colnames(cm_G)) {
-    cm_display_G[rn, cn] <- paste0(cm_G[rn, cn], "  (", cm_G_pct[rn, cn], "%)")
-  }
-  kable(cm_display_G,
-        caption = paste0("Fit I: Location vs inferred label (naive baseline, n = ", n_post_G,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_G)))
-}
-```
-
-### Fit J — SEM Univariate ETAS + KDE
-
-```{r tbl-cm-H}
-#| label: tbl-cm-H
-if (!is.null(cm_J)) {
-  n_post_H <- sum(cm_J)
-  cm_H_pct <- round(cm_J / n_post_H * 100, 1)
-  cm_display_H <- cm_J
-  for (rn in rownames(cm_J)) for (cn in colnames(cm_J)) {
-    cm_display_H[rn, cn] <- paste0(cm_J[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
-  }
-  kable(cm_display_H,
-        caption = paste0("Fit J: Location vs SEM-inferred label (n = ", n_post_H,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_J)))
-}
-```
-
 ### Relabelling Summary
 
 ```{r tbl-cm-summary}
 #| label: tbl-cm-summary
 sum_rows <- list()
-for (info in list(list(cm = cm_D, lab = "B: SEM Bivariate"),
-                  list(cm = cm_F, lab = "D: SEM Bivariate+KDE (ctrl-fixed)"),
-                  list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"),
-                  list(cm = cm_K, lab = "H: SEM Bivariate+KDE (struct-fixed)"),
-                  list(cm = cm_G, lab = "I: Naive Univ+KDE"),
-                  list(cm = cm_J, lab = "J: SEM Univ+KDE"))) {
+for (info in list(list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"))) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
@@ -1656,7 +1467,7 @@ for (info in list(list(cm = cm_D, lab = "B: SEM Bivariate"),
 }
 if (length(sum_rows) > 0) {
   kable(do.call(rbind, sum_rows),
-        caption = "Summary of SEM relabelling across models.",
+        caption = "Summary of SEM relabelling for the primary Fit F specification.",
         align = "lccccc") |>
     kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 }
@@ -1702,7 +1513,7 @@ if (length(diag_rows) > 0) {
 }
 ```
 
-# All-or-Nothing Treatment Effect
+# All-or-Nothing Treatment Effect (bivariate law)
 
 ## County Partition
 
@@ -1770,11 +1581,18 @@ model_label_by_id <- function(id) {
 }
 get_boot_df <- function(id) {
   if (is.null(boot_obj)) return(NULL)
+  stable_rows <- function(df) {
+    df <- as.data.frame(df)
+    if ("is_stable" %in% names(df)) {
+      df <- df[!is.na(df$is_stable) & df$is_stable, , drop = FALSE]
+    }
+    df
+  }
   key <- paste0("fit_", toupper(id))
   if (!is.null(boot_obj[[key]]) &&
       !is.null(boot_obj[[key]]$replicate_summary) &&
       nrow(boot_obj[[key]]$replicate_summary) > 0) {
-    return(boot_obj[[key]]$replicate_summary)
+    return(stable_rows(boot_obj[[key]]$replicate_summary))
   }
   # Cross-alias fallback between legacy C/D and newer E/F naming.
   alias <- switch(toupper(id), "C" = "fit_E", "D" = "fit_F", "E" = "fit_C", "F" = "fit_D", NA_character_)
@@ -1782,7 +1600,7 @@ get_boot_df <- function(id) {
       !is.null(boot_obj[[alias]]) &&
       !is.null(boot_obj[[alias]]$replicate_summary) &&
       nrow(boot_obj[[alias]]$replicate_summary) > 0) {
-    return(boot_obj[[alias]]$replicate_summary)
+    return(stable_rows(boot_obj[[alias]]$replicate_summary))
   }
   NULL
 }
@@ -1794,6 +1612,20 @@ boot_naive_label <- model_label_by_id(boot_naive_id)
 boot_sem_label <- model_label_by_id(boot_sem_id)
 boot_pair_label <- paste0(boot_naive_id, "/", boot_sem_id)
 
+# Explosive refits are removed in the analysis pipeline before these summaries.
+# Retain every finite ATE from the stable remainder; do not apply an ATE-tail
+# filter, because a large but stable estimate is part of parameter uncertainty.
+retain_boot_vals <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  ok <- is.finite(x)
+  list(
+    vals = x[ok],
+    n_in = length(x),
+    n_out = as.integer(sum(!ok)),
+    dropped = x[!ok]
+  )
+}
+
 get_boot_summary <- function(model_label) {
   vals <- NULL
   if (model_label == boot_naive_label && !is.null(boot_naive_df)) vals <- boot_naive_df$ate_total_mean
@@ -1804,7 +1636,7 @@ get_boot_summary <- function(model_label) {
   if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("E"))) vals <- get_boot_df("E")$ate_total_mean
   if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("F"))) vals <- get_boot_df("F")$ate_total_mean
   if (is.null(vals)) return(NULL)
-  vals <- vals[is.finite(vals)]
+  vals <- retain_boot_vals(vals)$vals
   if (length(vals) < 2) return(NULL)
   list(
     sd = stats::sd(vals, na.rm = TRUE),
@@ -2028,6 +1860,42 @@ to_named_num <- function(x) {
   v
 }
 
+# GR channel branching ratios and spectral radius of the offspring matrix.
+# Channel eta_ij = A_ij * beta / (beta - alpha_ij); Inf if alpha >= beta.
+# Explosive (supercritical) iff rho = spectral radius of
+#   [[eta_00, eta_01], [eta_10, eta_11]]  is >= 1.
+beta_gr_tbl <- suppressWarnings(as.numeric(unlist(cfg$BETA_GR, use.names = FALSE)))
+beta_gr_tbl <- beta_gr_tbl[is.finite(beta_gr_tbl) & beta_gr_tbl > 0]
+beta_gr_tbl <- if (length(beta_gr_tbl)) beta_gr_tbl[[1]] else 2.3
+etas_branch_matrix <- function(par, beta_gr) {
+  getp <- function(nm) {
+    v <- suppressWarnings(as.numeric(par[[nm]]))
+    if (!length(v) || !is.finite(v[[1]])) return(NA_real_)
+    v[[1]]
+  }
+  eta_ij <- function(A, alpha) {
+    if (!is.finite(A) || !is.finite(alpha) || !is.finite(beta_gr) || beta_gr <= 0) return(NA_real_)
+    gap <- beta_gr - alpha
+    if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+    A * beta_gr / gap
+  }
+  matrix(
+    c(
+      eta_ij(getp("A_00"), getp("alpha_m_00")),
+      eta_ij(getp("A_01"), getp("alpha_m_01")),
+      eta_ij(getp("A_10"), getp("alpha_m_10")),
+      eta_ij(getp("A_11"), getp("alpha_m_11"))
+    ),
+    nrow = 2, byrow = TRUE,
+    dimnames = list(c("from_0", "from_1"), c("to_0", "to_1"))
+  )
+}
+spectral_radius_etas <- function(par, beta_gr) {
+  M <- etas_branch_matrix(par, beta_gr)
+  if (!all(is.finite(M))) return(Inf)
+  max(Re(eigen(M, only.values = TRUE)$values))
+}
+
 ef_param_order <- c(
   "mu_0", "mu_1",
   "A_00", "alpha_m_00",
@@ -2038,6 +1906,8 @@ ef_param_order <- c(
 )
 E_vec <- to_named_num(if (!is.null(fit_E_obj)) fit_E_obj$params else NULL)
 F_vec <- to_named_num(if (!is.null(fit_F_obj)) fit_F_obj$params else NULL)
+rho_E <- if (length(E_vec)) spectral_radius_etas(E_vec, beta_gr_tbl) else NA_real_
+rho_F <- if (length(F_vec)) spectral_radius_etas(F_vec, beta_gr_tbl) else NA_real_
 
 if (length(E_vec) > 0 || length(F_vec) > 0) {
   ef_tbl <- data.frame(
@@ -2047,18 +1917,39 @@ if (length(E_vec) > 0 || length(F_vec) > 0) {
     check.names = FALSE
   )
   fmt_sigfig <- function(x, digits = 3L) {
-    if (is.null(x) || !is.finite(x)) return("N/A")
+    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
+    if (!is.finite(x)) return("Inf")
     v <- signif(as.numeric(x), digits)
     if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
     order <- floor(log10(abs(v)))
     dp <- max(0L, as.integer(digits) - order - 1L)
     sprintf(paste0("%.", dp, "f"), v)
   }
+  fmt_explosive <- function(rho) {
+    if (!is.finite(rho)) return("yes (Inf)")
+    if (rho >= 1) "yes" else "no"
+  }
   ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_sigfig(v, 3L), character(1))
   ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_sigfig(v, 3L), character(1))
+  # Append spectral radius + explosiveness flag (already formatted)
+  ef_tbl <- rbind(
+    ef_tbl,
+    data.frame(
+      Parameter = c("rho (spectral radius)", "explosive? (rho >= 1)"),
+      `E: Naive Biv+KDE (all-free)` = c(fmt_sigfig(rho_E, 3L), fmt_explosive(rho_E)),
+      `F: SEM Biv+KDE (all-free)` = c(fmt_sigfig(rho_F, 3L), fmt_explosive(rho_F)),
+      check.names = FALSE
+    )
+  )
   kable(
     ef_tbl,
-    caption = "All fitted bivariate ETAS parameters for Models E and F.",
+    caption = paste0(
+      "All fitted bivariate ETAS parameters for Models E and F, plus the Gutenberg–Richter ",
+      "branching spectral radius rho (beta=", signif(beta_gr_tbl, 3), "). ",
+      "Channel mean offspring: eta_ij = A_ij * beta / (beta - alpha_ij) ",
+      "(Inf if alpha_ij >= beta). Explosive means rho(eta) >= 1 ",
+      "(expected cluster size diverges)."
+    ),
     align = "lcc"
   ) |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
@@ -2120,39 +2011,172 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 
 ```{r ate-scenario-compare-note, results='asis'}
 #| echo: false
+cat("\n### Four-scenario ATE comparison\n\n")
+cat("The **2×2 panel below** overlays Naive (E) and SEM (F) bias-corrected bootstrap ")
+cat("histograms for univariate vs bivariate × all-or-nothing vs observed. ")
+cat("When present, **512-rep** scenario RDS (`*_boot512`) are preferred; otherwise the ")
+cat("largest available bootstrap *n* per scenario is used. ")
+cat("Detailed companion HTML: ")
 scen_html <- file.path(dirname(result_file), "oklahoma_ate_scenarios.html")
 scen_csv <- file.path(dirname(result_file), "ate_scenarios", "scenario_summary.csv")
-if (file.exists(scen_html) || file.exists(scen_csv)) {
-  cat("\n### Four-scenario ATE comparison\n\n")
-  cat("A side-by-side comparison of **univariate vs bivariate** forward simulation ")
-  cat("under **all-or-nothing** and **observed vs control-everywhere**, each with its own ")
-  cat("full debiased bootstrap, is available in ")
-  if (file.exists(scen_html)) {
-    cat(sprintf("[`oklahoma_ate_scenarios.html`](%s)", basename(scen_html)))
-  } else {
-    cat("`oklahoma_ate_scenarios.html` (render with `render_ate_scenario_compare.R`)")
+if (file.exists(scen_html)) {
+  cat(sprintf("[`oklahoma_ate_scenarios.html`](%s)", basename(scen_html)))
+} else {
+  cat("`oklahoma_ate_scenarios.html` (render with `render_ate_scenario_compare.R`)")
+}
+cat(".\n\n")
+if (file.exists(scen_csv)) {
+  scen_sum <- utils::read.csv(scen_csv, stringsAsFactors = FALSE)
+  if (nrow(scen_sum) > 0) {
+    knitr::kable(
+      scen_sum[, intersect(c("label", "method", "point_E", "point_F",
+                             "boot_bc_mean_E", "boot_bc_sd_E",
+                             "boot_bc_mean_F", "boot_bc_sd_F"), names(scen_sum)),
+               drop = FALSE],
+      digits = 1,
+      caption = "ATE scenario summary (bias-corrected bootstrap)."
+    ) |>
+      kableExtra::kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
   }
-  cat(".\n\n")
-  if (file.exists(scen_csv)) {
-    scen_sum <- utils::read.csv(scen_csv, stringsAsFactors = FALSE)
-    if (nrow(scen_sum) > 0) {
-      knitr::kable(
-        scen_sum[, intersect(c("label", "method", "point_E", "point_F",
-                               "boot_bc_mean_E", "boot_bc_sd_E",
-                               "boot_bc_mean_F", "boot_bc_sd_F"), names(scen_sum)),
-                 drop = FALSE],
-        digits = 1,
-        caption = "ATE scenario summary (bias-corrected bootstrap)."
-      ) |>
-        kableExtra::kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
-    }
+}
+```
+
+```{r fig-ate-scenarios-4panel}
+#| label: fig-ate-scenarios-4panel
+#| fig-cap: "Four-scenario bias-corrected bootstrap comparison (univariate vs bivariate × all-or-nothing vs observed). Each panel overlays Naive (E) and SEM (F), using all finite ATEs retained after failed or explosive refits are excluded. Prefers 512-attempt scenario RDS when available."
+#| fig-height: 7.2
+scen_specs <- list(
+  list(id = "univ_aon", law = "Univariate", contrast = "All-or-nothing",
+       files = c("for_paper_univ_aon_boot512.rds", "for_paper_univ_aon.rds",
+                 file.path("ate_scenarios", "univ_aon_boot512", "for_paper.rds"),
+                 file.path("ate_scenarios", "univ_aon", "for_paper.rds"))),
+  list(id = "univ_obs", law = "Univariate", contrast = "Observed vs control",
+       files = c("for_paper_univ_obs_boot512.rds", "for_paper_univ_obs.rds",
+                 file.path("ate_scenarios", "univ_obs_boot512", "for_paper.rds"),
+                 file.path("ate_scenarios", "univ_obs", "for_paper.rds"))),
+  list(id = "biv_aon", law = "Bivariate", contrast = "All-or-nothing",
+       files = c("for_paper_biv_aon_boot512.rds", "for_paper.rds",
+                 "for_paper_biv_aon_boot256.rds", "for_paper_biv_aon.rds",
+                 file.path("ate_scenarios", "biv_aon_boot512", "for_paper.rds"),
+                 file.path("ate_scenarios", "biv_aon", "for_paper.rds"))),
+  list(id = "biv_obs", law = "Bivariate", contrast = "Observed vs control",
+       files = c("for_paper_biv_obs_boot512.rds", "for_paper_biv_obs.rds",
+                 "for_paper_biv_obs_boot256.rds",
+                 file.path("ate_scenarios", "biv_obs_boot512", "for_paper.rds"),
+                 file.path("ate_scenarios", "biv_obs", "for_paper.rds"),
+                 file.path("ate_scenarios", "biv_obs_boot256", "for_paper.rds")))
+)
+resolve_scen_file <- function(rel_files) {
+  cands <- unique(unlist(lapply(c(OUT_DIR, candidate_out_dirs), function(d) {
+    file.path(d, rel_files)
+  }), use.names = FALSE))
+  # Prefer the largest bootstrap n among existing candidates.
+  existing <- cands[file.exists(cands)]
+  if (!length(existing)) return(NA_character_)
+  n_boot <- vapply(existing, function(f) {
+    r <- tryCatch(readRDS(f), error = function(e) NULL)
+    if (is.null(r) || is.null(r$bootstrap_ate$fit_F$replicate_summary)) return(0L)
+    as.integer(nrow(r$bootstrap_ate$fit_F$replicate_summary))
+  }, integer(1))
+  existing[[which.max(n_boot)]]
+}
+recenter_boot_scen <- function(boot_vals, target_mean) {
+  bv <- suppressWarnings(as.numeric(boot_vals))
+  if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
+  bmean <- mean(bv, na.rm = TRUE)
+  if (!is.finite(bmean) || is.na(bmean)) return(bv)
+  bv + (target_mean - bmean)
+}
+point_mean_scen <- function(fit_obj) {
+  if (is.null(fit_obj) || is.null(fit_obj$ate)) return(NA_real_)
+  vals <- get_total_effect_sim(fit_obj$ate, n_tiles = n_cty)
+  vals <- suppressWarnings(as.numeric(vals))
+  vals <- vals[is.finite(vals)]
+  if (!length(vals)) return(NA_real_)
+  mean(vals, na.rm = TRUE)
+}
+scen_boot_rows <- list()
+scen_n_note <- character(0)
+for (sp in scen_specs) {
+  fp <- resolve_scen_file(sp$files)
+  if (is.na(fp)) next
+  rr <- tryCatch(readRDS(fp), error = function(e) NULL)
+  if (is.null(rr) || is.null(rr$bootstrap_ate$fit_E) || is.null(rr$bootstrap_ate$fit_F)) next
+  be_df <- as.data.frame(rr$bootstrap_ate$fit_E$replicate_summary)
+  bf_df <- as.data.frame(rr$bootstrap_ate$fit_F$replicate_summary)
+  if ("is_stable" %in% names(be_df)) {
+    be_df <- be_df[!is.na(be_df$is_stable) & be_df$is_stable, , drop = FALSE]
   }
+  if ("is_stable" %in% names(bf_df)) {
+    bf_df <- bf_df[!is.na(bf_df$is_stable) & bf_df$is_stable, , drop = FALSE]
+  }
+  be_raw <- be_df$ate_total_mean
+  bf_raw <- bf_df$ate_total_mean
+  pe <- point_mean_scen(rr$fits_named$E)
+  pf <- point_mean_scen(rr$fits_named$F)
+  be <- retain_boot_vals(be_raw)
+  bf <- retain_boot_vals(bf_raw)
+  attempted_E <- rr$bootstrap_ate$fit_E$n_attempted %||%
+    rr$bootstrap_ate$config$reps %||% be$n_in
+  attempted_F <- rr$bootstrap_ate$fit_F$n_attempted %||%
+    rr$bootstrap_ate$config$reps %||% bf$n_in
+  scen_n_note <- c(
+    scen_n_note,
+    sprintf(
+      "%s retained E=%d/%d, F=%d/%d",
+      sp$id, length(be$vals), attempted_E, length(bf$vals), attempted_F
+    )
+  )
+  scen_boot_rows[[length(scen_boot_rows) + 1L]] <- rbind(
+    data.frame(
+      Law = sp$law, Contrast = sp$contrast, Model = "Naive (E)",
+      TotalATE = recenter_boot_scen(be$vals, pe), stringsAsFactors = FALSE
+    ),
+    data.frame(
+      Law = sp$law, Contrast = sp$contrast, Model = "SEM (F)",
+      TotalATE = recenter_boot_scen(bf$vals, pf), stringsAsFactors = FALSE
+    )
+  )
+}
+if (length(scen_boot_rows) > 0) {
+  scen_boot_df <- do.call(rbind, scen_boot_rows)
+  scen_boot_df <- scen_boot_df[is.finite(scen_boot_df$TotalATE), , drop = FALSE]
+  scen_boot_df$Law <- factor(scen_boot_df$Law, levels = c("Univariate", "Bivariate"))
+  scen_boot_df$Contrast <- factor(scen_boot_df$Contrast, levels = c("All-or-nothing", "Observed vs control"))
+  scen_boot_df$Model <- factor(scen_boot_df$Model, levels = c("Naive (E)", "SEM (F)"))
+  scen_means <- aggregate(TotalATE ~ Law + Contrast + Model, scen_boot_df, mean)
+  ggplot(scen_boot_df, aes(x = TotalATE, fill = Model)) +
+    geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+    geom_vline(data = scen_means, aes(xintercept = TotalATE, colour = Model),
+               linewidth = 0.9, show.legend = FALSE) +
+    facet_grid(Law ~ Contrast, scales = "free_y") +
+    scale_fill_manual(values = c("Naive (E)" = "#fdb462", "SEM (F)" = "#80b1d3")) +
+    scale_colour_manual(values = c("Naive (E)" = "#e6550d", "SEM (F)" = "#3182bd")) +
+    coord_cartesian(xlim = c(-1000, 1000)) +
+    labs(
+      x = bquote("Bias-corrected bootstrap " ~ hat(Delta) ~ "(total saved /" ~ .(ate_days) ~ "days)"),
+      y = "Bootstrap replicate count",
+      fill = "Model",
+      title = "Four-scenario ATE bootstrap comparison",
+      subtitle = paste(scen_n_note, collapse = " · ")
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "top",
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 9),
+      strip.text = element_text(face = "bold")
+    )
+} else {
+  plot.new()
+  text(0.5, 0.5, "Four-scenario RDS files not found under oklahoma output.")
 }
 ```
 
 ```{r fig-ate-bootstrap-cd}
 #| label: fig-ate-bootstrap-cd
-#| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the selected KDE bootstrap pair (shape/spread preserved, recentered to the point ATE for this results file's estimand)."
+#| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the selected KDE bootstrap pair, using all finite ATEs retained after failed or explosive refits are excluded. Shape/spread preserved, recentered to the point ATE."
 #| fig-height: 4
 # Labels / centers follow results$config$ATE_METHOD for this RDS.
 if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
@@ -2187,8 +2211,10 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 
   naive_obs_mean <- obs_ate_mean(boot_naive_id)
   sem_obs_mean <- obs_ate_mean(boot_sem_id)
-  naive_bc_vals <- recenter_boot(boot_naive_df$ate_total_mean, naive_obs_mean)
-  sem_bc_vals <- recenter_boot(boot_sem_df$ate_total_mean, sem_obs_mean)
+  naive_filt <- retain_boot_vals(boot_naive_df$ate_total_mean)
+  sem_filt <- retain_boot_vals(boot_sem_df$ate_total_mean)
+  naive_bc_vals <- recenter_boot(naive_filt$vals, naive_obs_mean)
+  sem_bc_vals <- recenter_boot(sem_filt$vals, sem_obs_mean)
 
   boot_cd <- rbind(
     data.frame(Model = boot_naive_label, TotalATE = naive_bc_vals),
@@ -2197,6 +2223,7 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
   boot_cd <- boot_cd[is.finite(boot_cd$TotalATE), , drop = FALSE]
   if (nrow(boot_cd) > 0) {
     boot_means <- aggregate(TotalATE ~ Model, boot_cd, mean)
+    n_drop <- naive_filt$n_out + sem_filt$n_out
     ggplot(boot_cd, aes(x = TotalATE, fill = Model)) +
       geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
       geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
@@ -2204,19 +2231,17 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
                  linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
       scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(boot_naive_label, boot_sem_label))) +
       scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(boot_naive_label, boot_sem_label))) +
+      coord_cartesian(xlim = c(-1000, 1000)) +
       labs(x = bquote(hat(Delta)[AoN] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days) ~ "days)"),
            y = "Bootstrap replicate count",
            title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")"),
-           subtitle = if (!is.null(results$ate_bivariate_patch)) {
-             ctr <- results$ate_bivariate_patch$contrast
-             if (is.null(ctr)) ctr <- "observed"
-             sprintf(
-               "Centers: bivariate/%s ATE (E=%.1f, F=%.1f); bootstrap shape from archived run",
-               ctr, naive_obs_mean, sem_obs_mean
-             )
-           } else {
-             NULL
-           }) +
+           subtitle = sprintf(
+             "Centers: E=%.1f, F=%.1f; retained stable finite ATEs %d/%d (E) and %d/%d (F); %d non-finite ATE(s) omitted",
+             naive_obs_mean, sem_obs_mean,
+             length(naive_filt$vals), naive_filt$n_in,
+             length(sem_filt$vals), sem_filt$n_in,
+             n_drop
+           )) +
       theme_minimal(base_size = 13) +
       theme(legend.position = "top",
             plot.title = element_text(hjust = 0.5, face = "bold"),
@@ -2228,6 +2253,114 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 } else {
   plot.new()
   text(0.5, 0.5, sprintf("Bias-corrected bootstrap %s results are unavailable in this results checkpoint.", boot_pair_label))
+}
+```
+
+```{r fig-ate-bootstrap-biv-obs}
+#| label: fig-ate-bootstrap-biv-obs
+#| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (E/F), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
+#| fig-height: 4
+# Companion scenario RDS written by launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
+biv_obs_candidates <- unique(c(
+  file.path(OUT_DIR, "for_paper_biv_obs.rds"),
+  file.path(OUT_DIR, "ate_scenarios", "biv_obs", "for_paper.rds"),
+  unlist(lapply(candidate_out_dirs, function(d) {
+    c(
+      file.path(d, "for_paper_biv_obs.rds"),
+      file.path(d, "ate_scenarios", "biv_obs", "for_paper.rds")
+    )
+  }), use.names = FALSE)
+))
+biv_obs_file <- biv_obs_candidates[file.exists(biv_obs_candidates)][1]
+if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
+  res_obs <- readRDS(biv_obs_file)
+  boot_obs <- res_obs$bootstrap_ate
+  fit_E_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$E else NULL
+  fit_F_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$F else NULL
+  boot_E_obs <- if (!is.null(boot_obs$fit_E)) boot_obs$fit_E$replicate_summary else NULL
+  boot_F_obs <- if (!is.null(boot_obs$fit_F)) boot_obs$fit_F$replicate_summary else NULL
+  if (!is.null(boot_E_obs) && "is_stable" %in% names(boot_E_obs)) {
+    boot_E_obs <- boot_E_obs[
+      !is.na(boot_E_obs$is_stable) & boot_E_obs$is_stable, , drop = FALSE
+    ]
+  }
+  if (!is.null(boot_F_obs) && "is_stable" %in% names(boot_F_obs)) {
+    boot_F_obs <- boot_F_obs[
+      !is.na(boot_F_obs$is_stable) & boot_F_obs$is_stable, , drop = FALSE
+    ]
+  }
+  if (!is.null(boot_E_obs) && !is.null(boot_F_obs) &&
+      nrow(boot_E_obs) > 0 && nrow(boot_F_obs) > 0 &&
+      "ate_total_mean" %in% names(boot_E_obs) && "ate_total_mean" %in% names(boot_F_obs)) {
+    obs_ate_mean_from_fit <- function(fit_obj) {
+      if (is.null(fit_obj) || is.null(fit_obj$ate)) return(NA_real_)
+      vals <- get_total_effect_sim(fit_obj$ate, n_tiles = n_cty)
+      vals <- suppressWarnings(as.numeric(vals))
+      vals <- vals[is.finite(vals)]
+      if (length(vals) < 1L) return(NA_real_)
+      mean(vals, na.rm = TRUE)
+    }
+    recenter_boot_obs <- function(boot_vals, target_mean) {
+      bv <- suppressWarnings(as.numeric(boot_vals))
+      if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
+      bmean <- mean(bv, na.rm = TRUE)
+      if (!is.finite(bmean) || is.na(bmean)) return(bv)
+      bv + (target_mean - bmean)
+    }
+    lab_E <- "E: Naive Biv+KDE (all-free)"
+    lab_F <- "F: SEM Biv+KDE (all-free)"
+    mean_E_obs <- obs_ate_mean_from_fit(fit_E_obs)
+    mean_F_obs <- obs_ate_mean_from_fit(fit_F_obs)
+    filt_E_obs <- retain_boot_vals(boot_E_obs$ate_total_mean)
+    filt_F_obs <- retain_boot_vals(boot_F_obs$ate_total_mean)
+    boot_cd_obs <- rbind(
+      data.frame(Model = lab_E, TotalATE = recenter_boot_obs(filt_E_obs$vals, mean_E_obs)),
+      data.frame(Model = lab_F, TotalATE = recenter_boot_obs(filt_F_obs$vals, mean_F_obs))
+    )
+    boot_cd_obs <- boot_cd_obs[is.finite(boot_cd_obs$TotalATE), , drop = FALSE]
+    if (nrow(boot_cd_obs) > 0) {
+      boot_means_obs <- aggregate(TotalATE ~ Model, boot_cd_obs, mean)
+      n_drop_obs <- filt_E_obs$n_out + filt_F_obs$n_out
+      ate_days_obs <- suppressWarnings(as.numeric(res_obs$config$ATE_WINDOW_DAYS))
+      if (!is.finite(ate_days_obs)) ate_days_obs <- ate_days
+      ggplot(boot_cd_obs, aes(x = TotalATE, fill = Model)) +
+        geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+        geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+        geom_vline(data = boot_means_obs, aes(xintercept = TotalATE, colour = Model),
+                   linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
+        scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(lab_E, lab_F))) +
+        scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(lab_E, lab_F))) +
+        coord_cartesian(xlim = c(-1000, 1000)) +
+        labs(
+          x = bquote(hat(Delta)[obs] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days_obs) ~ "days)"),
+          y = "Bootstrap replicate count",
+          title = "Bias-corrected bootstrap observed-vs-control distribution (E/F, bivariate)",
+          subtitle = sprintf(
+            "Contrast: bivariate/observed; centers E=%.1f, F=%.1f; retained stable finite ATEs %d/%d (E) and %d/%d (F); omitted %d non-finite; source %s",
+            mean_E_obs, mean_F_obs,
+            length(filt_E_obs$vals), filt_E_obs$n_in,
+            length(filt_F_obs$vals), filt_F_obs$n_in,
+            n_drop_obs,
+            basename(biv_obs_file)
+          )
+        ) +
+        theme_minimal(base_size = 13) +
+        theme(
+          legend.position = "top",
+          plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5, size = 10)
+        )
+    } else {
+      plot.new()
+      text(0.5, 0.5, "Bivariate observed bootstrap replicate means are present but non-finite.")
+    }
+  } else {
+    plot.new()
+    text(0.5, 0.5, sprintf("Bivariate observed bootstrap E/F summaries missing in %s.", basename(biv_obs_file)))
+  }
+} else {
+  plot.new()
+  text(0.5, 0.5, "Bivariate observed scenario RDS not found (expected for_paper_biv_obs.rds).")
 }
 ```
 
@@ -2455,160 +2588,6 @@ if (length(part_sim_rows) > 0) {
     p_part <- p_part + coord_cartesian(xlim = biv_xlim)
   }
   print(p_part)
-}
-```
-
-## KDE Bandwidth Sensitivity (County Inhomogeneous E/F)
-
-County-level inhomogeneous fits are re-run across KDE bandwidths:
-Diggle, Diggle$\\times$2, Diggle$\\times$5, and Diggle$\\times$10.
-
-```{r tbl-kde-bandwidth-sensitivity}
-#| label: tbl-kde-bandwidth-sensitivity
-bws <- results$kde_bandwidth_sensitivity
-if (!is.null(bws) && length(bws) > 0) {
-  bw_rows <- list()
-  bw_order <- c("diggle", "digglex2", "digglex5", "digglex10")
-  bw_label <- function(x) {
-    switch(as.character(x),
-           diggle = "Diggle",
-           digglex2 = "Diggle x2",
-           digglex5 = "Diggle x5",
-           digglex10 = "Diggle x10",
-           x)
-  }
-  for (nm in names(bws)) {
-    info <- bws[[nm]]
-    if (is.null(info)) next
-    for (fit_type in list(
-      list(model = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = info$ate_E, relab = 0),
-      list(model = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = info$ate_F,
-           relab = if (!is.null(info$n_relabel)) info$n_relabel else NA)
-    )) {
-      if (is.null(fit_type$par)) next
-      expected <- if (!is.null(fit_type$ate)) get_expected_totals(fit_type$ate, n_tiles = n_cty) else NULL
-      sim_totals <- if (!is.null(fit_type$ate)) get_total_effect_sim(fit_type$ate, n_tiles = n_cty) else NULL
-      c_mean <- if (!is.null(expected) && !is.null(expected$c_total)) mean(expected$c_total, na.rm = TRUE) else NA_real_
-      t_mean <- if (!is.null(expected) && !is.null(expected$t_total)) mean(expected$t_total, na.rm = TRUE) else NA_real_
-      t_all_mean <- if (!is.null(fit_type$ate$analytic) && !is.null(fit_type$ate$analytic$eta_treat)) {
-        as.numeric(fit_type$ate$analytic$eta_treat) * n_cty
-      } else { NA_real_ }
-      saved_diff_mean <- if (is.finite(c_mean) && is.finite(t_mean)) c_mean - t_mean else NA_real_
-      sim_sd_total <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
-      spill_total <- if (!is.null(fit_type$ate$total_spillover)) {
-        fit_type$ate$total_spillover
-      } else if (!is.null(fit_type$ate$ATE_spillover)) {
-        fit_type$ate$ATE_spillover * n_cty
-      } else { NA_real_ }
-      sigma_km <- suppressWarnings(as.numeric(info$sigma))
-      if (!is.finite(sigma_km)) sigma_km <- NA_real_
-      bw_rows[[length(bw_rows) + 1]] <- data.frame(
-        BandwidthID = nm,
-        Bandwidth = bw_label(nm),
-        `KDE sigma (km)` = round(sigma_km, 3),
-        Model = fit_type$model,
-        Tiles = n_cty,
-        Treated = cfg$n_treated,
-        `Relabelled points` = fit_type$relab,
-        `E[N(control everywhere)]` = round(c_mean, 0),
-        `E[N(actual treatment regime)]` = round(t_mean, 0),
-        `E[N(treated everywhere)]` = round(t_all_mean, 0),
-        `Saved = control - actual` = round(saved_diff_mean, 0),
-        `SD(saved)` = round(sim_sd_total, 0),
-        `Spillover` = round(spill_total, 0),
-        mu_0 = round(fit_type$par[["mu_0"]], 4),
-        mu_1 = round(fit_type$par[["mu_1"]], 4),
-        A_0 = round(fit_type$par[["A_00"]], 4),
-        A_1 = round(fit_type$par[["A_11"]], 4),
-        alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
-        alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
-        check.names = FALSE
-      )
-    }
-  }
-  if (length(bw_rows) > 0) {
-    bw_df <- do.call(rbind, bw_rows)
-    bw_df$BandwidthID <- factor(bw_df$BandwidthID, levels = bw_order)
-    bw_df <- bw_df[order(bw_df$BandwidthID, bw_df$Model), ]
-    bw_df$Bandwidth <- factor(as.character(bw_df$Bandwidth),
-                              levels = unique(as.character(bw_df$Bandwidth)))
-    bw_print <- subset(bw_df, select = -BandwidthID)
-    kable(bw_print, align = "lrlccccccccccccccc",
-          caption = paste0("County inhomogeneous KDE bandwidth sensitivity over ", ate_days,
-                           " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters). KDE sigma is the Gaussian bandwidth applied to the held-out pre-treatment control locations (Diggle CV scale times the row multiplier).")) |>
-      kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
-                    font_size = 9, latex_options = c("scale_down", "hold_position"))
-  }
-}
-```
-
-## Fit Variability (Repeated E/F Refits)
-
-This section summarizes repeat refits of county all-free E/F models (typically one job per core)
-to quantify run-to-run variability from stochastic SEM updates and Monte Carlo ATE simulation.
-
-```{r tbl-fit-variability-summary}
-#| label: tbl-fit-variability-summary
-fv <- results$fit_variability
-if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
-  fv_df <- as.data.frame(fv$replicate_summary)
-  fv_df <- fv_df[fv_df$success %in% TRUE, , drop = FALSE]
-  if (nrow(fv_df) > 0) {
-    sum_df <- fv_df |>
-      group_by(.data$model) |>
-      summarise(
-        Reps = dplyr::n(),
-        `Raw total saved mean` = round(mean(.data$raw_total_saved, na.rm = TRUE), 1),
-        `Raw total saved SD` = round(sd(.data$raw_total_saved, na.rm = TRUE), 1),
-        `MC total saved mean` = round(mean(.data$mc_total_saved_mean, na.rm = TRUE), 1),
-        `MC total saved SD (across reps)` = round(sd(.data$mc_total_saved_mean, na.rm = TRUE), 1),
-        `Mean within-rep MC SD` = round(mean(.data$mc_total_saved_sd, na.rm = TRUE), 1),
-        `Mean relabelled points` = round(mean(.data$n_relabel, na.rm = TRUE), 1),
-        .groups = "drop"
-      )
-    kable(
-      sum_df,
-      align = "lccccccc",
-      caption = "Repeated-fit variability summary for county all-free E/F models."
-    ) |>
-      kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE, font_size = 9)
-  }
-}
-```
-
-```{r fig-fit-variability-raw}
-#| label: fig-fit-variability-raw
-#| fig-cap: "Histogram of raw repeated-fit total-saved estimates (analytic)."
-if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
-  fv_df <- as.data.frame(fv$replicate_summary)
-  fv_df <- fv_df[fv_df$success %in% TRUE & is.finite(fv_df$raw_total_saved), , drop = FALSE]
-  if (nrow(fv_df) > 0) {
-    ggplot(fv_df, aes(x = .data$raw_total_saved, fill = .data$model)) +
-      geom_histogram(bins = 20, alpha = 0.7, position = "identity") +
-      facet_wrap(~model, scales = "free_y", ncol = 1) +
-      geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8) +
-      labs(x = "Raw total saved (analytic)", y = "Count", fill = "Model") +
-      theme_minimal(base_size = 11) +
-      theme(legend.position = "none")
-  }
-}
-```
-
-```{r fig-fit-variability-mc}
-#| label: fig-fit-variability-mc
-#| fig-cap: "Histogram of Monte Carlo total-saved means from repeated fits."
-if (!is.null(fv) && !is.null(fv$replicate_summary) && nrow(fv$replicate_summary) > 0) {
-  fv_df <- as.data.frame(fv$replicate_summary)
-  fv_df <- fv_df[fv_df$success %in% TRUE & is.finite(fv_df$mc_total_saved_mean), , drop = FALSE]
-  if (nrow(fv_df) > 0) {
-    ggplot(fv_df, aes(x = .data$mc_total_saved_mean, fill = .data$model)) +
-      geom_histogram(bins = 20, alpha = 0.7, position = "identity") +
-      facet_wrap(~model, scales = "free_y", ncol = 1) +
-      geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8) +
-      labs(x = "Monte Carlo total saved (mean across sims)", y = "Count", fill = "Model") +
-      theme_minimal(base_size = 11) +
-      theme(legend.position = "none")
-  }
 }
 ```
 

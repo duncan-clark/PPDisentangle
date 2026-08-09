@@ -13,6 +13,7 @@ sim_etas_bivariate(
   beta_gr = NULL,
   mag_pool = NULL,
   filtration = NULL,
+  covariate_lookup = NULL,
   t_trunc = NULL,
   ...
 )
@@ -33,6 +34,10 @@ sim_etas_bivariate(
 \item{mag_pool}{Magnitude pool.}
 
 \item{filtration}{Optional history data frame with x, y, t, mag, process_id.}
+
+\item{covariate_lookup}{Optional function \code{f(x, y)} shared by both
+backgrounds, or a named list with \code{control} and \code{treated}
+functions. Each function should have spatial mean one on its state space.}
 
 \item{t_trunc}{Temporal truncation.}
 

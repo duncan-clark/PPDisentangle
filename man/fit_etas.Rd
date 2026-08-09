@@ -19,6 +19,7 @@ fit_etas(
   t_trunc = NULL,
   log_transform = FALSE,
   init_decluster = FALSE,
+  hard_subcritical = TRUE,
   ...
 )
 }
@@ -63,6 +64,10 @@ derived from the expected branching ratio.  Uses the supplied
 \code{alpha_m} init and the magnitude distribution to decompose
 observed event counts into background and triggered components.
 Default \code{FALSE}.}
+
+\item{hard_subcritical}{If TRUE (default), constrain
+\code{alpha_m < beta_gr - alpha_beta_gap_min}, initialize inside
+\code{eta < max_branching_ratio}, and return a projected stable fit.}
 
 \item{...}{Passed through to \code{loglik_etas}.}
 }

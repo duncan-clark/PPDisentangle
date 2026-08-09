@@ -36,6 +36,32 @@ ate_estim_bivariate <- function(
     stop("Missing bivariate params: ", paste(miss, collapse = ", "))
   }
   params <- as.list(pv[needed])
+  eta_channel <- function(A_name, alpha_name) {
+    gap <- beta_gr - as.numeric(params[[alpha_name]])
+    A <- as.numeric(params[[A_name]])
+    if (!is.finite(A) || A < 0 || !is.finite(gap) || gap <= 1e-8) return(Inf)
+    A * beta_gr / gap
+  }
+  offspring <- matrix(
+    c(
+      eta_channel("A_00", "alpha_m_00"),
+      eta_channel("A_01", "alpha_m_01"),
+      eta_channel("A_10", "alpha_m_10"),
+      eta_channel("A_11", "alpha_m_11")
+    ),
+    nrow = 2, byrow = TRUE
+  )
+  rho <- if (all(is.finite(offspring))) {
+    max(Re(eigen(offspring, only.values = TRUE)$values))
+  } else {
+    Inf
+  }
+  if (!is.finite(rho) || rho >= 1) {
+    stop(sprintf(
+      "%s has an explosive bivariate ATE law under beta_gr=%.4g (rho=%s).",
+      label, beta_gr, format(rho, digits = 6)
+    ))
+  }
 
   if (is.null(filtration_history)) {
     pre_history <- data.frame(
@@ -166,6 +192,7 @@ ate_estim_bivariate <- function(
     ),
     ate_method = paste0("bivariate_", contrast),
     contrast = contrast,
+    branching_radius = rho,
     biv_params = params
   )
 }

@@ -24,6 +24,71 @@
   "c", "p", "D", "gamma", "q"
 )
 
+.etas_biv_alpha_names <- c("alpha_m_00", "alpha_m_11", "alpha_m_01", "alpha_m_10")
+.etas_biv_A_names <- c("A_00", "A_11", "A_01", "A_10")
+
+#' Gutenberg-Richter branching spectral radius for bivariate ETAS
+#'
+#' Channel mean offspring is \code{eta_ij = A_ij * beta / (beta - alpha_ij)}
+#' (Inf if \code{alpha_ij >= beta}). Returns the spectral radius of the
+#' 2x2 matrix with entries \code{eta_00, eta_01; eta_10, eta_11}.
+#' @keywords internal
+.etas_biv_spectral_radius <- function(params, beta_gr) {
+  pv <- if (is.list(params)) unlist(params) else params
+  beta_eff <- .etas_resolve_beta_gr(beta_gr)
+  if (!is.finite(beta_eff)) return(NA_real_)
+  eta_ij <- function(A, alpha) {
+    A <- suppressWarnings(as.numeric(A))
+    alpha <- suppressWarnings(as.numeric(alpha))
+    if (!is.finite(A) || !is.finite(alpha)) return(NA_real_)
+    gap <- beta_eff - alpha
+    if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+    A * beta_eff / gap
+  }
+  M <- matrix(
+    c(
+      eta_ij(pv[["A_00"]], pv[["alpha_m_00"]]),
+      eta_ij(pv[["A_01"]], pv[["alpha_m_01"]]),
+      eta_ij(pv[["A_10"]], pv[["alpha_m_10"]]),
+      eta_ij(pv[["A_11"]], pv[["alpha_m_11"]])
+    ),
+    nrow = 2, byrow = TRUE
+  )
+  if (!all(is.finite(M))) return(Inf)
+  max(Re(eigen(M, only.values = TRUE)$values))
+}
+
+#' Project bivariate ETAS params into a hard-subcritical set
+#'
+#' Clamps each \code{alpha_m_*} below \code{beta - gap_min} and, if needed,
+#' scales all \code{A_*} so the GR spectral radius is at most \code{rho_max}.
+#' @keywords internal
+.etas_project_subcritical_biv <- function(params,
+                                          beta_gr,
+                                          gap_min = 1e-4,
+                                          rho_max = 0.98) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_bivariate_par_names
+  beta_eff <- .etas_resolve_beta_gr(beta_gr)
+  if (!is.finite(beta_eff)) return(pv)
+  gap_min <- suppressWarnings(as.numeric(gap_min))
+  if (!is.finite(gap_min) || gap_min < 0) gap_min <- 1e-4
+  rho_max <- suppressWarnings(as.numeric(rho_max))
+  if (!is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
+  alpha_cap <- beta_eff - gap_min - 1e-4
+  for (nm in .etas_biv_alpha_names) {
+    if (is.finite(pv[[nm]])) pv[[nm]] <- min(pv[[nm]], alpha_cap)
+  }
+  rho <- .etas_biv_spectral_radius(pv, beta_eff)
+  if (is.finite(rho) && rho > rho_max && rho > 0) {
+    scale <- (rho_max / rho) * (1 - 1e-6)
+    for (nm in .etas_biv_A_names) {
+      if (is.finite(pv[[nm]]) && pv[[nm]] > 0) pv[[nm]] <- pv[[nm]] * scale
+    }
+  }
+  pv
+}
+
 #' Log-likelihood for bivariate ETAS with cross-excitation
 #'
 #' @param params Named list or vector with the 15 bivariate ETAS parameters.
@@ -59,6 +124,9 @@ loglik_etas_bivariate <- function(params,
                                   alpha_beta_soft_gap = 0.05,
                                   alpha_beta_soft_weight = 2000,
                                   alpha_beta_soft_power = 2,
+                                  # Hard upper bound on GR branching spectral radius.
+                                  # NULL/Inf disables the hard reject (soft barrier may still apply).
+                                  max_branching_radius = Inf,
                                   stability_barrier_start = 0.95,
                                   stability_barrier_weight = 50000,
                                   stability_barrier_power = 4,
@@ -109,17 +177,17 @@ loglik_etas_bivariate <- function(params,
   if (n == 0) return(-1e15)
 
   if (is.null(m0)) m0 <- min(realiz$mag)
+  beta_eff <- .etas_resolve_beta_gr(beta_gr, realiz = realiz, m0 = m0)
   if (isTRUE(enforce_alpha_subcritical)) {
-    beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
-    }
     gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
     if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
     alpha_vals <- c(alpha_m_00, alpha_m_11, alpha_m_01, alpha_m_10)
     if (!is.finite(beta_eff) || is.na(beta_eff) || any(alpha_vals >= (beta_eff - gap_min))) return(-1e15)
+  }
+  rho_max <- suppressWarnings(as.numeric(max_branching_radius))
+  if (length(rho_max) == 1L && is.finite(rho_max) && rho_max > 0 && is.finite(beta_eff)) {
+    rho_hat <- .etas_biv_spectral_radius(pv, beta_eff)
+    if (!is.finite(rho_hat) || rho_hat >= rho_max) return(-1e15)
   }
 
   # Build process_id vector (0 = control, 1 = treated)
@@ -266,37 +334,11 @@ loglik_etas_bivariate <- function(params,
       if (gap_excess > 0) loglik <- loglik - soft_weight * (gap_excess ^ soft_power)
     }
   }
-  # Smooth stability barrier on the bivariate ETAS offspring matrix spectral
-  # radius; activates before criticality and ramps very sharply beyond 1.
+  # Soft stability barrier (supplementary to hard max_branching_radius reject).
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
   if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
-  if (barrier_weight > 0) {
-    beta_eff <- suppressWarnings(as.numeric(beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else 1
-    }
-    eta_comp <- function(Ai, alphai) {
-      Ai <- suppressWarnings(as.numeric(Ai))
-      alphai <- suppressWarnings(as.numeric(alphai))
-      if (!is.finite(Ai) || !is.finite(alphai) || !is.finite(beta_eff) || beta_eff <= 0) return(Inf)
-      gap <- beta_eff - alphai
-      if (!is.finite(gap) || gap <= 1e-8) return(Inf)
-      Ai * beta_eff / gap
-    }
-    M <- matrix(
-      c(
-        eta_comp(A_00, alpha_m_00), eta_comp(A_01, alpha_m_01),
-        eta_comp(A_10, alpha_m_10), eta_comp(A_11, alpha_m_11)
-      ),
-      nrow = 2, byrow = TRUE
-    )
-    rho <- if (all(is.finite(M))) {
-      max(Re(eigen(M, only.values = TRUE)$values))
-    } else {
-      Inf
-    }
+  if (barrier_weight > 0 && is.finite(beta_eff)) {
+    rho <- .etas_biv_spectral_radius(pv, beta_eff)
     if (!is.finite(rho)) return(-1e15)
     barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
     if (length(barrier_start) != 1L || !is.finite(barrier_start) || is.na(barrier_start)) barrier_start <- 0.95
@@ -305,12 +347,6 @@ loglik_etas_bivariate <- function(params,
     excess <- max(0, rho - barrier_start)
     if (excess > 0) {
       loglik <- loglik - barrier_weight * (excess ^ barrier_power)
-    }
-    # Keep a soft (continuous) barrier while making supercritical solutions
-    # effectively impossible to select in practice.
-    supercritical_excess <- max(0, rho - 0.999)
-    if (supercritical_excess > 0) {
-      loglik <- loglik - barrier_weight * 1e6 * (supercritical_excess ^ 2)
     }
   }
   loglik
@@ -331,7 +367,10 @@ loglik_etas_bivariate <- function(params,
 #' @param symmetric If TRUE, constrain A_01=A_10 and alpha_m_01=alpha_m_10.
 #' @param trace Trace level for optim.
 #' @param t_trunc Temporal truncation.
-#' @param ... Passed to loglik_etas_bivariate.
+#' @param hard_subcritical If TRUE (default), reparameterize free
+#'   \code{alpha_m_*} so \code{alpha < beta - gap}, project the start into
+#'   \code{rho < max_branching_radius}, and project the returned fit.
+#' @param ... Passed to loglik_etas_bivariate (include \code{beta_gr}).
 #' @return An optim result with par as a named length-15 vector.
 #' @export
 fit_etas_bivariate <- function(params_init,
@@ -348,6 +387,7 @@ fit_etas_bivariate <- function(params_init,
                                symmetric = FALSE,
                                trace = 0,
                                t_trunc = NULL,
+                               hard_subcritical = TRUE,
                                ...) {
   dots <- list(...)
   all_names <- .etas_bivariate_par_names
@@ -373,18 +413,16 @@ fit_etas_bivariate <- function(params_init,
     if (is.finite(full_init["p"])) full_init["p"] <- max(full_init["p"], p_min + 1e-3)
     if (is.finite(full_init["q"])) full_init["q"] <- max(full_init["q"], q_min + 1e-3)
   }
-  if (!isFALSE(dots$enforce_alpha_subcritical)) {
-    beta_eff <- suppressWarnings(as.numeric(dots$beta_gr))
-    if (length(beta_eff) != 1L || !is.finite(beta_eff) || is.na(beta_eff) || beta_eff <= 0) {
-      mag_delta <- as.numeric(realiz$mag) - as.numeric(m0)
-      mag_delta <- mag_delta[is.finite(mag_delta) & mag_delta > 0]
-      beta_eff <- if (length(mag_delta) > 0L) 1 / mean(mag_delta) else NA_real_
-    }
-    gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
-    if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+  gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+  if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
+  rho_max <- suppressWarnings(as.numeric(dots$max_branching_radius))
+  if (length(rho_max) != 1L || !is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
+  beta_eff <- .etas_resolve_beta_gr(dots$beta_gr, realiz = realiz, m0 = m0)
+  if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical)) {
     if (is.finite(beta_eff)) {
-      alpha_names <- c("alpha_m_00", "alpha_m_11", "alpha_m_01", "alpha_m_10")
-      for (nm in alpha_names) full_init[nm] <- min(full_init[nm], beta_eff - gap_min - 1e-4)
+      full_init <- .etas_project_subcritical_biv(
+        full_init, beta_eff, gap_min = gap_min, rho_max = rho_max
+      )
     }
   }
 
@@ -403,7 +441,31 @@ fit_etas_bivariate <- function(params_init,
     integer(0)
   }
   free_idx <- setdiff(seq_along(all_names), fixed_idx)
-  free_init <- full_init[free_idx]
+  free_names <- all_names[free_idx]
+  # Hard alpha constraint via reparameterization:
+  #   u = log(beta - gap_min - alpha)  =>  alpha = beta - gap_min - exp(u)
+  use_alpha_reparam <- isTRUE(hard_subcritical) && is.finite(beta_eff)
+  alpha_free_pos <- if (use_alpha_reparam) {
+    which(free_names %in% .etas_biv_alpha_names)
+  } else {
+    integer(0)
+  }
+  free_to_natural <- function(free_par) {
+    nat <- free_par
+    if (length(alpha_free_pos)) {
+      nat[alpha_free_pos] <- beta_eff - gap_min - exp(free_par[alpha_free_pos])
+    }
+    nat
+  }
+  natural_to_free <- function(nat_par) {
+    free_par <- nat_par
+    if (length(alpha_free_pos)) {
+      slack <- pmax(beta_eff - gap_min - nat_par[alpha_free_pos], 1e-12)
+      free_par[alpha_free_pos] <- log(slack)
+    }
+    free_par
+  }
+  free_init <- natural_to_free(full_init[free_idx])
 
   finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
   if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
@@ -440,7 +502,7 @@ fit_etas_bivariate <- function(params_init,
 
   profile_fn <- function(free_par) {
     par15 <- full_init
-    par15[free_idx] <- free_par
+    par15[free_idx] <- free_to_natural(free_par)
 
     if (symmetric) {
       par15["A_10"] <- par15["A_01"]
@@ -458,14 +520,16 @@ fit_etas_bivariate <- function(params_init,
       t_trunc = t_trunc,
       precomp = precomp
     )
-    # Only forward optional barrier controls when explicitly set so
-    # defaults in loglik_etas_bivariate remain intact.
-    if (!is.null(dots$beta_gr)) ll_args$beta_gr <- dots$beta_gr
+    # Forward constraint / barrier controls; prefer explicit beta_gr.
+    if (!is.null(dots$beta_gr) || is.finite(beta_eff)) {
+      ll_args$beta_gr <- if (!is.null(dots$beta_gr)) dots$beta_gr else beta_eff
+    }
+    ll_args$max_branching_radius <- rho_max
+    ll_args$alpha_beta_gap_min <- gap_min
     if (!is.null(dots$enforce_finite_trigger_moments)) ll_args$enforce_finite_trigger_moments <- dots$enforce_finite_trigger_moments
     if (!is.null(dots$p_lower_bound)) ll_args$p_lower_bound <- dots$p_lower_bound
     if (!is.null(dots$q_lower_bound)) ll_args$q_lower_bound <- dots$q_lower_bound
     if (!is.null(dots$enforce_alpha_subcritical)) ll_args$enforce_alpha_subcritical <- dots$enforce_alpha_subcritical
-    if (!is.null(dots$alpha_beta_gap_min)) ll_args$alpha_beta_gap_min <- dots$alpha_beta_gap_min
     if (!is.null(dots$finite_moment_soft_width)) ll_args$finite_moment_soft_width <- dots$finite_moment_soft_width
     if (!is.null(dots$finite_moment_soft_weight)) ll_args$finite_moment_soft_weight <- dots$finite_moment_soft_weight
     if (!is.null(dots$finite_moment_soft_power)) ll_args$finite_moment_soft_power <- dots$finite_moment_soft_power
@@ -491,13 +555,20 @@ fit_etas_bivariate <- function(params_init,
   )
 
   par15 <- full_init
-  par15[free_idx] <- fit$par
+  par15[free_idx] <- free_to_natural(fit$par)
   if (symmetric) {
     par15["A_10"] <- par15["A_01"]
     par15["alpha_m_10"] <- par15["alpha_m_01"]
   }
+  if (isTRUE(hard_subcritical) && is.finite(beta_eff)) {
+    par15 <- .etas_project_subcritical_biv(
+      par15, beta_eff, gap_min = gap_min, rho_max = rho_max
+    )
+  }
   fit$par <- par15
   fit$m0 <- m0
+  fit$hard_subcritical <- isTRUE(hard_subcritical)
+  fit$branching_radius <- if (is.finite(beta_eff)) .etas_biv_spectral_radius(par15, beta_eff) else NA_real_
   return(fit)
 }
 
@@ -512,6 +583,9 @@ fit_etas_bivariate <- function(params_init,
 #' @param beta_gr Gutenberg-Richter beta (NULL for resampling).
 #' @param mag_pool Magnitude pool.
 #' @param filtration Optional history data frame with x, y, t, mag, process_id.
+#' @param covariate_lookup Optional function \code{f(x, y)} shared by both
+#'   backgrounds, or a named list with \code{control} and \code{treated}
+#'   functions. Each function should have spatial mean one on its state space.
 #' @param t_trunc Temporal truncation.
 #' @param ... Ignored.
 #' @return Data frame with x, y, t, mag, process_id, background columns.
@@ -524,6 +598,7 @@ sim_etas_bivariate <- function(params,
                                beta_gr = NULL,
                                mag_pool = NULL,
                                filtration = NULL,
+                               covariate_lookup = NULL,
                                t_trunc = NULL,
                                ...) {
   if (!inherits(windowS, "owin")) {
@@ -548,24 +623,34 @@ sim_etas_bivariate <- function(params,
   }
 
   # Background for each process in its own state space
-  gen_bg <- function(mu, ss, proc_id) {
+  gen_bg <- function(mu, ss, proc_id, lookup = NULL) {
     if (mu < 1e-10 || is.null(ss)) {
       return(list(x = numeric(0), y = numeric(0), t = numeric(0),
                   mag = numeric(0), proc = integer(0)))
     }
-    n_bg <- rpois(1, mu * (windowT[2] - windowT[1]))
-    if (n_bg == 0) {
-      return(list(x = numeric(0), y = numeric(0), t = numeric(0),
-                  mag = numeric(0), proc = integer(0)))
+    duration <- windowT[2] - windowT[1]
+    if (is.function(lookup)) {
+      area_ss <- spatstat.geom::area(ss)
+      pixel_fun <- function(x, y) {
+        w <- suppressWarnings(as.numeric(lookup(x, y)))
+        w[!is.finite(w) | w < 0] <- 0
+        duration * (mu / area_ss) * w
+      }
+      bg_pp <- spatstat.random::rpoispp(pixel_fun, win = ss)
+      bx <- bg_pp$x
+      by <- bg_pp$y
+      n_ok <- bg_pp$n
+    } else {
+      n_bg <- rpois(1, mu * duration)
+      if (n_bg == 0) {
+        return(list(x = numeric(0), y = numeric(0), t = numeric(0),
+                    mag = numeric(0), proc = integer(0)))
+      }
+      bg_pp <- spatstat.random::runifpoint(n = n_bg, win = ss)
+      bx <- bg_pp$x
+      by <- bg_pp$y
+      n_ok <- bg_pp$n
     }
-    bb <- ss$xrange
-    bby <- ss$yrange
-    bx <- runif(n_bg * 3, bb[1], bb[2])
-    by <- runif(n_bg * 3, bby[1], bby[2])
-    ok <- inside.owin(bx, by, ss)
-    bx <- bx[ok]; by <- by[ok]
-    if (length(bx) > n_bg) { bx <- bx[1:n_bg]; by <- by[1:n_bg] }
-    n_ok <- length(bx)
     if (n_ok == 0) {
       return(list(x = numeric(0), y = numeric(0), t = numeric(0),
                   mag = numeric(0), proc = integer(0)))
@@ -580,9 +665,19 @@ sim_etas_bivariate <- function(params,
 
   ctrl_ss <- if (!is.null(state_spaces)) state_spaces[["control"]] else windowS
   treat_ss <- if (!is.null(state_spaces)) state_spaces[["treated"]] else windowS
+  ctrl_lookup <- if (is.list(covariate_lookup)) {
+    covariate_lookup[["control"]]
+  } else {
+    covariate_lookup
+  }
+  treat_lookup <- if (is.list(covariate_lookup)) {
+    covariate_lookup[["treated"]]
+  } else {
+    covariate_lookup
+  }
 
-  bg0 <- gen_bg(mu_0, ctrl_ss, 0L)
-  bg1 <- gen_bg(mu_1, treat_ss, 1L)
+  bg0 <- gen_bg(mu_0, ctrl_ss, 0L, ctrl_lookup)
+  bg1 <- gen_bg(mu_1, treat_ss, 1L, treat_lookup)
 
   p_x   <- c(bg0$x, bg1$x)
   p_y   <- c(bg0$y, bg1$y)

@@ -19,6 +19,7 @@ fit_etas_bivariate(
   symmetric = FALSE,
   trace = 0,
   t_trunc = NULL,
+  hard_subcritical = TRUE,
   ...
 )
 }
@@ -47,7 +48,11 @@ fit_etas_bivariate(
 
 \item{t_trunc}{Temporal truncation.}
 
-\item{...}{Passed to loglik_etas_bivariate.}
+\item{hard_subcritical}{If TRUE (default), reparameterize free
+\code{alpha_m_*} so \code{alpha < beta - gap}, project the start into
+\code{rho < max_branching_radius}, and project the returned fit.}
+
+\item{...}{Passed to loglik_etas_bivariate (include \code{beta_gr}).}
 }
 \value{
 An optim result with par as a named length-15 vector.

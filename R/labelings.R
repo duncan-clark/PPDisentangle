@@ -518,23 +518,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   if (!is.finite(sem_prop_branching_max) || is.na(sem_prop_branching_max) || sem_prop_branching_max <= 0) {
     sem_prop_branching_max <- NA_real_
   }
-  beta_guard_vals <- suppressWarnings(as.numeric(dots$beta_gr))
-  beta_guard <- beta_guard_vals[which(is.finite(beta_guard_vals) & !is.na(beta_guard_vals) & beta_guard_vals > 0)][1]
-  if (!is.finite(beta_guard) || is.na(beta_guard) || beta_guard <= 0) beta_guard <- 1.0
-  spectral_radius_proxy <- function(par_obj, beta_gr) {
-    get_num <- function(nm, default = NA_real_) {
-      v <- suppressWarnings(as.numeric(par_obj[[nm]]))
-      if (length(v) < 1L || !is.finite(v[[1]])) return(default)
-      v[[1]]
-    }
-    b00 <- get_num("A_00", 0) * exp(get_num("alpha_m_00", 0) / beta_gr)
-    b11 <- get_num("A_11", 0) * exp(get_num("alpha_m_11", 0) / beta_gr)
-    b01 <- get_num("A_01", 0) * exp(get_num("alpha_m_01", 0) / beta_gr)
-    b10 <- get_num("A_10", 0) * exp(get_num("alpha_m_10", 0) / beta_gr)
-    if (!all(is.finite(c(b00, b11, b01, b10)))) return(Inf)
-    disc <- (b00 - b11)^2 + 4 * b01 * b10
-    if (!is.finite(disc) || disc < 0) return(Inf)
-    0.5 * ((b00 + b11) + sqrt(disc))
+  beta_guard <- if (is_biv_etas) {
+    .etas_resolve_beta_gr(dots$beta_gr, realiz = dat, m0 = dots$m0)
+  } else {
+    NA_real_
   }
   if (!is.finite(temporal_weight)) temporal_weight <- 0
   temporal_weight <- min(max(temporal_weight, 0), 1)
@@ -579,16 +566,22 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
         hawkes_params_control, hawkes_params_treated)
     }
     if (is.finite(sem_prop_branching_max)) {
-      rho_hat <- spectral_radius_proxy(biv_params, beta_guard)
-      if (is.finite(rho_hat) && rho_hat > sem_prop_branching_max) {
-        scale_fac <- sem_prop_branching_max / rho_hat
-        for (nm in c("A_00", "A_11", "A_01", "A_10")) {
-          biv_params[[nm]] <- as.numeric(biv_params[[nm]]) * scale_fac
-        }
+      rho_hat <- .etas_biv_spectral_radius(biv_params, beta_guard)
+      if (!is.finite(rho_hat) || rho_hat >= sem_prop_branching_max) {
+        biv_params <- .etas_project_subcritical_biv(
+          biv_params,
+          beta_gr = beta_guard,
+          gap_min = if (!is.null(dots$alpha_beta_gap_min)) {
+            dots$alpha_beta_gap_min
+          } else {
+            1e-4
+          },
+          rho_max = sem_prop_branching_max
+        )
         if (proposal_trace) {
           cat(sprintf(
-            "    [proposal-sim] branching guard: rho=%.3f > %.3f, scaling A by %.4f\n",
-            rho_hat, sem_prop_branching_max, scale_fac
+            "    [proposal-sim] branching guard: rho=%s, projected below %.3f\n",
+            format(rho_hat, digits = 4), sem_prop_branching_max
           ))
         }
       }
@@ -1084,6 +1077,60 @@ em_style_labelling <- function(pp_data,
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
   biv_etas_params <- dots$etas_bivariate_params
+  biv_beta_eff <- NA_real_
+  biv_m0 <- NULL
+  biv_gap_min <- 1e-4
+  biv_rho_max <- 0.98
+  biv_hard_subcritical <- !isFALSE(dots$hard_subcritical)
+  biv_ll_extra <- list()
+  if (is_biv_etas) {
+    biv_m0 <- suppressWarnings(as.numeric(dots$m0))
+    if (length(biv_m0) != 1L || !is.finite(biv_m0) || is.na(biv_m0)) {
+      biv_m0 <- min(pp_data$mag, na.rm = TRUE)
+    }
+    biv_beta_eff <- .etas_resolve_beta_gr(
+      dots$beta_gr,
+      realiz = pp_data,
+      m0 = biv_m0
+    )
+    if (!is.finite(biv_beta_eff) || is.na(biv_beta_eff) || biv_beta_eff <= 0) {
+      stop("Bivariate SEM labelling requires a finite positive beta_gr.")
+    }
+    biv_gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+    if (length(biv_gap_min) != 1L || !is.finite(biv_gap_min) ||
+        is.na(biv_gap_min) || biv_gap_min < 0) {
+      biv_gap_min <- 1e-4
+    }
+    biv_rho_max <- suppressWarnings(as.numeric(dots$max_branching_radius))
+    if (length(biv_rho_max) != 1L || !is.finite(biv_rho_max) ||
+        is.na(biv_rho_max) || biv_rho_max <= 0) {
+      biv_rho_max <- 0.98
+    }
+    biv_ll_extra_names <- intersect(
+      names(dots),
+      c(
+        "enforce_finite_trigger_moments", "p_lower_bound", "q_lower_bound",
+        "finite_moment_soft_width", "finite_moment_soft_weight",
+        "finite_moment_soft_power", "enforce_alpha_subcritical",
+        "alpha_beta_soft_gap", "alpha_beta_soft_weight",
+        "alpha_beta_soft_power", "stability_barrier_start",
+        "stability_barrier_weight", "stability_barrier_power"
+      )
+    )
+    biv_ll_extra <- dots[biv_ll_extra_names]
+    biv_ll_extra$m0 <- biv_m0
+    biv_ll_extra$beta_gr <- biv_beta_eff
+    biv_ll_extra$alpha_beta_gap_min <- biv_gap_min
+    biv_ll_extra$max_branching_radius <- biv_rho_max
+    if (!is.null(biv_etas_params) && biv_hard_subcritical) {
+      biv_etas_params <- .etas_project_subcritical_biv(
+        biv_etas_params,
+        beta_gr = biv_beta_eff,
+        gap_min = biv_gap_min,
+        rho_max = biv_rho_max
+      )
+    }
+  }
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
   hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
   hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
@@ -1354,19 +1401,33 @@ em_style_labelling <- function(pp_data,
         } else {
           init_bivariate_from_independent(ctrl_params_vec, treat_params_vec)
         }
+        if (biv_hard_subcritical) {
+          biv_par <- .etas_project_subcritical_biv(
+            biv_par,
+            beta_gr = biv_beta_eff,
+            gap_min = biv_gap_min,
+            rho_max = biv_rho_max
+          )
+        }
         eval_biv <- function(realiz) {
           # Include pre-treatment control history so post-treatment scoring
           # reflects carryover/triggering from pre events.
           realiz_full <- rbind(pre_data, realiz)
           realiz_full <- realiz_full[order(realiz_full$t), , drop = FALSE]
-          loglik_etas_bivariate(
-            params = biv_par, realiz = realiz_full,
-            windowT = history_window, windowS = statespace,
-            control_state_space = control_state_space,
-            treated_state_space = treated_state_space,
-            background_rate_var = background_rate_var,
-            treated_background_zero_before = treated_background_zero_before,
-            t_trunc = t_trunc
+          do.call(
+            loglik_etas_bivariate,
+            c(
+              list(
+                params = biv_par, realiz = realiz_full,
+                windowT = history_window, windowS = statespace,
+                control_state_space = control_state_space,
+                treated_state_space = treated_state_space,
+                background_rate_var = background_rate_var,
+                treated_background_zero_before = treated_background_zero_before,
+                t_trunc = t_trunc
+              ),
+              biv_ll_extra
+            )
           )
         }
         if (length(unchanged_idx) > 0) {
@@ -1539,6 +1600,19 @@ em_style_labelling <- function(pp_data,
               treated_par[[length(treated_par)]])
           }
           if (is.null(names(biv_par))) names(biv_par) <- .etas_bivariate_par_names
+          if (!is.null(fixed_params)) {
+            for (nm in intersect(names(fixed_params), .etas_bivariate_par_names)) {
+              biv_par[[nm]] <- fixed_params[[nm]]
+            }
+          }
+          if (biv_hard_subcritical) {
+            biv_par <- .etas_project_subcritical_biv(
+              biv_par,
+              beta_gr = biv_beta_eff,
+              gap_min = biv_gap_min,
+              rho_max = biv_rho_max
+            )
+          }
           # Parameter updates should also account for pre-treatment control history.
           mml_full <- rbind(pre_data, mml_post)
           mml_full <- mml_full[order(mml_full$t), , drop = FALSE]
@@ -1576,40 +1650,81 @@ em_style_labelling <- function(pp_data,
             areaS_0 = areaS_0, areaS_1 = areaS_1,
             process_id = process_id_full
           )
-          m0_full <- if ("mag" %in% names(mml_full)) min(mml_full$mag, na.rm = TRUE) else NULL
           biv_obj <- function(par15) {
-            loglik_etas_bivariate(
-              params = par15, realiz = mml_full,
-              windowT = history_window, windowS = statespace,
-              control_state_space = control_state_space,
-              treated_state_space = treated_state_space,
-              background_rate_var = background_rate_var,
-              treated_background_zero_before = treated_background_zero_before,
-              m0 = m0_full,
-              t_trunc = t_trunc,
-              precomp = biv_precomp
+            do.call(
+              loglik_etas_bivariate,
+              c(
+                list(
+                  params = par15, realiz = mml_full,
+                  windowT = history_window, windowS = statespace,
+                  control_state_space = control_state_space,
+                  treated_state_space = treated_state_space,
+                  background_rate_var = background_rate_var,
+                  treated_background_zero_before = treated_background_zero_before,
+                  t_trunc = t_trunc,
+                  precomp = biv_precomp
+                ),
+                biv_ll_extra
+              )
             )
           }
-          if (length(fixed_idx) > 0) {
-            biv_free <- biv_par[free_idx]
-            biv_wrap <- function(fp) {
-              p15 <- biv_par; p15[free_idx] <- fp; biv_obj(p15)
+          biv_free_names <- .etas_bivariate_par_names[free_idx]
+          biv_alpha_free_pos <- if (biv_hard_subcritical) {
+            which(biv_free_names %in% .etas_biv_alpha_names)
+          } else {
+            integer(0)
+          }
+          biv_to_optim <- function(natural_free) {
+            optim_free <- natural_free
+            if (length(biv_alpha_free_pos)) {
+              slack <- pmax(
+                biv_beta_eff - biv_gap_min - natural_free[biv_alpha_free_pos],
+                1e-12
+              )
+              optim_free[biv_alpha_free_pos] <- log(slack)
+            }
+            optim_free
+          }
+          biv_from_optim <- function(optim_free) {
+            natural_free <- optim_free
+            if (length(biv_alpha_free_pos)) {
+              natural_free[biv_alpha_free_pos] <-
+                biv_beta_eff - biv_gap_min - exp(optim_free[biv_alpha_free_pos])
+            }
+            natural_free
+          }
+          if (length(free_idx) > 0L) {
+            biv_start <- biv_to_optim(biv_par[free_idx])
+            biv_wrap <- function(optim_free) {
+              p15 <- biv_par
+              p15[free_idx] <- biv_from_optim(optim_free)
+              biv_obj(p15)
             }
             biv_res <- tryCatch(
-              optim(par = biv_free, fn = biv_wrap, method = "Nelder-Mead",
+              optim(par = biv_start, fn = biv_wrap, method = "Nelder-Mead",
                     control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit_biv)),
-              error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_free) }
+              error = function(e) {
+                cat("  bivariate optim error:", e$message, "\n")
+                list(par = biv_start, convergence = -99)
+              }
             )
-            biv_par[free_idx] <- biv_res$par
+            biv_par[free_idx] <- biv_from_optim(biv_res$par)
           } else {
-            biv_res <- tryCatch(
-              optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
-                    control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit_biv)),
-              error = function(e) { cat("  bivariate optim error:", e$message, "\n"); list(par = biv_par) }
-            )
-            biv_par <- biv_res$par
+            biv_res <- list(par = numeric(0), convergence = 0)
           }
           names(biv_par) <- .etas_bivariate_par_names
+          if (biv_hard_subcritical) {
+            biv_par <- .etas_project_subcritical_biv(
+              biv_par,
+              beta_gr = biv_beta_eff,
+              gap_min = biv_gap_min,
+              rho_max = biv_rho_max
+            )
+          }
+          biv_res$par <- biv_par
+          biv_res$branching_radius <- .etas_biv_spectral_radius(
+            biv_par, biv_beta_eff
+          )
           biv_etas_params <<- biv_par
           fits[[i]] <- biv_res
           # Extract marginal params
@@ -1806,6 +1921,18 @@ em_style_labelling <- function(pp_data,
     change_factor_trace = change_factor_trace,
     retained_starting_trace = retained_starting_trace,
     class_results = class_results, fits = fits,
+    etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
+    bivariate_stability = if (is_biv_etas && !is.null(biv_etas_params)) {
+      list(
+        beta_gr = biv_beta_eff,
+        threshold = biv_rho_max,
+        branching_metric = .etas_biv_spectral_radius(
+          biv_etas_params, biv_beta_eff
+        )
+      )
+    } else {
+      NULL
+    },
     timing = list(
       n_iter = iter,
       sampling_s = total_sampling,

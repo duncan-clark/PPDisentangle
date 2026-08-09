@@ -69,6 +69,59 @@ adaptive_SEM <- function(pp_data,
 
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
+  etas_beta_eff <- .etas_resolve_beta_gr(
+    dots$beta_gr,
+    realiz = pp_data,
+    m0 = dots$m0
+  )
+  etas_gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+  if (length(etas_gap_min) != 1L || !is.finite(etas_gap_min) ||
+      is.na(etas_gap_min) || etas_gap_min < 0) {
+    etas_gap_min <- 1e-4
+  }
+  etas_eta_max <- suppressWarnings(as.numeric(dots$max_branching_ratio))
+  if (length(etas_eta_max) != 1L || !is.finite(etas_eta_max) ||
+      is.na(etas_eta_max) || etas_eta_max <= 0) {
+    etas_eta_max <- 0.98
+  }
+  etas_rho_max <- suppressWarnings(as.numeric(dots$max_branching_radius))
+  if (length(etas_rho_max) != 1L || !is.finite(etas_rho_max) ||
+      is.na(etas_rho_max) || etas_rho_max <= 0) {
+    etas_rho_max <- 0.98
+  }
+  hard_subcritical <- !isFALSE(dots$hard_subcritical)
+  if ((is_etas || is_biv_etas) && !is.finite(etas_beta_eff)) {
+    stop("adaptive_SEM requires a finite positive beta_gr for stable ETAS fitting.")
+  }
+  if (is_biv_etas && !is.null(dots$etas_bivariate_params)) {
+    dots$etas_bivariate_params <- .etas_project_subcritical_biv(
+      dots$etas_bivariate_params,
+      beta_gr = etas_beta_eff,
+      gap_min = etas_gap_min,
+      rho_max = etas_rho_max
+    )
+  }
+  if (is_etas) {
+    hawkes_params_control <- as.list(.etas_project_subcritical(
+      hawkes_params_control,
+      beta_gr = etas_beta_eff,
+      gap_min = etas_gap_min,
+      eta_max = etas_eta_max
+    ))
+    hawkes_params_treated <- as.list(.etas_project_subcritical(
+      hawkes_params_treated,
+      beta_gr = etas_beta_eff,
+      gap_min = etas_gap_min,
+      eta_max = etas_eta_max
+    ))
+  }
+  dots$beta_gr <- etas_beta_eff
+  dots$alpha_beta_gap_min <- etas_gap_min
+  dots$max_branching_ratio <- etas_eta_max
+  dots$max_branching_radius <- etas_rho_max
+  dots$hard_subcritical <- hard_subcritical
+  dots_no_trunc <- dots
+  dots_no_trunc$t_trunc <- NULL
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
   hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
   hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
@@ -94,7 +147,6 @@ adaptive_SEM <- function(pp_data,
     }
   }
 
-  dots <- list(...)
   background_rate_var <- if ("background_rate_var" %in% names(dots)) dots$background_rate_var else NULL
 
   treated_idx <- (partition_processes == "treated")
@@ -128,42 +180,47 @@ adaptive_SEM <- function(pp_data,
 
   adaptive_step <- function(starting_data) {
     t_adapt_start <- proc.time()[3]
-    result <- em_style_labelling(
-      pp_data = starting_data,
-      partition = partition,
-      partition_processes = partition_processes,
-      statespace = statespace,
-      state_spaces = adaptive_control$state_spaces,
-      time_window = c(treatment_time, max(starting_data$t)),
-      treatment_time = treatment_time,
-      hawkes_params_control = hawkes_params_control,
-      hawkes_params_treated = hawkes_params_treated,
-      update_control_params = adaptive_control$update_control_params,
-      param_update_cadence = adaptive_control$param_update_cadence,
-      proposal_update_cadence = adaptive_control$proposal_update_cadence,
-      update_starting_data = adaptive_control$update_starting_data,
-      include_starting_data = adaptive_control$include_starting_data,
-      include_starting_first_n = adaptive_control$include_starting_first_n,
-      max_relabel_step_frac = adaptive_control$max_relabel_step_frac,
-      force_param_update_flip_frac = adaptive_control$force_param_update_flip_frac,
-      metric_name = "post_likelihood",
-      optim_method = adaptive_control$optim_method,
-      selection_temperature = adaptive_control$selection_temperature,
-      change_factor_min_mult = adaptive_control$change_factor_min_mult,
-      change_factor_max_mult = adaptive_control$change_factor_max_mult,
-      iter = adaptive_control$iter,
-      n_props = adaptive_control$n_props,
-      change_factor = adaptive_control$change_factor,
-      stagnation_trigger_every = adaptive_control$stagnation_trigger_every,
-      MCMC_style = FALSE,
-      proposal_method = adaptive_control$proposal_method,
-      temporal_weight = adaptive_control$temporal_weight,
-      temporal_scale_days = adaptive_control$temporal_scale_days,
-      fixed_params = adaptive_control$fixed_params,
-      # Respect caller-configured SEM verbosity instead of forcing full trace.
-      verbose = isTRUE(adaptive_control$verbose),
-      model_type = model_type,
-      ...
+    result <- do.call(
+      em_style_labelling,
+      c(
+        list(
+          pp_data = starting_data,
+          partition = partition,
+          partition_processes = partition_processes,
+          statespace = statespace,
+          state_spaces = adaptive_control$state_spaces,
+          time_window = c(treatment_time, max(starting_data$t)),
+          treatment_time = treatment_time,
+          hawkes_params_control = hawkes_params_control,
+          hawkes_params_treated = hawkes_params_treated,
+          update_control_params = adaptive_control$update_control_params,
+          param_update_cadence = adaptive_control$param_update_cadence,
+          proposal_update_cadence = adaptive_control$proposal_update_cadence,
+          update_starting_data = adaptive_control$update_starting_data,
+          include_starting_data = adaptive_control$include_starting_data,
+          include_starting_first_n = adaptive_control$include_starting_first_n,
+          max_relabel_step_frac = adaptive_control$max_relabel_step_frac,
+          force_param_update_flip_frac = adaptive_control$force_param_update_flip_frac,
+          metric_name = "post_likelihood",
+          optim_method = adaptive_control$optim_method,
+          selection_temperature = adaptive_control$selection_temperature,
+          change_factor_min_mult = adaptive_control$change_factor_min_mult,
+          change_factor_max_mult = adaptive_control$change_factor_max_mult,
+          iter = adaptive_control$iter,
+          n_props = adaptive_control$n_props,
+          change_factor = adaptive_control$change_factor,
+          stagnation_trigger_every = adaptive_control$stagnation_trigger_every,
+          MCMC_style = FALSE,
+          proposal_method = adaptive_control$proposal_method,
+          temporal_weight = adaptive_control$temporal_weight,
+          temporal_scale_days = adaptive_control$temporal_scale_days,
+          fixed_params = adaptive_control$fixed_params,
+          # Respect caller-configured SEM verbosity instead of forcing full trace.
+          verbose = isTRUE(adaptive_control$verbose),
+          model_type = model_type
+        ),
+        dots
+      )
     )
     t_adapt_end <- proc.time()[3]
     return(list(
@@ -178,6 +235,7 @@ adaptive_SEM <- function(pp_data,
       all_metrics = result$all_metrics,
       class_results = result$class_results,
       fits = result$fits,
+      etas_bivariate_params = result$etas_bivariate_params,
       time_taken = t_adapt_end - t_adapt_start
     ))
   }
@@ -315,8 +373,14 @@ adaptive_SEM <- function(pp_data,
           windowS = statespace,
           control_state_space = control_state_space,
           treated_state_space = treated_state_space,
+          background_rate_var = background_rate_var,
           treated_background_zero_before = treated_background_zero_before,
-          t_trunc = t_trunc
+          t_trunc = t_trunc,
+          m0 = dots$m0,
+          beta_gr = dots$beta_gr,
+          max_branching_radius = if (!is.null(dots$max_branching_radius)) dots$max_branching_radius else 0.98,
+          alpha_beta_gap_min = if (!is.null(dots$alpha_beta_gap_min)) dots$alpha_beta_gap_min else 1e-4,
+          enforce_alpha_subcritical = if (!is.null(dots$enforce_alpha_subcritical)) dots$enforce_alpha_subcritical else TRUE
         ))
       }
       include <- if (is_etas) {
@@ -388,6 +452,9 @@ adaptive_SEM <- function(pp_data,
       baseline_adaptive_labelling <- adapt$adaptive_labelling
       c_params <- adapt$control_par
       t_params <- adapt$treated_par
+      if (is_biv_etas && !is.null(adapt$etas_bivariate_params)) {
+        dots$etas_bivariate_params <- adapt$etas_bivariate_params
+      }
       adaptive_counter <- 1
       adaptive_history[[1]] <- list(
         max_metric_flips = adapt$max_metric_flips,
@@ -517,6 +584,40 @@ adaptive_SEM <- function(pp_data,
           c_params[[length(c_params)]], t_params[[length(t_params)]])
       }
       if (is.null(names(biv_par))) names(biv_par) <- biv_names
+      if (!is.null(fp)) {
+        for (nm in intersect(names(fp), biv_names)) biv_par[[nm]] <- fp[[nm]]
+      }
+      biv_par <- .etas_project_subcritical_biv(
+        biv_par,
+        beta_gr = etas_beta_eff,
+        gap_min = etas_gap_min,
+        rho_max = etas_rho_max
+      )
+      biv_free_names <- biv_names[biv_fr_idx]
+      biv_alpha_free_pos <- if (hard_subcritical) {
+        which(biv_free_names %in% .etas_biv_alpha_names)
+      } else {
+        integer(0)
+      }
+      biv_to_optim <- function(natural_free) {
+        optim_free <- natural_free
+        if (length(biv_alpha_free_pos)) {
+          slack <- pmax(
+            etas_beta_eff - etas_gap_min - natural_free[biv_alpha_free_pos],
+            1e-12
+          )
+          optim_free[biv_alpha_free_pos] <- log(slack)
+        }
+        optim_free
+      }
+      biv_from_optim <- function(optim_free) {
+        natural_free <- optim_free
+        if (length(biv_alpha_free_pos)) {
+          natural_free[biv_alpha_free_pos] <-
+            etas_beta_eff - etas_gap_min - exp(optim_free[biv_alpha_free_pos])
+        }
+        natural_free
+      }
 
       biv_wT <- if (use_pre_history_for_biv) {
         c(min(starting_data$t), max_data_t)
@@ -552,16 +653,36 @@ adaptive_SEM <- function(pp_data,
         list(realiz = r, precomp = list(W_0 = W0, W_1 = W1,
                                         areaS_0 = aS0, areaS_1 = aS1))
       })
+      biv_ll_extra_names <- intersect(
+        names(dots),
+        c(
+          "m0", "beta_gr", "enforce_finite_trigger_moments",
+          "p_lower_bound", "q_lower_bound", "finite_moment_soft_width",
+          "finite_moment_soft_weight", "finite_moment_soft_power",
+          "enforce_alpha_subcritical", "alpha_beta_gap_min",
+          "alpha_beta_soft_gap", "alpha_beta_soft_weight",
+          "alpha_beta_soft_power", "max_branching_radius",
+          "stability_barrier_start", "stability_barrier_weight",
+          "stability_barrier_power"
+        )
+      )
+      biv_ll_extra <- dots[biv_ll_extra_names]
       biv_obj <- function(par15) {
         liks <- sapply(biv_precomps, function(pc) {
-          loglik_etas_bivariate(
-            params = par15, realiz = pc$realiz,
-            windowT = biv_wT, windowS = statespace,
-            control_state_space = control_state_space,
-            treated_state_space = treated_state_space,
-            background_rate_var = background_rate_var,
-            treated_background_zero_before = treated_background_zero_before,
-            t_trunc = t_trunc, precomp = pc$precomp
+          do.call(
+            loglik_etas_bivariate,
+            c(
+              list(
+                params = par15, realiz = pc$realiz,
+                windowT = biv_wT, windowS = statespace,
+                control_state_space = control_state_space,
+                treated_state_space = treated_state_space,
+                background_rate_var = background_rate_var,
+                treated_background_zero_before = treated_background_zero_before,
+                t_trunc = t_trunc, precomp = pc$precomp
+              ),
+              biv_ll_extra
+            )
           )
         })
         sum(liks * weights)
@@ -576,13 +697,15 @@ adaptive_SEM <- function(pp_data,
       }
 
       t0 <- proc.time()[3]
-      if (length(biv_fp_idx) > 0) {
-        biv_wrap <- function(free_par) {
-          p15 <- biv_par; p15[biv_fr_idx] <- free_par
+      if (length(biv_fr_idx) > 0) {
+        biv_wrap <- function(optim_free) {
+          p15 <- biv_par
+          p15[biv_fr_idx] <- biv_from_optim(optim_free)
           biv_obj(p15)
         }
+        biv_opt_start <- biv_to_optim(biv_par[biv_fr_idx])
         biv_res <- tryCatch(
-          optim(par = biv_par[biv_fr_idx], fn = biv_wrap, method = "Nelder-Mead",
+          optim(par = biv_opt_start, fn = biv_wrap, method = "Nelder-Mead",
                 control = list(
                   fnscale = -1,
                   trace = outer_optim_trace,
@@ -591,27 +714,26 @@ adaptive_SEM <- function(pp_data,
                 )),
           error = function(e) {
             cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
-            list(par = biv_par[biv_fr_idx], convergence = -99)
+            list(par = biv_opt_start, convergence = -99)
           }
         )
-        biv_par[biv_fr_idx] <- biv_res$par
+        biv_par[biv_fr_idx] <- biv_from_optim(biv_res$par)
       } else {
-        biv_res <- tryCatch(
-          optim(par = biv_par, fn = biv_obj, method = "Nelder-Mead",
-                control = list(
-                  fnscale = -1,
-                  trace = outer_optim_trace,
-                  REPORT = outer_optim_report,
-                  maxit = outer_maxit_biv
-                )),
-          error = function(e) {
-            cat(sprintf("  [bivariate] OPTIM ERROR: %s\n", e$message))
-            list(par = biv_par, convergence = -99)
-          }
-        )
-        biv_par <- biv_res$par
+        biv_res <- list(par = numeric(0), convergence = 0)
       }
       names(biv_par) <- biv_names
+      if (hard_subcritical) {
+        biv_par <- .etas_project_subcritical_biv(
+          biv_par,
+          beta_gr = etas_beta_eff,
+          gap_min = etas_gap_min,
+          rho_max = etas_rho_max
+        )
+      }
+      biv_res$par <- biv_par
+      biv_res$branching_radius <- .etas_biv_spectral_radius(
+        biv_par, etas_beta_eff
+      )
       dots$etas_bivariate_params <- biv_par
 
       # Extract marginal params for downstream compatibility
@@ -689,6 +811,24 @@ adaptive_SEM <- function(pp_data,
           )
         }
       })
+      etas_ll_extra_names <- if (is_etas) {
+        intersect(
+          names(dots),
+          c(
+            "m0", "beta_gr", "enforce_finite_trigger_moments",
+            "p_lower_bound", "q_lower_bound", "finite_moment_soft_width",
+            "finite_moment_soft_weight", "finite_moment_soft_power",
+            "enforce_alpha_subcritical", "alpha_beta_gap_min",
+            "alpha_beta_soft_gap", "alpha_beta_soft_weight",
+            "alpha_beta_soft_power", "max_branching_ratio",
+            "stability_barrier_start", "stability_barrier_weight",
+            "stability_barrier_power"
+          )
+        )
+      } else {
+        character(0)
+      }
+      etas_ll_extra <- dots[etas_ll_extra_names]
       obj_fn <- function(params) {
         liks <- sapply(prepared_for_process, function(parts) {
           if (is.null(parts)) return(-Inf)
@@ -736,14 +876,21 @@ adaptive_SEM <- function(pp_data,
             if (!is.finite(loglik)) return(-Inf)
             loglik
           } else {
-            loglik_fn(
-              params = params,
-              realiz = parts$post_part,
-              windowT = sem_windowT,
-              windowS = statespace, zero_background_region = zero_bg_region,
-              background_rate_var = "W",
-              precomp = parts$precomp,
-              t_trunc = t_trunc
+            do.call(
+              loglik_fn,
+              c(
+                list(
+                  params = params,
+                  realiz = parts$post_part,
+                  windowT = sem_windowT,
+                  windowS = statespace,
+                  zero_background_region = zero_bg_region,
+                  background_rate_var = "W",
+                  precomp = parts$precomp,
+                  t_trunc = t_trunc
+                ),
+                etas_ll_extra
+              )
             )
           }
         })
@@ -751,6 +898,42 @@ adaptive_SEM <- function(pp_data,
       }
 
       full_vec <- unlist(par_list)
+      if (!is.null(fp)) {
+        for (nm in intersect(names(fp), all_names)) full_vec[[nm]] <- fp[[nm]]
+      }
+      if (is_etas) {
+        full_vec <- .etas_project_subcritical(
+          full_vec,
+          beta_gr = etas_beta_eff,
+          gap_min = etas_gap_min,
+          eta_max = etas_eta_max
+        )
+      }
+      free_names <- all_names[fr_idx]
+      alpha_free_pos <- if (is_etas && hard_subcritical) {
+        which(free_names == "alpha_m")
+      } else {
+        integer(0)
+      }
+      to_optim <- function(natural_free) {
+        optim_free <- natural_free
+        if (length(alpha_free_pos)) {
+          slack <- pmax(
+            etas_beta_eff - etas_gap_min - natural_free[alpha_free_pos],
+            1e-12
+          )
+          optim_free[alpha_free_pos] <- log(slack)
+        }
+        optim_free
+      }
+      from_optim <- function(optim_free) {
+        natural_free <- optim_free
+        if (length(alpha_free_pos)) {
+          natural_free[alpha_free_pos] <-
+            etas_beta_eff - etas_gap_min - exp(optim_free[alpha_free_pos])
+        }
+        natural_free
+      }
       if (verbose) {
         cat(sprintf("  [%s] starting par: %s\n", process_label,
                     paste(all_names, signif(full_vec, 5), sep = "=", collapse = "  ")))
@@ -760,33 +943,44 @@ adaptive_SEM <- function(pp_data,
       }
 
       t0 <- proc.time()[3]
-      if (length(fp_idx) > 0) {
-        wrap_fn <- function(free_par) {
-          p4 <- full_vec; p4[fr_idx] <- free_par
+      if (length(fr_idx) > 0) {
+        opt_start <- to_optim(full_vec[fr_idx])
+        wrap_fn <- function(optim_free) {
+          p4 <- full_vec
+          p4[fr_idx] <- from_optim(optim_free)
           obj_fn(p4)
         }
         res <- tryCatch(
-          optim(par = full_vec[fr_idx], fn = wrap_fn, method = "Nelder-Mead",
+          optim(par = opt_start, fn = wrap_fn, method = "Nelder-Mead",
                 control = list(
                   fnscale = -1,
                   trace = outer_optim_trace,
                   REPORT = outer_optim_report,
                   maxit = outer_maxit
                 )),
-          error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec[fr_idx], convergence = -99) }
+          error = function(e) {
+            cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message))
+            list(par = opt_start, convergence = -99)
+          }
         )
-        out_par <- full_vec; out_par[fr_idx] <- res$par
-        res$par <- out_par
+        out_par <- full_vec
+        out_par[fr_idx] <- from_optim(res$par)
       } else {
-        res <- tryCatch(
-          optim(par = full_vec, fn = obj_fn, method = "Nelder-Mead",
-                control = list(
-                  fnscale = -1,
-                  trace = outer_optim_trace,
-                  REPORT = outer_optim_report,
-                  maxit = outer_maxit
-                )),
-          error = function(e) { cat(sprintf("  [%s] OPTIM ERROR: %s\n", process_label, e$message)); list(par = full_vec, convergence = -99) }
+        res <- list(par = numeric(0), convergence = 0)
+        out_par <- full_vec
+      }
+      if (is_etas && hard_subcritical) {
+        out_par <- .etas_project_subcritical(
+          out_par,
+          beta_gr = etas_beta_eff,
+          gap_min = etas_gap_min,
+          eta_max = etas_eta_max
+        )
+      }
+      res$par <- out_par
+      if (is_etas) {
+        res$branching_ratio <- .etas_univ_branching_ratio(
+          res$par, etas_beta_eff
         )
       }
 
@@ -841,6 +1035,26 @@ adaptive_SEM <- function(pp_data,
   )
   if (is_biv_etas && !is.null(dots$etas_bivariate_params)) {
     result$etas_bivariate_params <- dots$etas_bivariate_params
+    result$stability <- list(
+      law = "bivariate",
+      beta_gr = etas_beta_eff,
+      threshold = etas_rho_max,
+      branching_metric = .etas_biv_spectral_radius(
+        dots$etas_bivariate_params, etas_beta_eff
+      )
+    )
+  } else if (is_etas) {
+    result$stability <- list(
+      law = "univariate",
+      beta_gr = etas_beta_eff,
+      threshold = etas_eta_max,
+      eta_control = .etas_univ_branching_ratio(
+        result$hawkes_params_control, etas_beta_eff
+      ),
+      eta_treated = .etas_univ_branching_ratio(
+        result$hawkes_params_treated, etas_beta_eff
+      )
+    )
   }
   return(result)
 }

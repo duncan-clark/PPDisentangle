@@ -311,9 +311,17 @@ OK_ATE_METHOD_LABEL <- paste0(
 source(file.path(SCRIPT_DIR, "ate_bivariate.R"), local = FALSE)
 cat(sprintf("ATE evaluation: bivariate=%s contrast=%s\n",
             OK_ATE_BIVARIATE, OK_ATE_CONTRAST))
-BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_BOOT_BRANCHING_MAX", "0.98")))
-if (!is.finite(BOOT_BRANCHING_MAX) || is.na(BOOT_BRANCHING_MAX) || BOOT_BRANCHING_MAX <= 0) {
-  BOOT_BRANCHING_MAX <- 0.98
+ETAS_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv("OK_ETAS_BRANCHING_MAX", "0.98")))
+if (!is.finite(ETAS_BRANCHING_MAX) || is.na(ETAS_BRANCHING_MAX) ||
+    ETAS_BRANCHING_MAX <= 0 || ETAS_BRANCHING_MAX >= 1) {
+  ETAS_BRANCHING_MAX <- 0.98
+}
+BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv(
+  "OK_BOOT_BRANCHING_MAX", as.character(ETAS_BRANCHING_MAX)
+)))
+if (!is.finite(BOOT_BRANCHING_MAX) || is.na(BOOT_BRANCHING_MAX) ||
+    BOOT_BRANCHING_MAX <= 0 || BOOT_BRANCHING_MAX >= 1) {
+  BOOT_BRANCHING_MAX <- ETAS_BRANCHING_MAX
 }
 BOOT_MAX_PRE_EVENTS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_MAX_PRE_EVENTS", "25000")))
 if (!is.finite(BOOT_MAX_PRE_EVENTS) || is.na(BOOT_MAX_PRE_EVENTS) || BOOT_MAX_PRE_EVENTS < 100L) BOOT_MAX_PRE_EVENTS <- 25000L
@@ -877,6 +885,8 @@ estimate_structural_init <- function() {
         windowT = wT_holdout,
         windowS = win_km,
         m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        max_branching_ratio = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT,
         fixed_params = NULL,
         zero_background_region = treated_ss
@@ -1038,6 +1048,8 @@ fit_control_snapshot <- function(df, label, window_end) {
         windowT = wT,
         windowS = win_km,
         m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        max_branching_ratio = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT,
         fixed_params = NULL
       ),
@@ -1155,7 +1167,9 @@ fit_best_indep <- function(realiz, zbr, starts, maxit) {
     fit <- tryCatch(
       fit_etas(params_init = s, realiz = realiz, windowT = windowT_post,
                windowS = win_km, m0 = ETAS_M0, maxit = maxit,
-               fixed_params = NULL, zero_background_region = zbr),
+               fixed_params = NULL, zero_background_region = zbr,
+               beta_gr = BETA_GR,
+               max_branching_ratio = ETAS_BRANCHING_MAX),
       error = function(e) NULL)
     if (!is.null(fit) && is.finite(fit$value) && fit$value > best_val) {
       best_fit <- fit; best_val <- fit$value
@@ -1210,6 +1224,8 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
+      beta_gr = BETA_GR,
+      max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
@@ -1328,6 +1344,9 @@ run_sem_fit <- function(pp_data_in,
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
       ),
       m0 = ETAS_M0, beta_gr = BETA_GR,
+      max_branching_ratio = ETAS_BRANCHING_MAX,
+      max_branching_radius = ETAS_BRANCHING_MAX,
+      hard_subcritical = TRUE,
       etas_bivariate_params = if (identical(model_type_in, "etas_bivariate")) init_params_sem else NULL,
       background_rate_var = background_rate_var_in,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
@@ -1638,13 +1657,6 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
         eta_exact = eta_exact, eta_proxy = eta_proxy
       )
     }
-    ate_approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
-      if (is.null(par_obj)) return(NA_real_)
-      A_val <- suppressWarnings(as.numeric(par_obj$A))
-      alpha_val <- suppressWarnings(as.numeric(par_obj$alpha_m))
-      if (!is.finite(A_val) || !is.finite(alpha_val)) return(NA_real_)
-      A_val * exp(alpha_val / beta_gr)
-    }
     ate_event_warn_threshold <- suppressWarnings(as.numeric(Sys.getenv("OK_ATE_EXPLOSIVE_EVENT_THRESHOLD", "20000")))
     if (!is.finite(ate_event_warn_threshold) || is.na(ate_event_warn_threshold) || ate_event_warn_threshold <= 0) {
       ate_event_warn_threshold <- 20000
@@ -1654,12 +1666,12 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
         ate_flagged_frac_warn < 0 || ate_flagged_frac_warn > 1) {
       ate_flagged_frac_warn <- 0.05
     }
-    ctrl_br <- ate_approx_branching_ratio(ctrl_pp)
-    treat_br <- ate_approx_branching_ratio(treat_pp)
     ctrl_diag <- summarize_process_stability(ctrl_pp)
     treat_diag <- summarize_process_stability(treat_pp)
+    ctrl_br <- ctrl_diag$eta_exact
+    treat_br <- treat_diag$eta_exact
     if (!quiet) {
-      cat(sprintf("    %s sim config: sims=%d cores=%d backend=%s branch_proxy(ctrl=%.3f, treat=%.3f)\n",
+      cat(sprintf("    %s sim config: sims=%d cores=%d backend=%s eta(ctrl=%.3f, treat=%.3f)\n",
                   ate_prefix,
                   ATE_N_SIMS, max(1L, min(ATE_SIM_CORES, ATE_N_SIMS)),
                   PARALLEL_BACKEND, ctrl_br, treat_br))
@@ -1670,10 +1682,18 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
                   ate_prefix, treat_diag$mu, treat_diag$A, treat_diag$alpha_m,
                   treat_diag$beta_minus_alpha, treat_diag$eta_exact, treat_diag$eta_proxy))
     }
-    if ((is.finite(ctrl_br) && ctrl_br > BOOT_BRANCHING_MAX) ||
-        (is.finite(treat_br) && treat_br > BOOT_BRANCHING_MAX)) {
-      cat(sprintf("    [warning:ate-explosive] %s: branching proxy exceeds %.3f (ctrl=%.3f, treat=%.3f)\n",
-                  label, BOOT_BRANCHING_MAX, ctrl_br, treat_br))
+    if (any(!is.finite(c(ctrl_br, treat_br))) ||
+        ctrl_br >= 1 || treat_br >= 1) {
+      stop(sprintf(
+        "%s has an explosive univariate ATE law (eta ctrl=%.3f, treat=%.3f).",
+        label, ctrl_br, treat_br
+      ))
+    }
+    if (ctrl_br >= ETAS_BRANCHING_MAX || treat_br >= ETAS_BRANCHING_MAX) {
+      warning(sprintf(
+        "%s exceeds the %.3f fit margin (eta ctrl=%.3f, treat=%.3f).",
+        label, ETAS_BRANCHING_MAX, ctrl_br, treat_br
+      ))
     }
     if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) {
       if (is.null(filtration_history)) {
@@ -1932,6 +1952,8 @@ fit_e <- function(init_params = biv_init_E,
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      beta_gr = BETA_GR,
+      max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
@@ -2329,6 +2351,8 @@ fit_indep_pair <- function(pp_data_in,
       maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
       zero_background_region = treated_ss,
       background_rate_var = background_rate_var_in,
+      beta_gr = BETA_GR,
+      max_branching_ratio = ETAS_BRANCHING_MAX,
       t_trunc = SEM_T_TRUNC_DAYS
     ),
     error = function(e) {
@@ -2343,6 +2367,8 @@ fit_indep_pair <- function(pp_data_in,
       maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
       zero_background_region = control_ss,
       background_rate_var = background_rate_var_in,
+      beta_gr = BETA_GR,
+      max_branching_ratio = ETAS_BRANCHING_MAX,
       t_trunc = SEM_T_TRUNC_DAYS
     ),
     error = function(e) {
@@ -2507,6 +2533,8 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      beta_gr = BETA_GR,
+      max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
@@ -2752,6 +2780,8 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      beta_gr = BETA_GR,
+      max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
@@ -3156,6 +3186,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         control_state_space = control_ss, treated_state_space = treated_ss,
         background_rate_var = "W",
         treated_background_zero_before = 0,
+        beta_gr = BETA_GR,
+        max_branching_radius = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
         t_trunc = SEM_T_TRUNC_DAYS
       ),
@@ -3502,6 +3534,7 @@ results_pre_sensitivity <- list(
     BOOT_SEED = BOOT_SEED,
     BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
     BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
     BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
@@ -3760,6 +3793,7 @@ results_pre_bootstrap <- list(
     BOOT_SEED = BOOT_SEED,
     BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
     BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
     BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
@@ -3812,6 +3846,23 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     out$inferred_process <- if (is.null(inferred_process_value)) location_process_value else inferred_process_value
     out
   }
+  as_pp_bivariate_df <- function(sim_obj) {
+    if (is.null(sim_obj) || is.null(sim_obj$t) || length(sim_obj$t) < 1L) {
+      return(as_pp_df(NULL, "control", "control"))
+    }
+    out <- data.frame(
+      x = sim_obj$x, y = sim_obj$y, t = sim_obj$t, mag = sim_obj$mag,
+      stringsAsFactors = FALSE
+    )
+    in_treated <- spatstat.geom::inside.owin(
+      out$x, out$y, w = treated_ss
+    )
+    out$location_process <- ifelse(in_treated, "treated", "control")
+    out$process <- ifelse(as.integer(sim_obj$process_id) == 1L, "treated", "control")
+    # Naive labels are geographic; SEM starts from the same observed labels.
+    out$inferred_process <- out$location_process
+    out
+  }
 
   pre_window_boot <- c(min(pp_pre$t, na.rm = TRUE), 0)
   post_window_boot <- windowT_post
@@ -3822,19 +3873,91 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   d_ctrl_seed <- F_marginals$ctrl
   d_treat_seed <- F_marginals$treat
 
+  make_boot_covariate_lookup <- function(state_space) {
+    cov_in_window <- lambda_im[state_space, drop = FALSE]
+    total_mass <- spatstat.geom::integral.im(cov_in_window)
+    target_area <- spatstat.geom::area(state_space)
+    if (!is.finite(total_mass) || total_mass <= 0 ||
+        !is.finite(target_area) || target_area <= 0) {
+      stop("Cannot normalize bootstrap KDE background on a state space.")
+    }
+    norm_factor <- target_area / total_mass
+    force(norm_factor)
+    function(x, y) {
+      vals <- spatstat.geom::interp.im(lambda_im, x, y)
+      vals[!is.finite(vals) | vals < 0] <- 0
+      vals * norm_factor
+    }
+  }
+  boot_covariate_lookup <- list(
+    control = make_boot_covariate_lookup(control_ss),
+    treated = make_boot_covariate_lookup(treated_ss)
+  )
+
   get_num <- function(obj, nm, default = NA_real_) {
     if (is.null(obj) || is.null(obj[[nm]])) return(default)
     v <- suppressWarnings(as.numeric(obj[[nm]]))
     if (length(v) < 1L || !is.finite(v[[1]])) return(default)
     v[[1]]
   }
-  approx_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
+  univ_branching_ratio <- function(par_obj, beta_gr = BETA_GR) {
     A <- get_num(par_obj, "A", NA_real_)
-    alpha_m <- get_num(par_obj, "alpha_m", 0)
+    alpha_m <- get_num(par_obj, "alpha_m", NA_real_)
     if (!is.finite(A) || A < 0) return(Inf)
-    if (!is.finite(alpha_m)) alpha_m <- 0
-    # Rough ETAS branching proxy under exponential magnitudes.
-    A * exp(alpha_m / beta_gr)
+    gap <- beta_gr - alpha_m
+    if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+    A * beta_gr / gap
+  }
+  biv_branching_radius <- function(par_obj, beta_gr = BETA_GR) {
+    eta_channel <- function(A_name, alpha_name) {
+      A <- get_num(par_obj, A_name, NA_real_)
+      alpha <- get_num(par_obj, alpha_name, NA_real_)
+      gap <- beta_gr - alpha
+      if (!is.finite(A) || A < 0 || !is.finite(gap) || gap <= 1e-8) {
+        return(Inf)
+      }
+      A * beta_gr / gap
+    }
+    offspring <- matrix(
+      c(
+        eta_channel("A_00", "alpha_m_00"),
+        eta_channel("A_01", "alpha_m_01"),
+        eta_channel("A_10", "alpha_m_10"),
+        eta_channel("A_11", "alpha_m_11")
+      ),
+      nrow = 2, byrow = TRUE
+    )
+    if (!all(is.finite(offspring))) return(Inf)
+    max(Re(eigen(offspring, only.values = TRUE)$values))
+  }
+  assess_boot_stability <- function(par_obj, bivariate = OK_ATE_BIVARIATE) {
+    if (isTRUE(bivariate)) {
+      rho <- biv_branching_radius(par_obj)
+      return(list(
+        law = "bivariate",
+        branching_metric = rho,
+        rho = rho,
+        eta_ctrl = NA_real_,
+        eta_treat = NA_real_,
+        stable = is.finite(rho) && rho < 1,
+        within_fit_margin = is.finite(rho) && rho < ETAS_BRANCHING_MAX
+      ))
+    }
+    ctrl <- par_obj$control
+    treat <- par_obj$treated
+    eta_ctrl <- univ_branching_ratio(ctrl)
+    eta_treat <- univ_branching_ratio(treat)
+    metric <- max(c(eta_ctrl, eta_treat))
+    list(
+      law = "univariate",
+      branching_metric = metric,
+      rho = NA_real_,
+      eta_ctrl = eta_ctrl,
+      eta_treat = eta_treat,
+      stable = all(is.finite(c(eta_ctrl, eta_treat))) && metric < 1,
+      within_fit_margin = all(is.finite(c(eta_ctrl, eta_treat))) &&
+        metric < ETAS_BRANCHING_MAX
+    )
   }
   validate_sim_obj <- function(sim_obj, label, max_events) {
     n_ev <- if (is.null(sim_obj) || is.null(sim_obj$t)) 0L else length(sim_obj$t)
@@ -3853,32 +3976,96 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     invisible(TRUE)
   }
 
-  simulate_boot_data <- function(ctrl_seed, treat_seed) {
+  simulate_boot_data <- function(ctrl_seed,
+                                 treat_seed,
+                                 biv_seed = NULL,
+                                 bivariate = OK_ATE_BIVARIATE) {
     if (OK_BOOT_GUARD_DEGENERATE) {
-      pre_br <- approx_branching_ratio(pre_ctrl_seed)
-      ctrl_br <- approx_branching_ratio(ctrl_seed)
-      treat_br <- approx_branching_ratio(treat_seed)
-      if (any(!is.finite(c(pre_br, ctrl_br, treat_br))) ||
-          pre_br > BOOT_BRANCHING_MAX || ctrl_br > BOOT_BRANCHING_MAX || treat_br > BOOT_BRANCHING_MAX) {
+      pre_br <- univ_branching_ratio(pre_ctrl_seed)
+      dgp_stability <- if (isTRUE(bivariate)) {
+        assess_boot_stability(biv_seed, bivariate = TRUE)
+      } else {
+        assess_boot_stability(
+          list(control = ctrl_seed, treated = treat_seed),
+          bivariate = FALSE
+        )
+      }
+      if (!is.finite(pre_br) || pre_br >= BOOT_BRANCHING_MAX ||
+          !isTRUE(dgp_stability$within_fit_margin)) {
         stop(sprintf(
-          "Degenerate bootstrap guard: branching proxy too high (pre=%.3f ctrl=%.3f treat=%.3f, limit=%.3f)",
-          pre_br, ctrl_br, treat_br, BOOT_BRANCHING_MAX
+          paste0(
+            "Bootstrap DGP is outside the %.3f stability margin ",
+            "(pre eta=%.3f, %s metric=%.3f)"
+          ),
+          BOOT_BRANCHING_MAX, pre_br, dgp_stability$law,
+          dgp_stability$branching_metric
         ))
       }
     }
-    pre_sim <- sim_etas(pre_ctrl_seed, pre_window_boot, windowS = control_ss,
-                        m0 = ETAS_M0, beta_gr = BETA_GR)
+    pre_sim <- sim_etas(
+      pre_ctrl_seed, pre_window_boot, windowS = control_ss,
+      m0 = ETAS_M0, beta_gr = BETA_GR,
+      covariate_lookup = boot_covariate_lookup$control,
+      t_trunc = SEM_T_TRUNC_DAYS
+    )
     validate_sim_obj(pre_sim, "bootstrap pre_sim", BOOT_MAX_PRE_EVENTS)
     pre_df <- as_pp_df(pre_sim, "control", "control")
     history_df <- pre_df[, c("x", "y", "t", "mag"), drop = FALSE]
-    ctrl_post_sim <- sim_etas(ctrl_seed, post_window_boot, windowS = control_ss,
-                              m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df)
-    validate_sim_obj(ctrl_post_sim, "bootstrap ctrl_post_sim", BOOT_MAX_POST_EVENTS_PER_PROC)
-    treat_post_sim <- sim_etas(treat_seed, post_window_boot, windowS = treated_ss,
-                               m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df)
-    validate_sim_obj(treat_post_sim, "bootstrap treat_post_sim", BOOT_MAX_POST_EVENTS_PER_PROC)
-    post_ctrl_df <- as_pp_df(ctrl_post_sim, "control", "control")
-    post_treat_df <- as_pp_df(treat_post_sim, "treated", "treated")
+    if (isTRUE(bivariate)) {
+      if (is.null(biv_seed)) stop("Bivariate bootstrap requires biv_seed.")
+      history_biv <- pre_df[, c("x", "y", "t", "mag", "inferred_process"), drop = FALSE]
+      joint_post_sim <- sim_etas_bivariate(
+        params = biv_seed,
+        windowT = post_window_boot,
+        windowS = win_km,
+        state_spaces = state_spaces,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        filtration = history_biv,
+        covariate_lookup = boot_covariate_lookup,
+        t_trunc = SEM_T_TRUNC_DAYS
+      )
+      validate_sim_obj(
+        joint_post_sim,
+        "bootstrap bivariate post_sim",
+        2L * BOOT_MAX_POST_EVENTS_PER_PROC
+      )
+      joint_post_df <- as_pp_bivariate_df(joint_post_sim)
+      ctrl_post_sim <- joint_post_df[
+        joint_post_df$location_process == "control", , drop = FALSE
+      ]
+      treat_post_sim <- joint_post_df[
+        joint_post_df$location_process == "treated", , drop = FALSE
+      ]
+    } else {
+      ctrl_post_sim <- sim_etas(
+        ctrl_seed, post_window_boot, windowS = control_ss,
+        m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df,
+        covariate_lookup = boot_covariate_lookup$control,
+        t_trunc = SEM_T_TRUNC_DAYS
+      )
+      treat_post_sim <- sim_etas(
+        treat_seed, post_window_boot, windowS = treated_ss,
+        m0 = ETAS_M0, beta_gr = BETA_GR, filtration = history_df,
+        covariate_lookup = boot_covariate_lookup$treated,
+        t_trunc = SEM_T_TRUNC_DAYS
+      )
+    }
+    validate_sim_obj(
+      ctrl_post_sim, "bootstrap ctrl_post_sim",
+      BOOT_MAX_POST_EVENTS_PER_PROC
+    )
+    validate_sim_obj(
+      treat_post_sim, "bootstrap treat_post_sim",
+      BOOT_MAX_POST_EVENTS_PER_PROC
+    )
+    if (isTRUE(bivariate)) {
+      post_ctrl_df <- ctrl_post_sim
+      post_treat_df <- treat_post_sim
+    } else {
+      post_ctrl_df <- as_pp_df(ctrl_post_sim, "control", "control")
+      post_treat_df <- as_pp_df(treat_post_sim, "treated", "treated")
+    }
     pp_post_sim <- rbind(post_ctrl_df, post_treat_df)
     pp_post_sim <- pp_post_sim[order(pp_post_sim$t), , drop = FALSE]
 
@@ -3900,20 +4087,50 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       post_ctrl_df = post_ctrl_df,
       post_treat_df = post_treat_df,
       pp_post_bg_sim = pp_post_bg_sim,
-      pp_all_bg_sim = pp_all_bg_sim
+      pp_all_bg_sim = pp_all_bg_sim,
+      simulation_law = if (isTRUE(bivariate)) "bivariate" else "univariate"
     )
   }
 
-  summarize_boot <- function(ate_obj, rep_id, pre_df, post_ctrl_df, post_treat_df, par_obj = NULL) {
+  stop_explosive_boot <- function(stability, target, rep_id) {
+    if (isTRUE(stability$stable)) return(invisible(stability))
+    cond <- structure(
+      list(
+        message = sprintf(
+          "Explosive %s bootstrap refit at rep %d (%s metric=%s)",
+          target, as.integer(rep_id), stability$law,
+          format(stability$branching_metric, digits = 6)
+        ),
+        call = NULL,
+        stability = stability,
+        target = target,
+        rep = rep_id
+      ),
+      class = c("oklahoma_boot_explosive", "error", "condition")
+    )
+    stop(cond)
+  }
+  boot_failure <- function(e, target, rep_id) {
+    is_explosive <- inherits(e, "oklahoma_boot_explosive")
+    list(
+      ok = FALSE,
+      rep = as.integer(rep_id),
+      msg = paste0("Bootstrap ", target, " failed: ", conditionMessage(e)),
+      failure_type = if (is_explosive) "explosive" else "error",
+      stability = if (is_explosive) e$stability else NULL
+    )
+  }
+  summarize_boot <- function(ate_obj,
+                             rep_id,
+                             pre_df,
+                             post_ctrl_df,
+                             post_treat_df,
+                             par_obj = NULL,
+                             stability,
+                             simulation_law) {
     if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) {
       return(list(ok = FALSE, rep = rep_id, msg = "ATE estimation failed"))
     }
-    # Bivariate ATE sets analytic=NULL; coerce missing scalars to length-1 NA
-    # so make_boot_block's data.frame() never sees 0-length columns.
-    eta_ctrl <- tryCatch(as.numeric(ate_obj$analytic$eta_ctrl)[1L], error = function(e) NA_real_)
-    eta_treat <- tryCatch(as.numeric(ate_obj$analytic$eta_treat)[1L], error = function(e) NA_real_)
-    if (length(eta_ctrl) != 1L || !is.finite(eta_ctrl)) eta_ctrl <- NA_real_
-    if (length(eta_treat) != 1L || !is.finite(eta_treat)) eta_treat <- NA_real_
     list(
       ok = TRUE,
       rep = as.integer(rep_id)[1L],
@@ -3923,8 +4140,14 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       ate_total_mean = as.numeric(mean(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE))[1L],
       ate_total_sd = as.numeric(stats::sd(ate_obj$all_nothing_sim$total_saved, na.rm = TRUE))[1L],
       ate_tile_mean = as.numeric(mean(ate_obj$all_nothing_sim$ATE, na.rm = TRUE))[1L],
-      eta_ctrl = eta_ctrl,
-      eta_treat = eta_treat,
+      fit_law = stability$law,
+      simulation_law = simulation_law,
+      branching_metric = as.numeric(stability$branching_metric),
+      rho = as.numeric(stability$rho),
+      eta_ctrl = as.numeric(stability$eta_ctrl),
+      eta_treat = as.numeric(stability$eta_treat),
+      is_stable = isTRUE(stability$stable),
+      within_fit_margin = isTRUE(stability$within_fit_margin),
       params = par_obj
     )
   }
@@ -3945,23 +4168,61 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
 
     if ("E" %in% boot_targets_run) {
       out$E <- tryCatch({
-        sim_C <- simulate_boot_data(c_ctrl_seed, c_treat_seed)
-        c_params_boot <- E_params
+        sim_C <- simulate_boot_data(
+          c_ctrl_seed, c_treat_seed,
+          biv_seed = E_params,
+          bivariate = OK_ATE_BIVARIATE
+        )
+        c_params_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          E_params
+        } else {
+          list(control = c_ctrl_seed, treated = c_treat_seed)
+        }
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
-          fit_c_boot <- tryCatch({
-            fit_etas_bivariate(
+          if (isTRUE(OK_ATE_BIVARIATE)) {
+            fit_c_boot <- fit_etas_bivariate(
               params_init = E_params, realiz = sim_C$pp_all_bg_sim,
               windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
+              beta_gr = BETA_GR,
+              max_branching_radius = ETAS_BRANCHING_MAX,
               maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
               t_trunc = SEM_T_TRUNC_DAYS
             )
-          }, error = function(e) NULL)
-          if (!is.null(fit_c_boot) && !is.null(fit_c_boot$par)) c_params_boot <- fit_c_boot$par
+            if (is.null(fit_c_boot) || is.null(fit_c_boot$par)) {
+              stop("Bivariate naive refit returned no parameters.")
+            }
+            c_params_boot <- fit_c_boot$par
+          } else {
+            fit_c_boot <- fit_indep_pair(
+              pp_data_in = sim_C$pp_all_bg_sim,
+              background_rate_var_in = "W",
+              fixed_params_in = SENSITIVITY_FIXED_PARAMS,
+              ctrl_init_in = c_ctrl_seed,
+              treat_init_in = c_treat_seed,
+              fit_label = sprintf("Boot E #%d", rep_id)
+            )
+            if (is.null(fit_c_boot) || is.null(fit_c_boot$fit_control) ||
+                is.null(fit_c_boot$fit_treated)) {
+              stop("Univariate naive refit did not complete both process fits.")
+            }
+            c_params_boot <- list(
+              control = fit_c_boot$control,
+              treated = fit_c_boot$treated
+            )
+          }
         }
-        c_marg_boot <- extract_marginals(c_params_boot)
+        c_stability <- assess_boot_stability(
+          c_params_boot, bivariate = OK_ATE_BIVARIATE
+        )
+        stop_explosive_boot(c_stability, "E", rep_id)
+        c_marg_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          extract_marginals(c_params_boot)
+        } else {
+          list(ctrl = c_params_boot$control, treat = c_params_boot$treated)
+        }
         ate_c_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
           ate_estim_bivariate(
             biv_params = c_params_boot,
@@ -3994,16 +4255,30 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             contrast = OK_ATE_CONTRAST
           )
         }
-        summarize_boot(ate_c_boot, rep_id, sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df, c_params_boot)
+        summarize_boot(
+          ate_c_boot, rep_id,
+          sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df,
+          par_obj = c_params_boot,
+          stability = c_stability,
+          simulation_law = sim_C$simulation_law
+        )
       }, error = function(e) {
-        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap E failed: ", conditionMessage(e)))
+        boot_failure(e, "E", rep_id)
       })
     }
 
     if ("F" %in% boot_targets_run) {
       out$F <- tryCatch({
-        sim_D <- simulate_boot_data(d_ctrl_seed, d_treat_seed)
-        d_params_boot <- F_params
+        sim_D <- simulate_boot_data(
+          d_ctrl_seed, d_treat_seed,
+          biv_seed = F_params,
+          bivariate = OK_ATE_BIVARIATE
+        )
+        d_params_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          F_params
+        } else {
+          list(control = d_ctrl_seed, treated = d_treat_seed)
+        }
         pp_post_d_boot <- sim_D$pp_post_bg_sim
         if (BOOT_REFIT_SCOPE %in% c("partial", "full")) {
           sem_boot <- run_sem_fit(
@@ -4011,22 +4286,46 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             partition_in = partition,
             partition_processes_in = partition_processes,
             state_spaces_in = state_spaces,
-            init_params_in = F_params,
+            init_params_in = if (isTRUE(OK_ATE_BIVARIATE)) F_params else NULL,
+            init_ctrl_params_in = d_ctrl_seed,
+            init_treat_params_in = d_treat_seed,
+            model_type_in = if (isTRUE(OK_ATE_BIVARIATE)) "etas_bivariate" else "etas",
             fixed_params_in = SENSITIVITY_FIXED_PARAMS,
             background_rate_var_in = "W",
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
             verbose_in = FALSE,
             label = sprintf("Boot F #%d", rep_id)
           )
-          if (!is.null(sem_boot) && !is.null(sem_boot$etas_bivariate_params)) {
+          if (is.null(sem_boot)) stop("SEM refit returned NULL.")
+          if (isTRUE(OK_ATE_BIVARIATE)) {
+            if (is.null(sem_boot$etas_bivariate_params)) {
+              stop("Bivariate SEM refit returned no parameters.")
+            }
             d_params_boot <- sem_boot$etas_bivariate_params
+          } else {
+            if (is.null(sem_boot$hawkes_params_control) ||
+                is.null(sem_boot$hawkes_params_treated)) {
+              stop("Univariate SEM refit returned incomplete process parameters.")
+            }
+            d_params_boot <- list(
+              control = sem_boot$hawkes_params_control,
+              treated = sem_boot$hawkes_params_treated
+            )
           }
-          if (!is.null(sem_boot) && !is.null(sem_boot$adaptive$adaptive_labelling)) {
+          if (!is.null(sem_boot$adaptive$adaptive_labelling)) {
             pp_post_d_boot <- sem_boot$adaptive$adaptive_labelling
             pp_post_d_boot <- pp_post_d_boot[pp_post_d_boot$t >= 0, , drop = FALSE]
           }
         }
-        d_marg_boot <- extract_marginals(d_params_boot)
+        d_stability <- assess_boot_stability(
+          d_params_boot, bivariate = OK_ATE_BIVARIATE
+        )
+        stop_explosive_boot(d_stability, "F", rep_id)
+        d_marg_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
+          extract_marginals(d_params_boot)
+        } else {
+          list(ctrl = d_params_boot$control, treat = d_params_boot$treated)
+        }
         ate_d_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
           ate_estim_bivariate(
             biv_params = d_params_boot,
@@ -4059,9 +4358,15 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             contrast = OK_ATE_CONTRAST
           )
         }
-        summarize_boot(ate_d_boot, rep_id, sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df, d_params_boot)
+        summarize_boot(
+          ate_d_boot, rep_id,
+          sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df,
+          par_obj = d_params_boot,
+          stability = d_stability,
+          simulation_law = sim_D$simulation_law
+        )
       }, error = function(e) {
-        list(ok = FALSE, rep = rep_id, msg = paste0("Bootstrap F failed: ", conditionMessage(e)))
+        boot_failure(e, "F", rep_id)
       })
     }
     rm_vars <- intersect(
@@ -4095,8 +4400,13 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   }
 
   make_boot_block <- function(key) {
-    model_res <- lapply(boot_results, function(z) z[[key]])
+    n_attempted <- length(boot_results)
+    model_res <- lapply(boot_results, function(z) {
+      if (is.null(z) || is.null(z[[key]])) return(NULL)
+      z[[key]]
+    })
     model_res <- Filter(Negate(is.null), model_res)
+    n_missing <- n_attempted - length(model_res)
     ok <- Filter(function(x) isTRUE(x$ok), model_res)
     fail <- Filter(function(x) !isTRUE(x$ok), model_res)
     scalar1 <- function(x, default = NA_real_) {
@@ -4115,8 +4425,14 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           ate_total_mean = as.numeric(scalar1(z$ate_total_mean, NA_real_)),
           ate_total_sd = as.numeric(scalar1(z$ate_total_sd, NA_real_)),
           ate_tile_mean = as.numeric(scalar1(z$ate_tile_mean, NA_real_)),
+          fit_law = as.character(scalar1(z$fit_law, NA_character_)),
+          simulation_law = as.character(scalar1(z$simulation_law, NA_character_)),
+          branching_metric = as.numeric(scalar1(z$branching_metric, NA_real_)),
+          rho = as.numeric(scalar1(z$rho, NA_real_)),
           eta_ctrl = as.numeric(scalar1(z$eta_ctrl, NA_real_)),
           eta_treat = as.numeric(scalar1(z$eta_treat, NA_real_)),
+          is_stable = isTRUE(scalar1(z$is_stable, FALSE)),
+          within_fit_margin = isTRUE(scalar1(z$within_fit_margin, FALSE)),
           stringsAsFactors = FALSE
         )
       }))
@@ -4129,16 +4445,32 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ate_total_mean = numeric(),
         ate_total_sd = numeric(),
         ate_tile_mean = numeric(),
+        fit_law = character(),
+        simulation_law = character(),
+        branching_metric = numeric(),
+        rho = numeric(),
         eta_ctrl = numeric(),
         eta_treat = numeric(),
+        is_stable = logical(),
+        within_fit_margin = logical(),
         stringsAsFactors = FALSE
       )
     }
+    failure_types <- vapply(
+      fail,
+      function(z) as.character(scalar1(z$failure_type, "error")),
+      character(1)
+    )
     list(
       replicate_summary = rep_df,
       params = lapply(ok, function(z) z$params),
+      n_attempted = n_attempted,
+      n_retained = length(ok),
       n_success = length(ok),
-      n_fail = length(fail),
+      n_fail = length(fail) + n_missing,
+      n_explosive = sum(failure_types == "explosive"),
+      n_error = sum(failure_types != "explosive") + n_missing,
+      n_missing = n_missing,
       failures = fail
     )
   }
@@ -4150,7 +4482,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       refit_scope = BOOT_REFIT_SCOPE,
       outer_cores = BOOT_OUTER_CORES,
       sem_inner_iter = BOOT_SEM_INNER_ITER,
-      seed = BOOT_SEED
+      seed = BOOT_SEED,
+      simulation_law = if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
+      refit_law = if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
+      stability_fit_margin = ETAS_BRANCHING_MAX,
+      explosive_drop_threshold = 1,
+      bias_correction_stage = "after_stability_filter"
     )
   )
   if ("E" %in% boot_targets_run) bootstrap_ate$fit_E <- make_boot_block("E")
@@ -4164,8 +4501,10 @@ invisible(gc(verbose = FALSE))
   if (!is.null(bootstrap_ate$fit_E)) {
     bC <- bootstrap_ate$fit_E$replicate_summary
     if (nrow(bC) > 0) {
-      cat(sprintf("  Bootstrap E complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bC), bootstrap_ate$fit_E$n_fail,
+      cat(sprintf("  Bootstrap E complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bC), bootstrap_ate$fit_E$n_attempted,
+                  bootstrap_ate$fit_E$n_explosive,
+                  bootstrap_ate$fit_E$n_error,
                   mean(bC$ate_total_mean, na.rm = TRUE),
                   stats::sd(bC$ate_total_mean, na.rm = TRUE)))
     } else {
@@ -4176,8 +4515,10 @@ invisible(gc(verbose = FALSE))
   if (!is.null(bootstrap_ate$fit_F)) {
     bD <- bootstrap_ate$fit_F$replicate_summary
     if (nrow(bD) > 0) {
-      cat(sprintf("  Bootstrap F complete: success=%d, fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bD), bootstrap_ate$fit_F$n_fail,
+      cat(sprintf("  Bootstrap F complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bD), bootstrap_ate$fit_F$n_attempted,
+                  bootstrap_ate$fit_F$n_explosive,
+                  bootstrap_ate$fit_F$n_error,
                   mean(bD$ate_total_mean, na.rm = TRUE),
                   stats::sd(bD$ate_total_mean, na.rm = TRUE)))
     } else {
@@ -4285,6 +4626,11 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     outer_cores = BOOT_OUTER_CORES,
     sem_inner_iter = BOOT_SEM_INNER_ITER,
     seed = BOOT_SEED,
+    simulation_law = if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
+    refit_law = if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
+    stability_fit_margin = ETAS_BRANCHING_MAX,
+    explosive_drop_threshold = 1,
+    bias_correction_stage = "after_stability_filter",
     ate_bivariate = isTRUE(OK_ATE_BIVARIATE),
     ate_contrast = OK_ATE_CONTRAST,
     ate_method = OK_ATE_METHOD_LABEL,
@@ -4304,6 +4650,8 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   results_final$config$BOOT_SEM_INNER_ITER <- BOOT_SEM_INNER_ITER
   results_final$config$BOOT_OUTER_CORES <- BOOT_OUTER_CORES
   results_final$config$BOOT_TARGETS <- BOOT_TARGETS
+  results_final$config$ETAS_BRANCHING_MAX <- ETAS_BRANCHING_MAX
+  results_final$config$BOOT_BRANCHING_MAX <- BOOT_BRANCHING_MAX
   results_final$config$RUN_BOOTSTRAP_ATE <- TRUE
   # Strip any interim recompute/bootstrap-only markers so the artifact matches
   # a one-shot paper run.
@@ -4637,6 +4985,7 @@ results <- list(
     BOOT_SEED = BOOT_SEED,
     BOOT_IDENTICAL_RANDOMNESS = OK_BOOT_IDENTICAL_RANDOMNESS,
     BOOT_GUARD_DEGENERATE = OK_BOOT_GUARD_DEGENERATE,
+    ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
     BOOT_MAX_POST_EVENTS_PER_PROC = BOOT_MAX_POST_EVENTS_PER_PROC,
