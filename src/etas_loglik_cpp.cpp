@@ -1,4 +1,6 @@
 #include <Rcpp.h>
+#include <cmath>
+#include <vector>
 using namespace Rcpp;
 
 //' ETAS log-likelihood for an inhomogeneous spatio-temporal point process
@@ -34,6 +36,12 @@ using namespace Rcpp;
 //' it integrates to 1 over \eqn{[0, t_{\mathrm{trunc}}]}:
 //' \deqn{G(t_{\mathrm{trunc}}) = 1 - (1 + t_{\mathrm{trunc}}/c)^{-(p-1)}}
 //'
+//' The pairwise product of power-law kernels is evaluated as a single fused
+//' exponential, exp(-p*log(1+dt/c) - q*log(1+r2/d)), and all per-parent
+//' constants are hoisted out of the inner pair loop. This is mathematically
+//' identical to evaluating the two pow() factors separately (results agree
+//' to floating-point rounding).
+//'
 //' @param t      Numeric vector of event times (sorted ascending, shifted
 //'               so the window starts at 0).
 //' @param x      Numeric vector of x-coordinates.
@@ -68,13 +76,13 @@ double etas_loglik_inhom_cpp(NumericVector t,
                               double areaS, double t_max,
                               double t_trunc = -1.0) {
 
-  int n = t.size();
+  const int n = t.size();
   double loglik = 0.0;
 
   const double pi_val = 3.14159265358979323846;
-  bool do_trunc = (t_trunc > 0.0);
+  const bool do_trunc = (t_trunc > 0.0);
 
-  double mu_base = mu / areaS;
+  const double mu_base = mu / areaS;
 
   // Temporal truncation normalisation factor.
   // G(t_trunc) = 1 - (1 + t_trunc / c)^{-(p-1)}
@@ -86,61 +94,52 @@ double etas_loglik_inhom_cpp(NumericVector t,
 
   // Pre-factor that is constant across all (i, j) pairs:
   //   A * (p-1) * (q-1) / (pi * c * temporal_norm)
-  // The magnitude-dependent terms kappa(m_j)/d(m_j) are applied per parent.
-  double base_const = A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
-  NumericVector dm(n), kappa_factor(n), d_parent(n), inv_d_parent(n), comp_kappa(n);
+  // The magnitude-dependent terms kappa(m_j)/d(m_j) are folded into the
+  // per-parent factor pk[j] below.
+  const double base_const = A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  const double inv_cc = 1.0 / cc;
+
+  const double* pt = t.begin();
+  const double* px = x.begin();
+  const double* py = y.begin();
+  const double* pmag = mag.begin();
+  const double* pW = W_val.begin();
+
+  std::vector<double> d_par(n), pk(n), comp_kappa(n);
   for (int j = 0; j < n; ++j) {
-    dm[j] = mag[j] - m0;
-    kappa_factor[j] = std::exp(alpha_m * dm[j]);
-    d_parent[j] = D * std::exp(gamma_par * dm[j]);
-    inv_d_parent[j] = 1.0 / d_parent[j];
-    comp_kappa[j] = A * kappa_factor[j];
+    const double dm = pmag[j] - m0;
+    const double kappa = std::exp(alpha_m * dm);
+    const double dj = D * std::exp(gamma_par * dm);
+    d_par[j] = dj;
+    pk[j] = base_const * kappa / dj;
+    comp_kappa[j] = A * kappa;
   }
 
   // --- Sum of log-intensities ---
   for (int i = 0; i < n; ++i) {
-
-    double lambda_i = mu_base * W_val[i];
+    double lambda_i = mu_base * pW[i];
+    const double ti = pt[i], xi = px[i], yi = py[i];
 
     if (do_trunc) {
       for (int j = i - 1; j >= 0; --j) {
-        double dt = t[i] - t[j];
+        const double dt = ti - pt[j];
         if (dt > t_trunc) break;
-
-        // Magnitude-dependent quantities for parent j
-        double kappa_j = kappa_factor[j];
-        double d_j = d_parent[j];
-
-        // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
-        double temporal = std::pow(1.0 + dt / cc, -p);
-
-        // Power-law spatial factor: (1 + r^2/d_j)^{-q} / d_j
-        double dx = x[i] - x[j];
-        double dy = y[i] - y[j];
-        double r2 = dx * dx + dy * dy;
-        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
-
-        lambda_i += base_const * kappa_j * temporal * spatial;
+        const double dx = xi - px[j];
+        const double dy = yi - py[j];
+        const double r2 = dx * dx + dy * dy;
+        // (1+dt/c)^{-p} * (1+r2/d)^{-q} fused into one exp
+        lambda_i += pk[j] * std::exp(-p * std::log(1.0 + dt * inv_cc)
+                                     - q * std::log(1.0 + r2 / d_par[j]));
       }
     } else {
       for (int j = 0; j < i; ++j) {
-        double dt = t[i] - t[j];
+        const double dt = ti - pt[j];
         if (dt <= 0.0) continue;
-
-        // Magnitude-dependent quantities for parent j
-        double kappa_j = kappa_factor[j];
-        double d_j = d_parent[j];
-
-        // Omori-Utsu temporal factor: (1 + dt/c)^{-p}
-        double temporal = std::pow(1.0 + dt / cc, -p);
-
-        // Power-law spatial factor: (1 + r^2/d_j)^{-q} / d_j
-        double dx = x[i] - x[j];
-        double dy = y[i] - y[j];
-        double r2 = dx * dx + dy * dy;
-        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
-
-        lambda_i += base_const * kappa_j * temporal * spatial;
+        const double dx = xi - px[j];
+        const double dy = yi - py[j];
+        const double r2 = dx * dx + dy * dy;
+        lambda_i += pk[j] * std::exp(-p * std::log(1.0 + dt * inv_cc)
+                                     - q * std::log(1.0 + r2 / d_par[j]));
       }
     }
 
@@ -153,11 +152,11 @@ double etas_loglik_inhom_cpp(NumericVector t,
   // Contribution from parent i: kappa(m_i) * G(horizon_i)
   double triggering_integral = 0.0;
   for (int i = 0; i < n; ++i) {
-    double kappa_i = comp_kappa[i];
-    double horizon = t_max - t[i];
+    double horizon = t_max - pt[i];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
-    triggering_integral += kappa_i * (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0)));
+    triggering_integral += comp_kappa[i] *
+      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0)));
   }
 
   loglik -= (mu * t_max + triggering_integral);

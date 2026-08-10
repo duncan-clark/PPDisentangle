@@ -180,7 +180,8 @@ adaptive_SEM <- function(pp_data,
     change_factor = 0.1, stagnation_trigger_every = 10, proposal_method = "simulation",
     temporal_weight = 0, temporal_scale_days = NULL,
     fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
-    outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1
+    outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1,
+    biv_n_threads = 1L
   )
   for (nm in names(ac_defaults)) {
     if (is.null(adaptive_control[[nm]])) adaptive_control[[nm]] <- ac_defaults[[nm]]
@@ -222,6 +223,7 @@ adaptive_SEM <- function(pp_data,
           proposal_method = adaptive_control$proposal_method,
           temporal_weight = adaptive_control$temporal_weight,
           temporal_scale_days = adaptive_control$temporal_scale_days,
+          biv_n_threads = adaptive_control$biv_n_threads,
           fixed_params = adaptive_control$fixed_params,
           # Respect caller-configured SEM verbosity instead of forcing full trace.
           verbose = isTRUE(adaptive_control$verbose),
@@ -354,95 +356,149 @@ adaptive_SEM <- function(pp_data,
   }
 
   calculate_weights <- function(labellings, treat_par, control_par, ...) {
+    if (is_biv_etas) {
+      biv_par <- if (is.null(dots$etas_bivariate_params)) {
+        init_bivariate_from_independent(control_par, treat_par)
+      } else {
+        dots$etas_bivariate_params
+      }
+      biv_wT <- if (use_pre_history_for_biv) {
+        c(min(starting_data$t), max_data_t)
+      } else {
+        sem_windowT
+      }
+      K_w <- length(labellings)
+      if (K_w == 0L) return(numeric(0))
+      geom0 <- if (use_pre_history_for_biv) {
+        labellings[[1]]
+      } else {
+        labellings[[1]][labellings[[1]]$t >= treatment_time, , drop = FALSE]
+      }
+      geom0 <- geom0[order(geom0$t), , drop = FALSE]
+      nn <- nrow(geom0)
+      aS0 <- spatstat.geom::area(control_state_space)
+      aS1 <- spatstat.geom::area(treated_state_space)
+      if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
+      W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
+      W0[inside.owin(geom0$x, geom0$y, treated_state_space)] <- 0
+      W1[inside.owin(geom0$x, geom0$y, control_state_space)] <- 0
+      if (!is.null(treated_background_zero_before)) {
+        W1[geom0$t < treated_background_zero_before] <- 0
+      }
+      if (!is.null(background_rate_var) && background_rate_var %in% names(geom0)) {
+        W_cov <- as.numeric(geom0[[background_rate_var]])
+        W_cov[!is.finite(W_cov)] <- 0
+        min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+        if (!is.finite(min_pos)) min_pos <- 1e-12
+        W_cov[W_cov <= 0] <- min_pos
+        W0 <- W0 * W_cov; W1 <- W1 * W_cov
+      }
+      pid_mat <- matrix(0L, nn, K_w)
+      for (kk in seq_len(K_w)) {
+        r <- if (use_pre_history_for_biv) {
+          labellings[[kk]]
+        } else {
+          labellings[[kk]][labellings[[kk]]$t >= treatment_time, , drop = FALSE]
+        }
+        r <- r[order(r$t), , drop = FALSE]
+        if (nrow(r) != nn) {
+          stop("SEM weight labellings must share event geometry for batch likelihood.")
+        }
+        proc_col <- if ("inferred_process" %in% names(r)) r$inferred_process else r$location_process
+        pid_mat[, kk] <- if (is.character(proc_col)) {
+          as.integer(proc_col == "treated")
+        } else {
+          as.integer(proc_col)
+        }
+      }
+      return(loglik_etas_bivariate_batch(
+        params = biv_par,
+        t = geom0$t - biv_wT[1], x = geom0$x, y = geom0$y, mag = geom0$mag,
+        process_ids = pid_mat,
+        W0s = matrix(W0, nn, K_w), W1s = matrix(W1, nn, K_w),
+        areaS_0 = aS0, areaS_1 = aS1,
+        t_max = biv_wT[2] - biv_wT[1],
+        windowT = biv_wT,
+        treated_background_zero_before = treated_background_zero_before,
+        t_trunc = t_trunc, t_already_shifted = TRUE,
+        m0 = dots$m0, beta_gr = dots$beta_gr,
+        max_branching_radius = if (!is.null(dots$max_branching_radius)) dots$max_branching_radius else 0.98,
+        alpha_beta_gap_min = if (!is.null(dots$alpha_beta_gap_min)) dots$alpha_beta_gap_min else 1e-4,
+        enforce_alpha_subcritical = if (!is.null(dots$enforce_alpha_subcritical)) dots$enforce_alpha_subcritical else TRUE
+      ))
+    }
+    if (!is_etas) {
+      # Hawkes: batch control and treated filtration likelihoods over shared geometry.
+      K_w <- length(labellings)
+      if (K_w == 0L) return(numeric(0))
+      ctrl_mem <- .hawkes_batch_membership(
+        labellings, "control", treatment_time, hawkes_use_filtration_history
+      )
+      treat_mem <- .hawkes_batch_membership(
+        labellings, "treated", treatment_time, hawkes_use_filtration_history
+      )
+      total_area <- spatstat.geom::area(as.owin(statespace))
+      area_ctrl <- total_area
+      area_treat <- total_area
+      W_ctrl <- rep(1.0, length(ctrl_mem$t))
+      W_treat <- rep(1.0, length(treat_mem$t))
+      if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(ctrl_mem$geom)) {
+        W_ctrl <- as.numeric(ctrl_mem$geom[[hawkes_bg_var]])
+        W_treat <- as.numeric(treat_mem$geom[[hawkes_bg_var]])
+        W_ctrl[!is.finite(W_ctrl)] <- 0
+        W_treat[!is.finite(W_treat)] <- 0
+      }
+      if (!is.null(treated_state_space)) {
+        zero_area <- spatstat.geom::area(as.owin(treated_state_space))
+        area_ctrl <- max(1e-12, total_area - zero_area)
+        W_ctrl[inside.owin(ctrl_mem$x, ctrl_mem$y, w = treated_state_space)] <- 0
+      }
+      if (!is.null(control_state_space)) {
+        zero_area <- spatstat.geom::area(as.owin(control_state_space))
+        area_treat <- max(1e-12, total_area - zero_area)
+        W_treat[inside.owin(treat_mem$x, treat_mem$y, w = control_state_space)] <- 0
+      }
+      ctrl_liks <- loglik_hawk_filtration_batch(
+        params = control_par,
+        t = ctrl_mem$t, x = ctrl_mem$x, y = ctrl_mem$y,
+        is_observed = ctrl_mem$is_observed, member = ctrl_mem$member,
+        W_val = W_ctrl, areaS = area_ctrl,
+        t_start = treatment_time, t_end = max_data_t,
+        t_trunc = t_trunc,
+        kernel = hawkes_kernel, spatial_kernel = hawkes_spatial_kernel,
+        spatial_q = hawkes_spatial_q, spatial_d = hawkes_spatial_d
+      )
+      treat_liks <- loglik_hawk_filtration_batch(
+        params = treat_par,
+        t = treat_mem$t, x = treat_mem$x, y = treat_mem$y,
+        is_observed = treat_mem$is_observed, member = treat_mem$member,
+        W_val = W_treat, areaS = area_treat,
+        t_start = treatment_time, t_end = max_data_t,
+        t_trunc = t_trunc,
+        kernel = hawkes_kernel, spatial_kernel = hawkes_spatial_kernel,
+        spatial_q = hawkes_spatial_q, spatial_d = hawkes_spatial_d
+      )
+      return(ctrl_liks + treat_liks)
+    }
     sapply(labellings, function(y) {
       post_idx <- y$t >= treatment_time
-      pre_idx <- !post_idx
-      realiz <- if (is_biv_etas && use_pre_history_for_biv) {
-        y
-      } else if (is_etas) {
-        y[post_idx, , drop = FALSE]
-      } else {
-        y
-      }
-      if (is_biv_etas) {
-        biv_par <- if (is.null(dots$etas_bivariate_params)) {
-          init_bivariate_from_independent(control_par, treat_par)
-        } else {
-          dots$etas_bivariate_params
-        }
-        biv_wT <- if (use_pre_history_for_biv) {
-          c(min(starting_data$t), max_data_t)
-        } else {
-          sem_windowT
-        }
-        return(loglik_etas_bivariate(
-          params = biv_par, realiz = realiz,
-          windowT = biv_wT,
-          windowS = statespace,
-          control_state_space = control_state_space,
-          treated_state_space = treated_state_space,
-          background_rate_var = background_rate_var,
-          treated_background_zero_before = treated_background_zero_before,
-          t_trunc = t_trunc,
-          m0 = dots$m0,
-          beta_gr = dots$beta_gr,
-          max_branching_radius = if (!is.null(dots$max_branching_radius)) dots$max_branching_radius else 0.98,
-          alpha_beta_gap_min = if (!is.null(dots$alpha_beta_gap_min)) dots$alpha_beta_gap_min else 1e-4,
-          enforce_alpha_subcritical = if (!is.null(dots$enforce_alpha_subcritical)) dots$enforce_alpha_subcritical else TRUE
-        ))
-      }
-      include <- if (is_etas) {
-        which(realiz$inferred_process == "control")
-      } else {
-        which(post_idx & y$inferred_process == "control")
-      }
+      realiz <- y[post_idx, , drop = FALSE]
+      include <- which(realiz$inferred_process == "control")
       if (length(include) == 0) return(-Inf)
-      if (!is_etas) {
-        filt_control <- if (hawkes_use_filtration_history) {
-          y[pre_idx & y$inferred_process == "control", , drop = FALSE]
-        } else {
-          y[0, c("x", "y", "t"), drop = FALSE]
-        }
-        control_lik <- hawkes_loglik_with_filtration(
-          params = control_par,
-          post_realiz = y[include, , drop = FALSE],
-          filt_realiz = filt_control,
-          zero_bg_region = treated_state_space
-        )
-      } else {
-        control_lik <- loglik_fn(
-          params = control_par, realiz = realiz[include, ],
-          windowT = sem_windowT,
-          windowS = statespace, zero_background_region = treated_state_space,
-          t_trunc = t_trunc, ...
-        )
-      }
-      include <- if (is_etas) {
-        which(realiz$inferred_process == "treated")
-      } else {
-        which(post_idx & y$inferred_process == "treated")
-      }
+      control_lik <- loglik_fn(
+        params = control_par, realiz = realiz[include, ],
+        windowT = sem_windowT,
+        windowS = statespace, zero_background_region = treated_state_space,
+        t_trunc = t_trunc, ...
+      )
+      include <- which(realiz$inferred_process == "treated")
       if (length(include) == 0) return(-Inf)
-      if (!is_etas) {
-        filt_treated <- if (hawkes_use_filtration_history) {
-          y[pre_idx & y$inferred_process == "treated", , drop = FALSE]
-        } else {
-          y[0, c("x", "y", "t"), drop = FALSE]
-        }
-        treat_lik <- hawkes_loglik_with_filtration(
-          params = treat_par,
-          post_realiz = y[include, , drop = FALSE],
-          filt_realiz = filt_treated,
-          zero_bg_region = control_state_space
-        )
-      } else {
-        treat_lik <- loglik_fn(
-          params = treat_par, realiz = realiz[include, ],
-          windowT = sem_windowT,
-          windowS = statespace, zero_background_region = control_state_space,
-          t_trunc = t_trunc, ...
-        )
-      }
+      treat_lik <- loglik_fn(
+        params = treat_par, realiz = realiz[include, ],
+        windowT = sem_windowT,
+        windowS = statespace, zero_background_region = control_state_space,
+        t_trunc = t_trunc, ...
+      )
       return(control_lik + treat_lik)
     })
   }
@@ -477,9 +533,24 @@ adaptive_SEM <- function(pp_data,
     if (!is.null(baseline_adaptive_labelling)) {
       if (verbose) cat(sprintf("[SEM] Generating %d labellings from baseline...\n", N_labellings))
       t_gen_start <- proc.time()[3]
-      labellings <- lapply(seq_len(N_labellings), function(i) {
-        simulation_labeling_hawkes_hawkes_fast(
-          baseline_adaptive_labelling,
+      # em_style_labelling returns rbind(pre, post). Propose on post only
+      # (matching the adaptive inner loop), then reattach pre. Reuse the
+      # proposal simulation cache across the N_labellings draws.
+      baseline_post <- baseline_adaptive_labelling[
+        baseline_adaptive_labelling$t >= treatment_time, , drop = FALSE
+      ]
+      baseline_post <- baseline_post[order(baseline_post$t), , drop = FALSE]
+      post_inds <- as.numeric(tileindex(baseline_post$x, baseline_post$y, partition))
+      pre_for_proposals <- if (is_biv_etas || hawkes_use_filtration_history) {
+        pre
+      } else {
+        pre[0, , drop = FALSE]
+      }
+      proposal_sim_cache <- NULL
+      labellings <- vector("list", N_labellings)
+      for (i in seq_len(N_labellings)) {
+        prop_result <- simulation_labeling_hawkes_hawkes_fast(
+          baseline_post,
           partition = partition, partition_process = partition_processes,
           statespace = statespace,
           state_spaces = adaptive_control$state_spaces,
@@ -487,13 +558,26 @@ adaptive_SEM <- function(pp_data,
           hawkes_params_control = hawkes_params_control,
           hawkes_params_treated = t_params[[length(t_params)]],
           change_factor = adaptive_control$change_factor,
-          filtration = pre, proximity_weight = 0,
+          filtration = pre_for_proposals, proximity_weight = 0,
           verbose = isTRUE(adaptive_control$verbose),
-          model_type = model_type, ...
+          points_tile_index = post_inds,
+          model_type = model_type,
+          proposal_sim_cache = proposal_sim_cache,
+          return_proposal_sim_cache = TRUE,
+          ...
         )
-      })
-      baseline_with_pre <- rbind(pre, baseline_adaptive_labelling)
-      labellings[[length(labellings) + 1]] <- baseline_with_pre
+        prop_post <- if (is.list(prop_result) && !is.null(prop_result$data)) {
+          if (is.null(proposal_sim_cache)) {
+            proposal_sim_cache <- prop_result$proposal_sim_cache
+          }
+          prop_result$data
+        } else {
+          prop_result
+        }
+        labellings[[i]] <- rbind(pre, prop_post)
+      }
+      # baseline_adaptive_labelling already includes pre; do not rbind again.
+      labellings[[length(labellings) + 1]] <- baseline_adaptive_labelling
       if (verbose) cat(sprintf("[SEM] Labelling generation complete (%d proposals + baseline, took %.1fs)\n",
                                N_labellings, proc.time()[3] - t_gen_start))
     }
@@ -523,18 +607,22 @@ adaptive_SEM <- function(pp_data,
       cat("  normalized weights: ", paste(signif(weights, 4), collapse = ", "), "\n")
     }
 
-    # Cache process/time splits once per labelling to avoid repeated filtering
-    # inside objective function evaluations.
-    prepared_labellings <- lapply(labellings[keepers], function(y) {
-      post_idx <- y$t >= treatment_time
-      pre_idx <- !post_idx
-      list(
-        post_control = y[post_idx & y$inferred_process == "control", , drop = FALSE],
-        post_treated = y[post_idx & y$inferred_process == "treated", , drop = FALSE],
-        filt_control = y[pre_idx & y$inferred_process == "control", , drop = FALSE],
-        filt_treated = y[pre_idx & y$inferred_process == "treated", , drop = FALSE]
-      )
-    })
+    # Cache process/time splits once per labelling for non-bivariate outer
+    # optim. Bivariate path uses the shared-geometry batch kernel instead.
+    prepared_labellings <- if (is_biv_etas) {
+      NULL
+    } else {
+      lapply(labellings[keepers], function(y) {
+        post_idx <- y$t >= treatment_time
+        pre_idx <- !post_idx
+        list(
+          post_control = y[post_idx & y$inferred_process == "control", , drop = FALSE],
+          post_treated = y[post_idx & y$inferred_process == "treated", , drop = FALSE],
+          filt_control = y[pre_idx & y$inferred_process == "control", , drop = FALSE],
+          filt_treated = y[pre_idx & y$inferred_process == "treated", , drop = FALSE]
+        )
+      })
+    }
 
     fp <- if (!is.null(adaptive_control$fixed_params)) adaptive_control$fixed_params else NULL
     outer_maxit <- adaptive_control$outer_maxit
@@ -634,33 +722,58 @@ adaptive_SEM <- function(pp_data,
       }
       area_control <- spatstat.geom::area(control_state_space)
       area_treated <- spatstat.geom::area(treated_state_space)
-      biv_precomps <- lapply(labellings[keepers], function(y) {
-        r <- if (use_pre_history_for_biv) y else y[y$t >= treatment_time, ]
-        r <- r[order(r$t), ]
-        nn <- nrow(r)
-        W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
-        aS0 <- area_control
-        aS1 <- area_treated
-        W0[inside.owin(r$x, r$y, treated_state_space)] <- 0
-        W1[inside.owin(r$x, r$y, control_state_space)] <- 0
-        if (!is.null(treated_background_zero_before)) {
-          W1[r$t < treated_background_zero_before] <- 0
+      # Shared geometry across SEM labellings (only labels differ). Build W
+      # masks once, then a process_id matrix for the batched kernel.
+      keeper_labs <- labellings[keepers]
+      geom0 <- if (use_pre_history_for_biv) {
+        keeper_labs[[1]]
+      } else {
+        keeper_labs[[1]][keeper_labs[[1]]$t >= treatment_time, , drop = FALSE]
+      }
+      geom0 <- geom0[order(geom0$t), , drop = FALSE]
+      nn <- nrow(geom0)
+      aS0 <- area_control; aS1 <- area_treated
+      if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
+      W0_shared <- rep(1.0, nn)
+      W1_shared <- rep(1.0, nn)
+      W0_shared[inside.owin(geom0$x, geom0$y, treated_state_space)] <- 0
+      W1_shared[inside.owin(geom0$x, geom0$y, control_state_space)] <- 0
+      if (!is.null(treated_background_zero_before)) {
+        W1_shared[geom0$t < treated_background_zero_before] <- 0
+      }
+      if (!is.null(background_rate_var) && background_rate_var %in% names(geom0)) {
+        W_cov <- as.numeric(geom0[[background_rate_var]])
+        if (length(W_cov) != nn) stop("background_rate_var length mismatch in SEM bivariate precomp.")
+        W_cov[!is.finite(W_cov)] <- 0
+        min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+        if (!is.finite(min_pos)) min_pos <- 1e-12
+        W_cov[W_cov <= 0] <- min_pos
+        W0_shared <- W0_shared * W_cov
+        W1_shared <- W1_shared * W_cov
+      }
+      K_keep <- length(keeper_labs)
+      pid_mat <- matrix(0L, nn, K_keep)
+      for (kk in seq_len(K_keep)) {
+        r <- if (use_pre_history_for_biv) {
+          keeper_labs[[kk]]
+        } else {
+          keeper_labs[[kk]][keeper_labs[[kk]]$t >= treatment_time, , drop = FALSE]
         }
-        if (!is.null(background_rate_var) && background_rate_var %in% names(r)) {
-          W_cov <- r[[background_rate_var]]
-          if (length(W_cov) != nn) stop("background_rate_var length mismatch in SEM bivariate precomp.")
-          W_cov <- as.numeric(W_cov)
-          W_cov[!is.finite(W_cov)] <- 0
-          min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
-          if (!is.finite(min_pos)) min_pos <- 1e-12
-          W_cov[W_cov <= 0] <- min_pos
-          W0 <- W0 * W_cov
-          W1 <- W1 * W_cov
+        r <- r[order(r$t), , drop = FALSE]
+        if (nrow(r) != nn) {
+          stop("SEM bivariate labellings must share event geometry for batch likelihood.")
         }
-        if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
-        list(realiz = r, precomp = list(W_0 = W0, W_1 = W1,
-                                        areaS_0 = aS0, areaS_1 = aS1))
-      })
+        proc_col <- if ("inferred_process" %in% names(r)) r$inferred_process else r$location_process
+        pid_mat[, kk] <- if (is.character(proc_col)) {
+          as.integer(proc_col == "treated")
+        } else {
+          as.integer(proc_col)
+        }
+      }
+      W0_mat <- matrix(W0_shared, nn, K_keep)
+      W1_mat <- matrix(W1_shared, nn, K_keep)
+      tt_shift <- geom0$t - biv_wT[1]
+      t_max_biv <- biv_wT[2] - biv_wT[1]
       biv_ll_extra_names <- intersect(
         names(dots),
         c(
@@ -676,24 +789,29 @@ adaptive_SEM <- function(pp_data,
         )
       )
       biv_ll_extra <- dots[biv_ll_extra_names]
+      biv_n_threads <- if (!is.null(adaptive_control$biv_n_threads)) {
+        as.integer(adaptive_control$biv_n_threads)
+      } else {
+        1L
+      }
+      if (!is.finite(biv_n_threads) || biv_n_threads < 1L) biv_n_threads <- 1L
       biv_obj <- function(par15) {
-        liks <- sapply(biv_precomps, function(pc) {
-          do.call(
-            loglik_etas_bivariate,
-            c(
-              list(
-                params = par15, realiz = pc$realiz,
-                windowT = biv_wT, windowS = statespace,
-                control_state_space = control_state_space,
-                treated_state_space = treated_state_space,
-                background_rate_var = background_rate_var,
-                treated_background_zero_before = treated_background_zero_before,
-                t_trunc = t_trunc, precomp = pc$precomp
-              ),
-              biv_ll_extra
-            )
+        liks <- do.call(
+          loglik_etas_bivariate_batch,
+          c(
+            list(
+              params = par15,
+              t = tt_shift, x = geom0$x, y = geom0$y, mag = geom0$mag,
+              process_ids = pid_mat, W0s = W0_mat, W1s = W1_mat,
+              areaS_0 = aS0, areaS_1 = aS1, t_max = t_max_biv,
+              windowT = biv_wT,
+              treated_background_zero_before = treated_background_zero_before,
+              t_trunc = t_trunc, t_already_shifted = TRUE,
+              n_threads = biv_n_threads
+            ),
+            biv_ll_extra
           )
-        })
+        )
         sum(liks * weights)
       }
 
@@ -771,45 +889,38 @@ adaptive_SEM <- function(pp_data,
 
     run_outer_optim <- function(process_label, zero_bg_region, par_list) {
       split_key <- if (process_label == "control") "post_control" else "post_treated"
-      filt_key <- if (process_label == "control") "filt_control" else "filt_treated"
-      prepared_for_process <- lapply(prepared_labellings, function(parts) {
-        post_part <- parts[[split_key]]
-        if (!is_etas) {
-          filt_part <- if (hawkes_use_filtration_history) {
-            parts[[filt_key]]
-          } else {
-            post_part[0, c("x", "y", "t"), drop = FALSE]
-          }
-          if (nrow(post_part) < 1L) return(NULL)
-          post_part <- post_part[order(post_part$t), , drop = FALSE]
-          filt_part <- filt_part[filt_part$t < treatment_time, , drop = FALSE]
-          filt_part <- filt_part[order(filt_part$t), , drop = FALSE]
-
-          W_post <- if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(post_part)) {
-            as.numeric(post_part[[hawkes_bg_var]])
-          } else {
-            rep(1, nrow(post_part))
-          }
-          W_post[!is.finite(W_post)] <- 0
-          total_area <- spatstat.geom::area(statespace)
-          active_area <- total_area
-          if (!is.null(zero_bg_region)) {
-            zero_area <- spatstat.geom::area(zero_bg_region)
-            active_area <- max(1e-12, total_area - zero_area)
-            W_post[inside.owin(post_part$x, post_part$y, w = zero_bg_region)] <- 0
-          }
-
-          list(
-            post_t = as.numeric(post_part$t),
-            post_x = as.numeric(post_part$x),
-            post_y = as.numeric(post_part$y),
-            W_post = as.numeric(W_post),
-            parent_t = as.numeric(c(filt_part$t, post_part$t)),
-            parent_x = as.numeric(c(filt_part$x, post_part$x)),
-            parent_y = as.numeric(c(filt_part$y, post_part$y)),
-            active_area = active_area
-          )
+      hawkes_batch <- NULL
+      prepared_for_process <- NULL
+      if (!is_etas) {
+        keeper_labs <- labellings[keepers]
+        mem <- .hawkes_batch_membership(
+          keeper_labs, process_label, treatment_time, hawkes_use_filtration_history
+        )
+        total_area <- spatstat.geom::area(as.owin(statespace))
+        active_area <- total_area
+        W_val <- rep(1.0, length(mem$t))
+        if (!is.null(hawkes_bg_var) && hawkes_bg_var %in% names(mem$geom)) {
+          W_val <- as.numeric(mem$geom[[hawkes_bg_var]])
+          W_val[!is.finite(W_val)] <- 0
+        }
+        if (!is.null(zero_bg_region)) {
+          zero_area <- spatstat.geom::area(as.owin(zero_bg_region))
+          active_area <- max(1e-12, total_area - zero_area)
+          W_val[inside.owin(mem$x, mem$y, w = zero_bg_region)] <- 0
+        }
+        hawkes_n_threads <- if (!is.null(adaptive_control$hawkes_n_threads)) {
+          as.integer(adaptive_control$hawkes_n_threads)
         } else {
+          1L
+        }
+        if (!is.finite(hawkes_n_threads) || hawkes_n_threads < 1L) hawkes_n_threads <- 1L
+        hawkes_batch <- list(
+          mem = mem, W_val = W_val, active_area = active_area,
+          n_threads = hawkes_n_threads
+        )
+      } else {
+        prepared_for_process <- lapply(prepared_labellings, function(parts) {
+          post_part <- parts[[split_key]]
           pc <- precompute_loglik_args(post_part, statespace, zero_bg_region)
           list(
             post_part = post_part,
@@ -818,8 +929,8 @@ adaptive_SEM <- function(pp_data,
               in_zero_bg = pc$in_zero_bg_all
             )
           )
-        }
-      })
+        })
+      }
       etas_ll_extra_names <- if (is_etas) {
         intersect(
           names(dots),
@@ -840,69 +951,45 @@ adaptive_SEM <- function(pp_data,
       }
       etas_ll_extra <- dots[etas_ll_extra_names]
       obj_fn <- function(params) {
+        if (!is_etas) {
+          liks <- loglik_hawk_filtration_batch(
+            params = params,
+            t = hawkes_batch$mem$t,
+            x = hawkes_batch$mem$x,
+            y = hawkes_batch$mem$y,
+            is_observed = hawkes_batch$mem$is_observed,
+            member = hawkes_batch$mem$member,
+            W_val = hawkes_batch$W_val,
+            areaS = hawkes_batch$active_area,
+            t_start = treatment_time,
+            t_end = max_data_t,
+            t_trunc = t_trunc,
+            kernel = hawkes_kernel,
+            spatial_kernel = hawkes_spatial_kernel,
+            spatial_q = hawkes_spatial_q,
+            spatial_d = hawkes_spatial_d,
+            n_threads = hawkes_batch$n_threads
+          )
+          return(sum(liks * weights))
+        }
         liks <- sapply(prepared_for_process, function(parts) {
           if (is.null(parts)) return(-Inf)
-          if (!is_etas) {
-            par_obj <- as_hawkes_params(params, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)
-            mu <- par_obj$mu
-            alpha <- par_obj$alpha
-            beta <- par_obj$beta
-            K <- par_obj$K
-            cc <- par_obj[["c"]]
-            p <- par_obj$p
-            q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
-            d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
-            if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(-Inf)
-            if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(-Inf)
-            if (identical(hawkes_kernel, "power_law")) {
-              if (!is.finite(cc) || !is.finite(p) || cc <= 0 || p <= 1) return(-Inf)
-            } else {
-              if (!is.finite(beta) || beta <= 0) return(-Inf)
-            }
-            loglik <- hawkes_loglik_inhom_filtration_cpp(
-              post_t = parts$post_t,
-              post_x = parts$post_x,
-              post_y = parts$post_y,
-              W_val = parts$W_post,
-              parent_t = parts$parent_t,
-              parent_x = parts$parent_x,
-              parent_y = parts$parent_y,
-              mu = mu,
-              alpha = alpha,
-              beta = beta,
-              K = K,
-              areaS = parts$active_area,
-              t_start = treatment_time,
-              t_end = max_data_t,
-              adjust_factor = 1.0,
-              t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
-              kernel_type = hawkes_kernel_type(hawkes_kernel),
-              cc = if (is.null(cc)) 1.0 else as.numeric(cc),
-              p = if (is.null(p)) 2.0 else as.numeric(p),
-              spatial_kernel_type = hawkes_spatial_kernel_type(hawkes_spatial_kernel),
-              spatial_q = q_spatial,
-              spatial_d = d_spatial
+          do.call(
+            loglik_fn,
+            c(
+              list(
+                params = params,
+                realiz = parts$post_part,
+                windowT = sem_windowT,
+                windowS = statespace,
+                zero_background_region = zero_bg_region,
+                background_rate_var = "W",
+                precomp = parts$precomp,
+                t_trunc = t_trunc
+              ),
+              etas_ll_extra
             )
-            if (!is.finite(loglik)) return(-Inf)
-            loglik
-          } else {
-            do.call(
-              loglik_fn,
-              c(
-                list(
-                  params = params,
-                  realiz = parts$post_part,
-                  windowT = sem_windowT,
-                  windowS = statespace,
-                  zero_background_region = zero_bg_region,
-                  background_rate_var = "W",
-                  precomp = parts$precomp,
-                  t_trunc = t_trunc
-                ),
-                etas_ll_extra
-              )
-            )
-          }
+          )
         })
         return(sum(liks * weights))
       }

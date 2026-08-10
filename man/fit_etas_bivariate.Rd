@@ -49,8 +49,10 @@ fit_etas_bivariate(
 \item{t_trunc}{Temporal truncation.}
 
 \item{hard_subcritical}{If TRUE (default), reparameterize free
-\code{alpha_m_*} so \code{alpha < beta - gap}, project the start into
-\code{rho < max_branching_radius}, and project the returned fit.}
+\code{alpha_m_*} into
+\code{(alpha_m_lower_bound, beta - gap)} (default lower bound 0),
+project the start into \code{rho < max_branching_radius}, and project
+the returned fit.}
 
 \item{...}{Passed to loglik_etas_bivariate (include \code{beta_gr}).}
 }

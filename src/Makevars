@@ -1,0 +1,5 @@
+# Always optimize the likelihood kernels, including debug builds.
+# pkgbuild/devtools inject "-g -O0" into CXXFLAGS; append -O2 with override
+# so it is last on the compile line (clang/gcc: last -O* wins). -g is kept.
+CXX_STD = CXX17
+override CXXFLAGS += -O2

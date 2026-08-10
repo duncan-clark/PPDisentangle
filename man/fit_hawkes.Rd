@@ -21,6 +21,10 @@ fit_hawkes(
   beta_min = NULL,
   fixed_params = NULL,
   t_trunc = NULL,
+  kernel = NULL,
+  spatial_kernel = NULL,
+  spatial_q = NULL,
+  spatial_d = NULL,
   ...
 )
 }

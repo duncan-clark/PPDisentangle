@@ -1,4 +1,6 @@
 #include <Rcpp.h>
+#include <cmath>
+#include <vector>
 using namespace Rcpp;
 
 //' Bivariate ETAS log-likelihood with cross-excitation
@@ -21,6 +23,12 @@ using namespace Rcpp;
 //' Temporal and spatial kernels g, f use shared structural parameters
 //' (c, p, D, gamma, q), identical to the univariate ETAS formulation.
 //'
+//' The pairwise product of power-law kernels is evaluated as a single fused
+//' exponential, exp(-p*log(1+dt/c) - q*log(1+r2/d)), and all per-parent
+//' constants are hoisted out of the inner pair loop. This is mathematically
+//' identical to evaluating the two pow() factors separately (results agree
+//' to floating-point rounding).
+//'
 //' @param t          Event times (sorted ascending, window starts at 0).
 //' @param x,y        Spatial coordinates.
 //' @param mag        Event magnitudes.
@@ -38,6 +46,10 @@ using namespace Rcpp;
 //' @param areaS_1    Active area for treated background.
 //' @param t_max      Length of temporal observation window.
 //' @param t_trunc    Temporal truncation (negative to disable).
+//' @param bg_exposure_0,bg_exposure_1 Time span over which each background is
+//'   switched on (compensator charge). Negative (default) means the full
+//'   window \code{t_max}. Use these when a policy mask zeroes a background
+//'   for part of the window (e.g. treated background only after treatment).
 //' @return Scalar joint log-likelihood.
 // [[Rcpp::export]]
 double etas_bivariate_loglik_cpp(
@@ -53,25 +65,27 @@ double etas_bivariate_loglik_cpp(
     double m0,
     double areaS_0, double areaS_1,
     double t_max,
-    double t_trunc = -1.0) {
+    double t_trunc = -1.0,
+    double bg_exposure_0 = -1.0,
+    double bg_exposure_1 = -1.0) {
 
-  int n = t.size();
+  const int n = t.size();
   if (n == 0) return -1e15;
 
   const double pi_val = 3.14159265358979323846;
-  bool do_trunc = (t_trunc > 0.0);
+  const bool do_trunc = (t_trunc > 0.0);
 
   if (areaS_0 <= 0.0) areaS_0 = 1.0;
   if (areaS_1 <= 0.0) areaS_1 = 1.0;
 
-  double mu_base_0 = mu_0 / areaS_0;
-  double mu_base_1 = mu_1 / areaS_1;
+  const double mu_base_0 = mu_0 / areaS_0;
+  const double mu_base_1 = mu_1 / areaS_1;
 
   double temporal_norm = do_trunc ?
     (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
   if (temporal_norm < 1e-15) temporal_norm = 1e-15;
 
-  double base_const = (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  const double base_const = (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
 
   // Kernel matrix: A_mat[child][parent], alpha_mat[child][parent]
   double A_mat[2][2], alpha_mat[2][2];
@@ -80,70 +94,67 @@ double etas_bivariate_loglik_cpp(
   A_mat[1][0] = A_10;   alpha_mat[1][0] = alpha_m_10;
   A_mat[1][1] = A_11;   alpha_mat[1][1] = alpha_m_11;
 
-  double loglik = 0.0;
-  NumericVector dm(n), d_parent(n), inv_d_parent(n);
-  NumericMatrix kappa_mat(2, n);
-  NumericMatrix comp_mat(2, n);
+  const double* pt = t.begin();
+  const double* px = x.begin();
+  const double* py = y.begin();
+  const double* pmag = mag.begin();
+  const int*    ppid = process_id.begin();
+  const double* pW0 = W_val_0.begin();
+  const double* pW1 = W_val_1.begin();
+
+  // Per-parent precomputation. pk{k}[j] = base_const * kappa(k,j) / d(j)
+  // so the inner pair loop multiplies by a single fused exponential.
+  std::vector<double> d_par(n);
+  std::vector<double> kap0(n), kap1(n), pk0(n), pk1(n);
+  const double inv_cc = 1.0 / cc;
   for (int j = 0; j < n; ++j) {
-    dm[j] = mag[j] - m0;
-    d_parent[j] = D * std::exp(gamma_par * dm[j]);
-    inv_d_parent[j] = 1.0 / d_parent[j];
-    int l = process_id[j];
-    for (int k = 0; k < 2; ++k) {
-      double A_kl = A_mat[k][l];
-      if (A_kl < 1e-20) {
-        kappa_mat(k, j) = 0.0;
-        comp_mat(k, j) = 0.0;
-      } else {
-        double exp_part = std::exp(alpha_mat[k][l] * dm[j]);
-        kappa_mat(k, j) = A_kl * exp_part;
-        comp_mat(k, j) = A_kl * exp_part;
-      }
-    }
+    const double dm = pmag[j] - m0;
+    const double dj = D * std::exp(gamma_par * dm);
+    d_par[j] = dj;
+    const double inv_dj = 1.0 / dj;
+    const int l = ppid[j];
+    const double A0l = A_mat[0][l];
+    const double A1l = A_mat[1][l];
+    const double k0 = (A0l < 1e-20) ? 0.0 : A0l * std::exp(alpha_mat[0][l] * dm);
+    const double k1 = (A1l < 1e-20) ? 0.0 : A1l * std::exp(alpha_mat[1][l] * dm);
+    kap0[j] = k0;
+    kap1[j] = k1;
+    pk0[j] = base_const * k0 * inv_dj;
+    pk1[j] = base_const * k1 * inv_dj;
   }
+
+  double loglik = 0.0;
 
   // --- Sum of log-intensities ---
   for (int i = 0; i < n; ++i) {
-    int k = process_id[i];
-
-    double lambda_i = (k == 0) ? mu_base_0 * W_val_0[i]
-                                : mu_base_1 * W_val_1[i];
+    const int k = ppid[i];
+    double lambda_i = (k == 0) ? mu_base_0 * pW0[i] : mu_base_1 * pW1[i];
+    const double ti = pt[i], xi = px[i], yi = py[i];
+    const double* kap = (k == 0) ? kap0.data() : kap1.data();
+    const double* pk  = (k == 0) ? pk0.data()  : pk1.data();
 
     if (do_trunc) {
       for (int j = i - 1; j >= 0; --j) {
-        double dt = t[i] - t[j];
+        const double dt = ti - pt[j];
         if (dt > t_trunc) break;
-
-        double kappa_j = kappa_mat(k, j);
-        if (kappa_j < 1e-20) continue;
-        double d_j = d_parent[j];
-
-        double temporal = std::pow(1.0 + dt / cc, -p);
-
-        double dx = x[i] - x[j];
-        double dy = y[i] - y[j];
-        double r2 = dx * dx + dy * dy;
-        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
-
-        lambda_i += base_const * kappa_j * temporal * spatial;
+        if (kap[j] < 1e-20) continue;
+        const double dx = xi - px[j];
+        const double dy = yi - py[j];
+        const double r2 = dx * dx + dy * dy;
+        // (1+dt/c)^{-p} * (1+r2/d)^{-q} fused into one exp
+        lambda_i += pk[j] * std::exp(-p * std::log(1.0 + dt * inv_cc)
+                                     - q * std::log(1.0 + r2 / d_par[j]));
       }
     } else {
       for (int j = 0; j < i; ++j) {
-        double dt = t[i] - t[j];
+        const double dt = ti - pt[j];
         if (dt <= 0.0) continue;
-
-        double kappa_j = kappa_mat(k, j);
-        if (kappa_j < 1e-20) continue;
-        double d_j = d_parent[j];
-
-        double temporal = std::pow(1.0 + dt / cc, -p);
-
-        double dx = x[i] - x[j];
-        double dy = y[i] - y[j];
-        double r2 = dx * dx + dy * dy;
-        double spatial = std::pow(1.0 + r2 / d_j, -q) * inv_d_parent[j];
-
-        lambda_i += base_const * kappa_j * temporal * spatial;
+        if (kap[j] < 1e-20) continue;
+        const double dx = xi - px[j];
+        const double dy = yi - py[j];
+        const double r2 = dx * dx + dy * dy;
+        lambda_i += pk[j] * std::exp(-p * std::log(1.0 + dt * inv_cc)
+                                     - q * std::log(1.0 + r2 / d_par[j]));
       }
     }
 
@@ -157,19 +168,19 @@ double etas_bivariate_loglik_cpp(
   //   child 1: A_{1l} * exp(alpha_{1l} * dm_j) * G(h_j)
   double comp_trig = 0.0;
   for (int j = 0; j < n; ++j) {
-    double horizon = t_max - t[j];
+    double horizon = t_max - pt[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
-    double G_h = 1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0));
-
-    for (int k = 0; k < 2; ++k) {
-      double comp_j = comp_mat(k, j);
-      if (comp_j < 1e-20) continue;
-      comp_trig += comp_j * G_h;
-    }
+    const double G_h = 1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0));
+    if (kap0[j] >= 1e-20) comp_trig += kap0[j] * G_h;
+    if (kap1[j] >= 1e-20) comp_trig += kap1[j] * G_h;
   }
 
-  loglik -= (mu_0 * t_max + mu_1 * t_max + comp_trig);
+  // Background compensator: charge each mu_k only over the time span its
+  // background is actually on (policy masks can shorten the exposure).
+  const double expo_0 = (bg_exposure_0 >= 0.0) ? bg_exposure_0 : t_max;
+  const double expo_1 = (bg_exposure_1 >= 0.0) ? bg_exposure_1 : t_max;
+  loglik -= (mu_0 * expo_0 + mu_1 * expo_1 + comp_trig);
 
   if (NumericVector::is_na(loglik) || std::isinf(loglik)) return -1e15;
 

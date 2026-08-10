@@ -38,6 +38,7 @@ em_style_labelling(
   model_type = "hawkes",
   temporal_weight = 0,
   temporal_scale_days = NULL,
+  biv_n_threads = 1L,
   ...
 )
 }
@@ -105,6 +106,9 @@ no-flip iterations.}
 \item{MCMC_style}{Use MCMC acceptance/rejection}
 
 \item{verbose}{Print progress}
+
+\item{biv_n_threads}{Worker threads for the batched bivariate metric
+kernel (default 1 = serial, identical to previous behaviour).}
 
 \item{...}{Additional arguments}
 }

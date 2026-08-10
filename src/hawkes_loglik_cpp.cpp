@@ -1,6 +1,15 @@
 #include <Rcpp.h>
 #include <algorithm>
+#include <cmath>
 using namespace Rcpp;
+
+// Both likelihoods below evaluate each pair's temporal x spatial kernel
+// product as a single fused exponential (exp of summed log-terms) instead of
+// separate pow()/exp() factors. This is mathematically identical to the
+// original formulation (results agree to floating-point rounding) and
+// roughly halves the transcendental cost per pair. The exponential spatial
+// kernel's hard cutoff (r2 * alpha > 20 contributes nothing) is preserved
+// exactly.
 
 // [[Rcpp::export]]
 double hawkes_loglik_inhom_cpp(NumericVector t,
@@ -17,19 +26,18 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
                                double spatial_q = 2.0,
                                double spatial_d = -1.0) {
 
-  int n = t.size();
-  double loglik = 0.0;
+  const int n = t.size();
 
-  double pi = 3.14159265358979323846;
-  bool do_trunc = (t_trunc > 0.0);
-  bool power_law = (kernel_type == 1);
+  const double pi = 3.14159265358979323846;
+  const bool do_trunc = (t_trunc > 0.0);
+  const bool power_law = (kernel_type == 1);
   bool spatial_power_law = (spatial_kernel_type == 1);
   if (cc <= 0.0) cc = 1.0;
   if (p <= 1.0) p = 1.000001;
   if (spatial_q <= 1.5) spatial_q = 1.500001;
   if (spatial_d <= 0.0) spatial_power_law = false;
 
-  double mu_base = mu / areaS;
+  const double mu_base = mu / areaS;
 
   auto temporal_cdf = [&](double dt) {
     if (dt <= 0.0) return 0.0;
@@ -38,59 +46,69 @@ double hawkes_loglik_inhom_cpp(NumericVector t,
     }
     return 1.0 - std::exp(-beta * dt);
   };
-  auto temporal_density = [&](double dt) {
-    if (dt <= 0.0) return 0.0;
-    if (power_law) {
-      return ((p - 1.0) / cc) * std::pow(1.0 + dt / cc, -p);
-    }
-    return beta * std::exp(-beta * dt);
-  };
 
   // Triggering constant, renormalized for temporal truncation so K remains
   // the branching ratio over the retained temporal support.
   double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
   if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-  double spatial_const = alpha / pi;
-  double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
+  const double spatial_const = alpha / pi;
+  const double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
   double dt_cut = power_law ? R_PosInf : 20.0 / beta;
   if (do_trunc && t_trunc < dt_cut) dt_cut = t_trunc;
-  auto spatial_density = [&](double r2) {
+
+  const double inv_cc = 1.0 / cc;
+  const double inv_sd = spatial_power_law ? (1.0 / spatial_d) : 0.0;
+
+  // Constant prefactor of every pair contribution:
+  //   K * g_pref * f_pref / temporal_norm, with the dt/r2 dependence fused
+  //   into a single exp() inside pair_term.
+  const double temp_pref = power_law ? ((p - 1.0) * inv_cc) : beta;
+  const double spat_pref = spatial_power_law ? spatial_power_const : spatial_const;
+  const double pair_pref = K * temp_pref * spat_pref / temporal_norm;
+
+  auto pair_term = [&](double dt, double r2) -> double {
+    double expo = 0.0;
+    if (power_law) expo -= p * std::log(1.0 + dt * inv_cc);
+    else           expo -= beta * dt;
     if (spatial_power_law) {
-      return spatial_power_const * std::pow(1.0 + r2 / spatial_d, -spatial_q);
+      expo -= spatial_q * std::log(1.0 + r2 * inv_sd);
+    } else {
+      if (r2 * alpha > 20.0) return 0.0;
+      expo -= alpha * r2;
     }
-    if(r2 * alpha > 20.0) return 0.0;
-    return spatial_const * std::exp(-alpha * r2);
+    return pair_pref * std::exp(expo);
   };
 
-  for(int i = 0; i < n; ++i) {
+  const double* pt = t.begin();
+  const double* px = x.begin();
+  const double* py = y.begin();
 
+  double loglik = 0.0;
+  for (int i = 0; i < n; ++i) {
     double lambda_i = mu_base * W_val[i];
+    const double ti = pt[i], xi = px[i], yi = py[i];
 
-    for(int j = i - 1; j >= 0; --j) {
-      double dt = t[i] - t[j];
-
-      if(dt > dt_cut) break;
-
-      double dx = x[i] - x[j];
-      double dy = y[i] - y[j];
-      double r2 = dx*dx + dy*dy;
-
-      double s_density = spatial_density(r2);
-      if(s_density <= 0.0) continue;
-      lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
+    for (int j = i - 1; j >= 0; --j) {
+      const double dt = ti - pt[j];
+      if (dt > dt_cut) break;
+      if (dt <= 0.0) continue;  // temporal density is 0 at dt <= 0
+      const double dx = xi - px[j];
+      const double dy = yi - py[j];
+      const double term = pair_term(dt, dx * dx + dy * dy);
+      if (term <= 0.0) continue;
+      lambda_i += term;
     }
 
-    if(lambda_i <= 1e-15) lambda_i = 1e-15;
-
+    if (lambda_i <= 1e-15) lambda_i = 1e-15;
     loglik += std::log(lambda_i);
   }
 
   // Compensator integral. With truncation the temporal integral from event i
   // saturates: min(T - t_i, t_trunc) replaces (T - t_i).
   double triggering_integral = 0;
-  for(int i = 0; i < n; ++i) {
-    double horizon = t_max - t[i];
-    if(do_trunc && horizon > t_trunc) horizon = t_trunc;
+  for (int i = 0; i < n; ++i) {
+    double horizon = t_max - pt[i];
+    if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     triggering_integral += K * temporal_cdf(horizon) / temporal_norm;
   }
 
@@ -120,22 +138,22 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
                                           int spatial_kernel_type = 0,
                                           double spatial_q = 2.0,
                                           double spatial_d = -1.0) {
-  int n_post = post_t.size();
-  int n_parent = parent_t.size();
+  const int n_post = post_t.size();
+  const int n_parent = parent_t.size();
   if (n_post == 0) return -1e15;
 
   const double pi = 3.14159265358979323846;
-  bool do_trunc = (t_trunc > 0.0);
-  bool power_law = (kernel_type == 1);
+  const bool do_trunc = (t_trunc > 0.0);
+  const bool power_law = (kernel_type == 1);
   bool spatial_power_law = (spatial_kernel_type == 1);
   if (cc <= 0.0) cc = 1.0;
   if (p <= 1.0) p = 1.000001;
   if (spatial_q <= 1.5) spatial_q = 1.500001;
   if (spatial_d <= 0.0) spatial_power_law = false;
-  double dt_window = t_end - t_start;
+  const double dt_window = t_end - t_start;
   if (dt_window <= 0.0 || areaS <= 0.0) return -1e15;
 
-  double mu_base = mu / areaS;
+  const double mu_base = mu / areaS;
   auto temporal_cdf = [&](double dt) {
     if (dt <= 0.0) return 0.0;
     if (power_law) {
@@ -143,64 +161,71 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
     }
     return 1.0 - std::exp(-beta * dt);
   };
-  auto temporal_density = [&](double dt) {
-    if (dt <= 0.0) return 0.0;
-    if (power_law) {
-      return ((p - 1.0) / cc) * std::pow(1.0 + dt / cc, -p);
-    }
-    return beta * std::exp(-beta * dt);
-  };
 
   double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
   if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-  double spatial_const = alpha / pi;
-  double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
+  const double spatial_const = alpha / pi;
+  const double spatial_power_const = (spatial_q - 1.0) / (pi * spatial_d);
   double dt_cut = power_law ? R_PosInf : 20.0 / beta;
   if (do_trunc && t_trunc < dt_cut) dt_cut = t_trunc;
-  auto spatial_density = [&](double r2) {
+
+  const double inv_cc = 1.0 / cc;
+  const double inv_sd = spatial_power_law ? (1.0 / spatial_d) : 0.0;
+  const double temp_pref = power_law ? ((p - 1.0) * inv_cc) : beta;
+  const double spat_pref = spatial_power_law ? spatial_power_const : spatial_const;
+  const double pair_pref = K * temp_pref * spat_pref / temporal_norm;
+
+  auto pair_term = [&](double dt, double r2) -> double {
+    double expo = 0.0;
+    if (power_law) expo -= p * std::log(1.0 + dt * inv_cc);
+    else           expo -= beta * dt;
     if (spatial_power_law) {
-      return spatial_power_const * std::pow(1.0 + r2 / spatial_d, -spatial_q);
+      expo -= spatial_q * std::log(1.0 + r2 * inv_sd);
+    } else {
+      if (r2 * alpha > 20.0) return 0.0;
+      expo -= alpha * r2;
     }
-    if (r2 * alpha > 20.0) return 0.0;
-    return spatial_const * std::exp(-alpha * r2);
+    return pair_pref * std::exp(expo);
   };
 
-  double loglik = 0.0;
+  const double* ppt = parent_t.begin();
+  const double* ppx = parent_x.begin();
+  const double* ppy = parent_y.begin();
+
   bool parent_sorted = true;
   for (int j = 1; j < n_parent; ++j) {
-    if (parent_t[j] < parent_t[j - 1]) {
+    if (ppt[j] < ppt[j - 1]) {
       parent_sorted = false;
       break;
     }
   }
 
+  double loglik = 0.0;
   for (int i = 0; i < n_post; ++i) {
     double lambda_i = mu_base * W_val[i];
-    double ti = post_t[i];
+    const double ti = post_t[i], xi = post_x[i], yi = post_y[i];
     if (parent_sorted) {
-      NumericVector::iterator first_ge = std::lower_bound(parent_t.begin(), parent_t.end(), ti);
-      int j_start = static_cast<int>(first_ge - parent_t.begin()) - 1;
+      const double* first_ge = std::lower_bound(ppt, ppt + n_parent, ti);
+      int j_start = static_cast<int>(first_ge - ppt) - 1;
       for (int j = j_start; j >= 0; --j) {
-        double dt = ti - parent_t[j];
+        const double dt = ti - ppt[j];
         if (dt > dt_cut) break;
-        double dx = post_x[i] - parent_x[j];
-        double dy = post_y[i] - parent_y[j];
-        double r2 = dx * dx + dy * dy;
-        double s_density = spatial_density(r2);
-        if (s_density <= 0.0) continue;
-        lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
+        const double dx = xi - ppx[j];
+        const double dy = yi - ppy[j];
+        const double term = pair_term(dt, dx * dx + dy * dy);
+        if (term <= 0.0) continue;
+        lambda_i += term;
       }
     } else {
       for (int j = n_parent - 1; j >= 0; --j) {
-        double dt = ti - parent_t[j];
+        const double dt = ti - ppt[j];
         if (dt <= 0.0) continue;
         if (dt > dt_cut) break;
-        double dx = post_x[i] - parent_x[j];
-        double dy = post_y[i] - parent_y[j];
-        double r2 = dx * dx + dy * dy;
-        double s_density = spatial_density(r2);
-        if (s_density <= 0.0) continue;
-        lambda_i += K * temporal_density(dt) * s_density / temporal_norm;
+        const double dx = xi - ppx[j];
+        const double dy = yi - ppy[j];
+        const double term = pair_term(dt, dx * dx + dy * dy);
+        if (term <= 0.0) continue;
+        lambda_i += term;
       }
     }
     if (lambda_i <= 1e-15) lambda_i = 1e-15;
@@ -209,12 +234,12 @@ double hawkes_loglik_inhom_filtration_cpp(NumericVector post_t,
 
   double triggering_integral = 0.0;
   for (int j = 0; j < n_parent; ++j) {
-    double p_t = parent_t[j];
+    const double p_t = ppt[j];
     double start_h = t_start;
     if (p_t > start_h) start_h = p_t;
     double end_h = t_end;
     if (do_trunc) {
-      double trunc_end = p_t + t_trunc;
+      const double trunc_end = p_t + t_trunc;
       if (trunc_end < end_h) end_h = trunc_end;
     }
     if (end_h <= start_h) continue;

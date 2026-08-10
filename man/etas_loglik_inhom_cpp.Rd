@@ -98,4 +98,10 @@ approximation, consistent with the Hawkes implementation).
 When truncation is active the temporal density is renormalised so that
 it integrates to 1 over \eqn{[0, t_{\mathrm{trunc}}]}:
 \deqn{G(t_{\mathrm{trunc}}) = 1 - (1 + t_{\mathrm{trunc}}/c)^{-(p-1)}}
+
+The pairwise product of power-law kernels is evaluated as a single fused
+exponential, exp(-p\emph{log(1+dt/c) - q}log(1+r2/d)), and all per-parent
+constants are hoisted out of the inner pair loop. This is mathematically
+identical to evaluating the two pow() factors separately (results agree
+to floating-point rounding).
 }

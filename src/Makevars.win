@@ -1,0 +1,3 @@
+# See Makevars: force -O2 even when R uses debug flags (-O0).
+CXX_STD = CXX17
+override CXXFLAGS += -O2

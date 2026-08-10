@@ -18,7 +18,12 @@ simulation_labeling_hawkes_hawkes_fast(
   verbose = FALSE,
   partition_mask = NULL,
   proximity_weight = 0.9,
+  temporal_weight = 0,
+  temporal_scale_days = NULL,
   points_tile_index = NULL,
+  model_type = "hawkes",
+  proposal_sim_cache = NULL,
+  return_proposal_sim_cache = FALSE,
   ...
 )
 }

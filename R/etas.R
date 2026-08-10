@@ -216,7 +216,7 @@ loglik_etas <- function(params,
                         alpha_beta_soft_power = 2,
                         max_branching_ratio = Inf,
                         stability_barrier_start = 0.95,
-                        stability_barrier_weight = 50000,
+                        stability_barrier_weight = 0,
                         stability_barrier_power = 4,
                         precomp = NULL,
                         t_trunc = NULL,
@@ -372,8 +372,9 @@ loglik_etas <- function(params,
     }
   }
 
-  # Smooth stability barrier on the univariate ETAS branching ratio eta; the
-  # penalty activates before criticality and ramps very sharply beyond 1.
+  # Smooth stability barrier on the univariate ETAS branching ratio eta
+  # (off by default, weight 0; the hard max_branching_ratio cap is the
+  # guardrail).
   barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
   if (length(barrier_weight) != 1L || !is.finite(barrier_weight) || is.na(barrier_weight) || barrier_weight <= 0) barrier_weight <- 0
   if (barrier_weight > 0 && is.finite(beta_eff)) {

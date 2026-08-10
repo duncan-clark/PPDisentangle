@@ -12,6 +12,10 @@ sim_hawkes_fast(
   filtration = NULL,
   covariate_lookup = NULL,
   t_trunc = NULL,
+  kernel = NULL,
+  spatial_kernel = NULL,
+  spatial_q = NULL,
+  spatial_d = NULL,
   ...
 )
 }

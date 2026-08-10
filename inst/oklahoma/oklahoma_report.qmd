@@ -1,6 +1,6 @@
 ---
 title: "Oklahoma Induced Seismicity: Causal ETAS Analysis"
-subtitle: "Point estimates (pre-bootstrap) · univariate I/J counts + bivariate E/F"
+subtitle: "Point estimates (pre-bootstrap) · univariate G–J counts + bivariate C/D primary"
 author: "PPDisentangle"
 date: today
 format:
@@ -130,6 +130,57 @@ OUT_DIR <- dirname(result_file)
 candidate_plot_dirs <- unique(file.path(candidate_out_dirs, "plots"))
 
 results <- readRDS(result_file)
+
+# Remap legacy A–L lettering (E/F = all_free primary, duplicate C/D slot, K/L univ homog)
+# onto the current A–J scheme (C/D = all_free primary; no K/L).
+normalize_oklahoma_fit_letters <- function(res) {
+  fn <- res$fits_named
+  if (is.null(fn) || !is.list(fn)) return(res)
+  e_txt <- if (!is.null(fn$E)) {
+    paste(c(fn$E$method, fn$E$label, fn$E$id), collapse = " ")
+  } else {
+    ""
+  }
+  e_is_all_free <- grepl("all[_ -]?free", e_txt, ignore.case = TRUE)
+  old_scheme <- !is.null(fn$L) || (isTRUE(e_is_all_free) && !is.null(fn$C) && !is.null(fn$E))
+  if (!isTRUE(old_scheme)) return(res)
+  old <- fn
+  remap_one <- function(obj, letter) {
+    if (is.null(obj)) return(NULL)
+    obj$letter <- letter
+    obj
+  }
+  res$fits_named <- list(
+    A = remap_one(old$A, "A"),
+    B = remap_one(old$B, "B"),
+    C = remap_one(old$E, "C"),
+    D = remap_one(old$F, "D"),
+    E = remap_one(old$G, "E"),
+    F = remap_one(old$H, "F"),
+    G = remap_one(old$I, "G"),
+    H = remap_one(old$J, "H"),
+    I = remap_one(old$K, "I"),
+    J = remap_one(old$L, "J")
+  )
+  boot <- res$bootstrap_ate
+  if (is.list(boot)) {
+    if (!is.null(boot$fit_E) && is.null(boot$fit_C)) boot$fit_C <- boot$fit_E
+    if (!is.null(boot$fit_F) && is.null(boot$fit_D)) boot$fit_D <- boot$fit_F
+    res$bootstrap_ate <- boot
+  }
+  if (!is.null(res$fit_name_map)) {
+    res$fit_name_map <- list(
+      A = "fits_named$A", B = "fits_named$B",
+      C = "fits_named$C", D = "fits_named$D",
+      E = "fits_named$E", F = "fits_named$F",
+      G = "fits_named$G", H = "fits_named$H",
+      I = "fits_named$I", J = "fits_named$J"
+    )
+  }
+  res
+}
+results <- normalize_oklahoma_fit_letters(results)
+
 meta_for_cfg <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
 cfg <- if (!is.null(results$config)) results$config else list()
 if (is.null(cfg$ETAS_M0) || length(cfg$ETAS_M0) == 0) {
@@ -203,8 +254,6 @@ if (is.null(cfg$ATE_WINDOW_DAYS) || (length(cfg$ATE_WINDOW_DAYS) == 1L && is.na(
 
 bootstrap_absent <- is.null(results$bootstrap_ate) ||
   (is.list(results$bootstrap_ate) &&
-     is.null(results$bootstrap_ate$fit_E) &&
-     is.null(results$bootstrap_ate$fit_F) &&
      is.null(results$bootstrap_ate$fit_C) &&
      is.null(results$bootstrap_ate$fit_D))
 using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")) ||
@@ -345,15 +394,16 @@ Primary county-partition fits (publication pair):
 
 | Label | Model | Background | Labels |
 |:---:|:---|:---|:---|
-| **E** | Naive bivariate ETAS | KDE (non-parametric) | Location-based |
-| **F** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
+| **C** | Naive bivariate ETAS | KDE (non-parametric) | Location-based |
+| **D** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
 All fits fix $\gamma\equiv 0$ (magnitude-independent spatial scale $d(m)=D$).
-**A/B** (homogeneous) and **C–F** (KDE) are all-free except $\gamma$;
-**G/H** keep structural $(c,p,D,q)$ fixed from first-half control pre-treatment.
-Partition-sensitivity refits use the same E/F specifications on
-alternative tessellations. Other labelled fits when present: **I/J**
-univariate+KDE; **K/L** univariate homogeneous (no KDE).
+**A/B** homogeneous bivariate (all-free except $\gamma$);
+**C/D** KDE all-free (primary);
+**E/F** KDE with structural $(c,p,D,q)$ fixed from first-half control pre-treatment;
+**G/H** univariate+KDE; **I/J** univariate homogeneous (no KDE).
+Partition-sensitivity refits use the same C/D (all-free) specifications on
+alternative tessellations.
 
 # Study Design
 
@@ -568,8 +618,8 @@ $$
 
 Off-diagonal terms $A_{01}$ (treated$\to$control) and $A_{10}$
 (control$\to$treated) capture cross-excitation. For the KDE background
-models (E, F, I, J), $W_k(x,y)$ is the normalized kernel density estimate from
-control pre-treatment data; for the homogeneous models (A, B, K, L),
+models (C, D, G, H), $W_k(x,y)$ is the normalized kernel density estimate from
+control pre-treatment data; for the homogeneous models (A, B, I, J),
 $W_k \equiv 1$.
 
 ## Branching Matrix, Spectral Radius, and Explosiveness
@@ -950,16 +1000,21 @@ get_fit_by_letter <- function(letter, legacy_key = NULL) {
 
 fit_A_obj <- get_fit_by_letter("A", "fitB")
 fit_B_obj <- get_fit_by_letter("B", "fitD")
+# Primary all_free C/D; legacy top-level fitE/fitF alias the same content.
 fit_C_obj <- get_fit_by_letter("C", "fitE")
 fit_D_obj <- get_fit_by_letter("D", "fitF")
 fit_E_obj <- get_fit_by_letter("E")
 fit_F_obj <- get_fit_by_letter("F")
-fit_G_obj <- get_fit_by_letter("G")
-fit_H_obj <- get_fit_by_letter("H")
-fit_I_obj <- get_fit_by_letter("I", "fitI")
-fit_J_obj <- get_fit_by_letter("J", "fitJ")
+# Univ+KDE G/H (legacy fitI/fitJ); univ homog I/J (legacy fitK/fitL).
+fit_G_obj <- get_fit_by_letter("G", "fitI")
+fit_H_obj <- get_fit_by_letter("H", "fitJ")
+fit_I_obj <- get_fit_by_letter("I", "fitK")
+fit_J_obj <- get_fit_by_letter("J", "fitL")
+# Optional K/L fallbacks after normalize (prefer clean A–J above).
 fit_K_obj <- get_fit_by_letter("K", "fitK")
+if (is.null(fit_K_obj)) fit_K_obj <- fit_I_obj
 fit_L_obj <- get_fit_by_letter("L", "fitL")
+if (is.null(fit_L_obj)) fit_L_obj <- fit_J_obj
 
 A_par <- if (!is.null(fit_A_obj)) fit_A_obj$params else NULL
 B_par <- if (!is.null(fit_B_obj)) fit_B_obj$params else NULL
@@ -1087,38 +1142,38 @@ model_defs <- list(
   list(id = "B", fit = "fits_named$B", label = "B: SEM", long = "B: SEM Biv", par = B_par),
   list(id = "C", fit = "fits_named$C", label = "C: Naive+KDE (all-free)", long = "C: Naive+KDE (all-free)", par = C_par),
   list(id = "D", fit = "fits_named$D", label = "D: SEM+KDE (all-free)", long = "D: SEM+KDE (all-free)", par = D_par),
-  list(id = "E", fit = "fits_named$E", label = "E: Naive+KDE (all-free)", long = "E: Naive+KDE (all-free)", par = E_par),
-  list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (all-free)", long = "F: SEM+KDE (all-free)", par = F_par),
-  list(id = "G", fit = "fits_named$G", label = "G: Naive+KDE (struct-fixed)", long = "G: Naive+KDE (struct-fixed)", par = G_par),
-  list(id = "H", fit = "fits_named$H", label = "H: SEM+KDE (struct-fixed)", long = "H: SEM+KDE (struct-fixed)", par = H_par),
-  list(id = "I", fit = "fits_named$I", label = "I: Naive univariate+KDE", long = "I: Naive Univ+KDE", par = I_par),
-  list(id = "J", fit = "fits_named$J", label = "J: SEM univariate+KDE", long = "J: SEM Univ+KDE", par = J_par)
+  list(id = "E", fit = "fits_named$E", label = "E: Naive+KDE (struct-fixed)", long = "E: Naive+KDE (struct-fixed)", par = E_par),
+  list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (struct-fixed)", long = "F: SEM+KDE (struct-fixed)", par = F_par),
+  list(id = "G", fit = "fits_named$G", label = "G: Naive univariate+KDE", long = "G: Naive Univ+KDE", par = G_par),
+  list(id = "H", fit = "fits_named$H", label = "H: SEM univariate+KDE", long = "H: SEM Univ+KDE", par = H_par),
+  list(id = "I", fit = "fits_named$I", label = "I: Naive univariate (no KDE)", long = "I: Naive Univ (no KDE)", par = I_par),
+  list(id = "J", fit = "fits_named$J", label = "J: SEM univariate (no KDE)", long = "J: SEM Univ (no KDE)", par = J_par)
 )
 param_models <- Filter(function(m) !is.null(m$par), model_defs)
 
 fit_fill_colors <- c(
   "A: Naive Bivariate" = "#fc8d62",
   "B: SEM Bivariate" = "#8da0cb",
-  "C: Naive Biv+KDE (all-free)" = "#e78ac3",
-  "D: SEM Biv+KDE (all-free)" = "#a6d854",
-  "E: Naive Biv+KDE (all-free)" = "#fdb462",
-  "F: SEM Biv+KDE (all-free)" = "#80b1d3",
-  "G: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
-  "H: SEM Biv+KDE (struct-fixed)" = "#b3de69",
-  "I: Naive Univ+KDE" = "#66c2a5",
-  "J: SEM Univ+KDE" = "#ffd92f"
+  "C: Naive Biv+KDE (all-free)" = "#fdb462",
+  "D: SEM Biv+KDE (all-free)" = "#80b1d3",
+  "E: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
+  "F: SEM Biv+KDE (struct-fixed)" = "#b3de69",
+  "G: Naive Univ+KDE" = "#66c2a5",
+  "H: SEM Univ+KDE" = "#ffd92f",
+  "I: Naive Univ (no KDE)" = "#e78ac3",
+  "J: SEM Univ (no KDE)" = "#a6d854"
 )
 fit_line_colors <- c(
   "A: Naive Bivariate" = "#d95f02",
   "B: SEM Bivariate" = "#7570b3",
-  "C: Naive Biv+KDE (all-free)" = "#c51b7d",
-  "D: SEM Biv+KDE (all-free)" = "#4d9221",
-  "E: Naive Biv+KDE (all-free)" = "#e6550d",
-  "F: SEM Biv+KDE (all-free)" = "#3182bd",
-  "G: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
-  "H: SEM Biv+KDE (struct-fixed)" = "#33a02c",
-  "I: Naive Univ+KDE" = "#1b9e77",
-  "J: SEM Univ+KDE" = "#b8860b"
+  "C: Naive Biv+KDE (all-free)" = "#e6550d",
+  "D: SEM Biv+KDE (all-free)" = "#3182bd",
+  "E: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
+  "F: SEM Biv+KDE (struct-fixed)" = "#33a02c",
+  "G: Naive Univ+KDE" = "#1b9e77",
+  "H: SEM Univ+KDE" = "#b8860b",
+  "I: Naive Univ (no KDE)" = "#c51b7d",
+  "J: SEM Univ (no KDE)" = "#4d9221"
 )
 
 get_sem_metric_trace <- function(fit_obj) {
@@ -1305,9 +1360,9 @@ trace_rows <- list()
 sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
   list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (all-free)"),
-  list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)"),
-  list(obj = if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, lab = "J: SEM Univ+KDE")
+  list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (struct-fixed)"),
+  list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Univ+KDE"),
+  list(obj = if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, lab = "J: SEM Univ (no KDE)")
 )
 for (nm in sem_fit_convergence) {
   if (is.null(nm$obj) || is.null(nm$obj$adaptive)) next
@@ -1359,9 +1414,9 @@ sem_metric_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)"),
-  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
-  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_H_obj, lab = "H: SEM Univ+KDE"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ (no KDE)")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   if (!is.null(tr) && length(tr) > 0) {
@@ -1398,9 +1453,9 @@ if (length(sem_metric_rows) > 0) {
     scale_colour_manual(values = c(
       "B: SEM Biv" = "#6a3d9a",
       "D: SEM Biv+KDE (all-free)" = "#e31a1c",
-      "F: SEM Biv+KDE (all-free)" = "#1f78b4",
-      "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00",
-      "J: SEM Univ+KDE" = "#b8860b"
+      "F: SEM Biv+KDE (struct-fixed)" = "#1f78b4",
+      "H: SEM Univ+KDE" = "#ff7f00",
+      "J: SEM Univ (no KDE)" = "#b8860b"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Selected SEM score (solid) / running best (dashed)") +
     facet_wrap(~Model, scales = "free_y") +
@@ -1420,9 +1475,9 @@ flip_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)"),
-  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
-  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (struct-fixed)"),
+  list(obj = fit_H_obj, lab = "H: SEM Univ+KDE"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ (no KDE)")
 )) {
   ad <- if (!is.null(info$obj)) info$obj$fit$adaptive else NULL
   if (is.null(ad) || is.null(ad$average_flips) || is.null(ad$max_metric_flips)) next
@@ -1473,9 +1528,9 @@ final_ll_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv", method = "SEM"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)", method = "SEM"),
-  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)", method = "SEM"),
-  list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM"),
-  list(obj = fit_J_obj, lab = "J: SEM Univ+KDE", method = "SEM")
+  list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (struct-fixed)", method = "SEM"),
+  list(obj = fit_H_obj, lab = "H: SEM Univ+KDE", method = "SEM"),
+  list(obj = fit_J_obj, lab = "J: SEM Univ (no KDE)", method = "SEM")
 )) {
   tr <- get_sem_metric_trace(info$obj)
   tr <- as.numeric(tr)
@@ -1501,11 +1556,11 @@ if (length(final_ll_rows) > 0) {
 }
 ```
 
-## SEM Relabelling: Confusion Matrices
+## SEM Relabelling Summary
 
-```{r tbl-confusion}
-#| label: tbl-confusion
-build_cm <- function(sem_obj, label) {
+```{r tbl-cm-summary}
+#| label: tbl-cm-summary
+build_cm <- function(sem_obj) {
   if (is.null(sem_obj)) return(NULL)
   lab <- sem_obj$adaptive$adaptive_labelling
   post <- lab[lab$t >= 0, ]
@@ -1514,72 +1569,55 @@ build_cm <- function(sem_obj, label) {
   as.data.frame.matrix(tab)
 }
 
-build_cm_from_labelling <- function(lab) {
-  if (is.null(lab)) return(NULL)
-  post <- lab[lab$t >= 0, ]
-  if (is.null(post$location_process) || is.null(post$inferred_process)) return(NULL)
-  tab <- table(Location = post$location_process, Inferred = post$inferred_process)
-  as.data.frame.matrix(tab)
+sem_fit_obj <- function(obj) {
+  if (is.null(obj)) return(NULL)
+  if (!is.null(obj$fit) && !is.null(obj$fit$adaptive)) return(obj$fit)
+  if (!is.null(obj$sem) && !is.null(obj$sem$adaptive)) return(obj$sem)
+  if (!is.null(obj$adaptive)) return(obj)
+  obj$fit %||% obj$sem %||% NULL
 }
 
-cm_D <- build_cm(if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, "B")
-cm_F <- build_cm(if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, "D")
-cm_H <- build_cm(if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, "F")
-cm_K <- build_cm(if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, "H")
-cm_G <- build_cm_from_labelling(if (!is.null(fit_I_obj) && !is.null(results$pp_data) && !is.null(results$pp_data$pp_post)) {
-  tmp <- coerce_pp_df(results$pp_data$pp_post)
-  if (!is.null(tmp$location_process)) tmp$inferred_process <- tmp$location_process
-  tmp
-} else NULL)
-cm_J <- build_cm(if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, "J")
-```
+cm_specs <- list(
+  list(cm = build_cm(sem_fit_obj(fit_B_obj)), lab = "B: SEM Bivariate (homogeneous)"),
+  list(cm = build_cm(sem_fit_obj(fit_D_obj)), lab = "D: SEM Bivariate+KDE (all-free)"),
+  list(cm = build_cm(sem_fit_obj(fit_F_obj)), lab = "F: SEM Bivariate+KDE (struct-fixed)"),
+  list(cm = build_cm(sem_fit_obj(fit_H_obj)), lab = "H: SEM Univariate+KDE"),
+  list(cm = build_cm(sem_fit_obj(fit_J_obj)), lab = "J: SEM Univariate (homogeneous)")
+)
 
-### Fit F — SEM Bivariate + KDE (All-Free)
-
-```{r tbl-cm-F-allfree}
-#| label: tbl-cm-F-allfree
-if (!is.null(cm_H)) {
-  n_post_H <- sum(cm_H)
-  cm_H_pct <- round(cm_H / n_post_H * 100, 1)
-  cm_display_H <- cm_H
-  for (rn in rownames(cm_H)) for (cn in colnames(cm_H)) {
-    cm_display_H[rn, cn] <- paste0(cm_H[rn, cn], "  (", cm_H_pct[rn, cn], "%)")
-  }
-  kable(cm_display_H,
-        caption = paste0("Fit F: Location vs SEM-inferred label (n = ", n_post_H,
-                         " post-treatment events)."),
-        align = "cc") |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE) |>
-    add_header_above(c("Location \u2193 / Inferred \u2192" = 1, " " = ncol(cm_H)))
-}
-```
-
-### Relabelling Summary
-
-```{r tbl-cm-summary}
-#| label: tbl-cm-summary
 sum_rows <- list()
-for (info in list(list(cm = cm_H, lab = "F: SEM Bivariate+KDE (all-free)"))) {
+for (info in cm_specs) {
   cm <- info$cm
   if (is.null(cm)) next
   n_total <- sum(cm)
-  ctrl_to_treat <- if ("treated" %in% colnames(cm) && "control" %in% rownames(cm)) cm["control","treated"] else 0
-  treat_to_ctrl <- if ("control" %in% colnames(cm) && "treated" %in% rownames(cm)) cm["treated","control"] else 0
+  ctrl_to_treat <- if ("treated" %in% colnames(cm) && "control" %in% rownames(cm)) {
+    cm["control", "treated"]
+  } else {
+    0
+  }
+  treat_to_ctrl <- if ("control" %in% colnames(cm) && "treated" %in% rownames(cm)) {
+    cm["treated", "control"]
+  } else {
+    0
+  }
   n_flipped <- ctrl_to_treat + treat_to_ctrl
-  sum_rows[[length(sum_rows)+1]] <- data.frame(
+  sum_rows[[length(sum_rows) + 1L]] <- data.frame(
     Model = info$lab,
     `Post events` = n_total,
     `Ctrl to Treat` = ctrl_to_treat,
     `Treat to Ctrl` = treat_to_ctrl,
     `Total relabelled` = n_flipped,
     `Pct relabelled` = paste0(round(n_flipped / n_total * 100, 1), "%"),
-    check.names = FALSE)
+    check.names = FALSE
+  )
 }
 if (length(sum_rows) > 0) {
   kable(do.call(rbind, sum_rows),
-        caption = "Summary of SEM relabelling for the primary Fit F specification.",
+        caption = "Summary of SEM relabelling for all county SEM fits (B, D, F, H, J).",
         align = "lccccc") |>
-    kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+} else {
+  cat("No SEM relabelling summaries available.\n")
 }
 ```
 
@@ -1703,7 +1741,7 @@ pick_ate_contrast_early <- function(ate_obj, contrast = c("all_or_nothing", "obs
 }
 ```
 
-### Paper-style counts: univariate Naive vs SEM (I–L)
+### Paper-style counts: univariate Naive vs SEM (G–J)
 
 Compact analogue of manuscript Table~13 (`tab:ok_counts`) for univariate fits,
 with both all-or-nothing and observed-vs-control estimands when available.
@@ -1711,10 +1749,10 @@ with both all-or-nothing and observed-vs-control estimands when available.
 ```{r tbl-ok-counts-univ}
 #| label: tbl-ok-counts-univ
 univ_fit_specs <- list(
-  list(lab = "Naive (I, univariate+KDE)", ate = if (!is.null(fit_I_obj)) fit_I_obj$ate else NULL),
-  list(lab = "SEM (J, univariate+KDE)", ate = if (!is.null(fit_J_obj)) fit_J_obj$ate else NULL),
-  list(lab = "Naive (K, univariate, no KDE)", ate = if (!is.null(fit_K_obj)) fit_K_obj$ate else NULL),
-  list(lab = "SEM (L, univariate, no KDE)", ate = if (!is.null(fit_L_obj)) fit_L_obj$ate else NULL)
+  list(lab = "Naive (G, univariate+KDE)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL),
+  list(lab = "SEM (H, univariate+KDE)", ate = if (!is.null(fit_H_obj)) fit_H_obj$ate else NULL),
+  list(lab = "Naive (I, univariate, no KDE)", ate = if (!is.null(fit_I_obj)) fit_I_obj$ate else NULL),
+  list(lab = "SEM (J, univariate, no KDE)", ate = if (!is.null(fit_J_obj)) fit_J_obj$ate else NULL)
 )
 univ_count_rows <- Filter(Negate(is.null), unlist(lapply(univ_fit_specs, function(sp) {
   list(
@@ -1749,30 +1787,29 @@ biv_rows <- list(
   list(lab = "B: SEM Bivariate",   ate = if (!is.null(fit_B_obj)) fit_B_obj$ate else NULL, louis = if (!is.null(fit_B_obj)) fit_B_obj$louis else NULL),
   list(lab = "C: Naive Biv+KDE (all-free)",   ate = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL, louis = NULL),
   list(lab = "D: SEM Biv+KDE (all-free)",     ate = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL, louis = if (!is.null(fit_D_obj)) fit_D_obj$louis else NULL),
-  list(lab = "E: Naive Biv+KDE (all-free)",     ate = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL, louis = NULL),
-  list(lab = "F: SEM Biv+KDE (all-free)",       ate = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL, louis = if (!is.null(fit_F_obj)) fit_F_obj$louis else NULL),
-  list(lab = "G: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL, louis = NULL),
-  list(lab = "H: SEM Biv+KDE (struct-fixed)",   ate = if (!is.null(fit_H_obj)) fit_H_obj$ate else NULL, louis = if (!is.null(fit_H_obj)) fit_H_obj$louis else NULL))
+  list(lab = "E: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL, louis = NULL),
+  list(lab = "F: SEM Biv+KDE (struct-fixed)",   ate = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL, louis = if (!is.null(fit_F_obj)) fit_F_obj$louis else NULL))
+if (!is.null(fit_G_obj) && !is.null(fit_G_obj$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "G: Naive Univ+KDE", ate = fit_G_obj$ate, louis = NULL)
+}
+if (!is.null(fit_H_obj) && !is.null(fit_H_obj$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "H: SEM Univ+KDE", ate = fit_H_obj$ate, louis = NULL)
+}
 if (!is.null(fit_I_obj) && !is.null(fit_I_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Naive Univ+KDE", ate = fit_I_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "I: Naive Univ (no KDE)", ate = fit_I_obj$ate, louis = NULL)
 }
 if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: SEM Univ+KDE", ate = fit_J_obj$ate, louis = NULL)
-}
-if (!is.null(fit_K_obj) && !is.null(fit_K_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "K: Naive Univ (no KDE)", ate = fit_K_obj$ate, louis = NULL)
-}
-if (!is.null(fit_L_obj) && !is.null(fit_L_obj$ate)) {
-  biv_rows[[length(biv_rows) + 1]] <- list(lab = "L: SEM Univ (no KDE)", ate = fit_L_obj$ate, louis = NULL)
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: SEM Univ (no KDE)", ate = fit_J_obj$ate, louis = NULL)
 }
 
 boot_obj <- results$bootstrap_ate
-boot_primary_ids <- c("E", "F")
+# Primary bootstrap pair is C/D (all_free). Accept legacy E/F target tags.
+boot_primary_ids <- c("C", "D")
 if (!is.null(boot_obj) && !is.null(boot_obj$config) && !is.null(boot_obj$config$targets)) {
   tgt <- unique(toupper(trimws(as.character(boot_obj$config$targets))))
-  if (length(tgt) >= 2 && all(c("E", "F") %in% tgt)) {
-    boot_primary_ids <- c("E", "F")
-  } else if (length(tgt) >= 2 && all(c("C", "D") %in% tgt)) {
+  if (length(tgt) >= 2 && all(c("C", "D") %in% tgt)) {
+    boot_primary_ids <- c("C", "D")
+  } else if (length(tgt) >= 2 && all(c("E", "F") %in% tgt)) {
     boot_primary_ids <- c("C", "D")
   }
 }
@@ -1781,8 +1818,8 @@ model_label_by_id <- function(id) {
     toupper(id),
     "C" = "C: Naive Biv+KDE (all-free)",
     "D" = "D: SEM Biv+KDE (all-free)",
-    "E" = "E: Naive Biv+KDE (all-free)",
-    "F" = "F: SEM Biv+KDE (all-free)",
+    "E" = "E: Naive Biv+KDE (struct-fixed)",
+    "F" = "F: SEM Biv+KDE (struct-fixed)",
     paste0(id, ": model")
   )
 }
@@ -1801,8 +1838,8 @@ get_boot_df <- function(id) {
       nrow(boot_obj[[key]]$replicate_summary) > 0) {
     return(stable_rows(boot_obj[[key]]$replicate_summary))
   }
-  # Cross-alias fallback between legacy C/D and newer E/F naming.
-  alias <- switch(toupper(id), "C" = "fit_E", "D" = "fit_F", "E" = "fit_C", "F" = "fit_D", NA_character_)
+  # Cross-alias: legacy primary stored under fit_E/fit_F maps to C/D.
+  alias <- switch(toupper(id), "C" = "fit_E", "D" = "fit_F", NA_character_)
   if (is.character(alias) && !is.na(alias) &&
       !is.null(boot_obj[[alias]]) &&
       !is.null(boot_obj[[alias]]$replicate_summary) &&
@@ -1840,8 +1877,6 @@ get_boot_summary <- function(model_label) {
   # Compatibility fallback if table labels differ from selected pair labels.
   if (is.null(vals) && model_label == "C: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("C"))) vals <- get_boot_df("C")$ate_total_mean
   if (is.null(vals) && model_label == "D: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("D"))) vals <- get_boot_df("D")$ate_total_mean
-  if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("E"))) vals <- get_boot_df("E")$ate_total_mean
-  if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("F"))) vals <- get_boot_df("F")$ate_total_mean
   if (is.null(vals)) return(NULL)
   vals <- retain_boot_vals(vals)$vals
   if (length(vals) < 2) return(NULL)
@@ -1993,8 +2028,8 @@ ate_row_for <- function(r, est) {
     stringsAsFactors = FALSE
   )
   if (using_pre_bootstrap) return(base_row)
-  # Bootstrap uncertainty only for primary all-free pair (E/F) on the run's primary contrast.
-  boot_models_for_table <- c("E: Naive Biv+KDE (all-free)", "F: SEM Biv+KDE (all-free)")
+  # Bootstrap uncertainty only for primary all-free pair (C/D) on the run's primary contrast.
+  boot_models_for_table <- c("C: Naive Biv+KDE (all-free)", "D: SEM Biv+KDE (all-free)")
   primary_contrast <- tolower(as.character(cfg$ATE_CONTRAST %||% "all_or_nothing")[1])
   boot_sum <- if (r$lab %in% boot_models_for_table && identical(est$id, primary_contrast)) {
     get_boot_summary(r$lab)
@@ -2083,11 +2118,11 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
 }
 ```
 
-### Combined parameter comparison (all fits A–L)
+### Combined parameter comparison (all fits A–J)
 
 ```{r tbl-params-all-fits}
 #| label: tbl-params-all-fits
-# Unified A–L comparison only (pair-wise E/F, A/B, I/J, K/L tables removed).
+# Unified A–J comparison only (pair-wise tables removed).
 # Bivariate fits use shared structural (c,p,D,q); univariate fits map A_k -> A_kk,
 # leave cross channels blank, and keep margin-specific structural terms.
 to_named_num <- function(x) {
@@ -2186,9 +2221,8 @@ fit_cols <- list(
   A = biv_col(fit_A_obj), B = biv_col(fit_B_obj),
   C = biv_col(fit_C_obj), D = biv_col(fit_D_obj),
   E = biv_col(fit_E_obj), F = biv_col(fit_F_obj),
-  G = biv_col(fit_G_obj), H = biv_col(fit_H_obj),
-  I = univ_col(fit_I_obj), J = univ_col(fit_J_obj),
-  K = univ_col(fit_K_obj), L = univ_col(fit_L_obj)
+  G = univ_col(fit_G_obj), H = univ_col(fit_H_obj),
+  I = univ_col(fit_I_obj), J = univ_col(fit_J_obj)
 )
 param_rows_all <- c(
   "mu_0", "mu_1",
@@ -2248,7 +2282,7 @@ if (length(present_letters) > 0L) {
   kable(
     all_tbl,
     caption = paste0(
-      "Combined ETAS parameter comparison across available fits A–L ",
+      "Combined ETAS parameter comparison across available fits A–J ",
       "(gamma fixed at 0). Bivariate columns share structural (c,p,D,q) across margins; ",
       "univariate columns leave cross-excitation (A_01/A_10) blank and report margin-specific ",
       "structural terms. rho is the offspring spectral radius (bivariate) or max margin branching ",
@@ -2259,7 +2293,7 @@ if (length(present_letters) > 0L) {
     kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE) |>
     scroll_box(width = "100%", height = "640px")
 } else {
-  cat("Combined A–L parameter table unavailable in this results checkpoint.\n")
+  cat("Combined A–J parameter table unavailable in this results checkpoint.\n")
 }
 ```
 
@@ -2273,15 +2307,14 @@ biv_sim <- do.call(rbind, lapply(biv_rows, function(r) {
 }))
 if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
   assign_role <- function(model_label) {
-    if (grepl("^A:|^C:|^E:|^G:", model_label)) return("Naive")
-    if (grepl("^B:|^D:|^F:|^H:", model_label)) return("SEM")
+    if (grepl("^A:|^C:|^E:", model_label)) return("Naive")
+    if (grepl("^B:|^D:|^F:", model_label)) return("SEM")
     NA_character_
   }
   assign_pair <- function(model_label) {
     if (grepl("^A:|^B:", model_label)) return("Homogeneous (A/B)")
     if (grepl("^C:|^D:", model_label)) return("KDE all-free (C/D)")
-    if (grepl("^E:|^F:", model_label)) return("KDE all-free (E/F)")
-    if (grepl("^G:|^H:", model_label)) return("KDE struct-fixed (G/H)")
+    if (grepl("^E:|^F:", model_label)) return("KDE struct-fixed (E/F)")
     NA_character_
   }
   biv_sim$Role <- vapply(as.character(biv_sim$Model), assign_role, character(1))
@@ -2294,7 +2327,7 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
   biv_sim$Role <- factor(biv_sim$Role, levels = c("Naive", "SEM"))
   biv_sim$Pair <- factor(
     biv_sim$Pair,
-    levels = c("Homogeneous (A/B)", "KDE all-free (C/D)", "KDE all-free (E/F)", "KDE struct-fixed (G/H)")
+    levels = c("Homogeneous (A/B)", "KDE all-free (C/D)", "KDE struct-fixed (E/F)")
   )
   biv_means <- aggregate(TotalATE ~ Pair + Role, biv_sim, mean)
   ggplot(biv_sim, aes(x = TotalATE, fill = Role)) +
@@ -2321,7 +2354,7 @@ if (using_pre_bootstrap || is.null(boot_obj)) {
   cat("Bootstrap scenario panels are omitted for this pre-bootstrap / no-bootstrap render.\n\n")
 } else {
   cat("\n### Four-scenario ATE comparison\n\n")
-  cat("The **2×2 panel below** overlays Naive (E) and SEM (F) bias-corrected bootstrap ")
+  cat("The **2×2 panel below** overlays Naive (C) and SEM (D) bias-corrected bootstrap ")
   cat("histograms for univariate vs bivariate × all-or-nothing vs observed. ")
   cat("When present, **512-rep** scenario RDS (`*_boot512`) are preferred; otherwise the ")
   cat("largest available bootstrap *n* per scenario is used. ")
@@ -2353,7 +2386,7 @@ if (using_pre_bootstrap || is.null(boot_obj)) {
 
 ```{r fig-ate-scenarios-4panel}
 #| label: fig-ate-scenarios-4panel
-#| fig-cap: "Four-scenario bias-corrected bootstrap comparison (univariate vs bivariate × all-or-nothing vs observed). Each panel overlays Naive (E) and SEM (F), using all finite ATEs retained after failed or explosive refits are excluded. Prefers 512-attempt scenario RDS when available."
+#| fig-cap: "Four-scenario bias-corrected bootstrap comparison (univariate vs bivariate × all-or-nothing vs observed). Each panel overlays Naive (C) and SEM (D), using all finite ATEs retained after failed or explosive refits are excluded. Prefers 512-attempt scenario RDS when available."
 #| fig-height: 7.2
 #| eval: !expr '!using_pre_bootstrap && !is.null(boot_obj)'
 scen_specs <- list(
@@ -2377,6 +2410,20 @@ scen_specs <- list(
                  file.path("ate_scenarios", "biv_obs", "for_paper.rds"),
                  file.path("ate_scenarios", "biv_obs_boot256", "for_paper.rds")))
 )
+scen_primary_boot <- function(boot) {
+  if (is.null(boot)) return(list(naive = NULL, sem = NULL))
+  list(
+    naive = if (!is.null(boot$fit_C)) boot$fit_C else boot$fit_E,
+    sem = if (!is.null(boot$fit_D)) boot$fit_D else boot$fit_F
+  )
+}
+scen_primary_fits <- function(fn) {
+  if (is.null(fn)) return(list(naive = NULL, sem = NULL))
+  list(
+    naive = if (!is.null(fn$C)) fn$C else fn$E,
+    sem = if (!is.null(fn$D)) fn$D else fn$F
+  )
+}
 resolve_scen_file <- function(rel_files) {
   cands <- unique(unlist(lapply(c(OUT_DIR, candidate_out_dirs), function(d) {
     file.path(d, rel_files)
@@ -2385,9 +2432,10 @@ resolve_scen_file <- function(rel_files) {
   existing <- cands[file.exists(cands)]
   if (!length(existing)) return(NA_character_)
   n_boot <- vapply(existing, function(f) {
-    r <- tryCatch(readRDS(f), error = function(e) NULL)
-    if (is.null(r) || is.null(r$bootstrap_ate$fit_F$replicate_summary)) return(0L)
-    as.integer(nrow(r$bootstrap_ate$fit_F$replicate_summary))
+    r <- tryCatch(normalize_oklahoma_fit_letters(readRDS(f)), error = function(e) NULL)
+    blk <- scen_primary_boot(r$bootstrap_ate)$sem
+    if (is.null(blk) || is.null(blk$replicate_summary)) return(0L)
+    as.integer(nrow(blk$replicate_summary))
   }, integer(1))
   existing[[which.max(n_boot)]]
 }
@@ -2411,10 +2459,11 @@ scen_n_note <- character(0)
 for (sp in scen_specs) {
   fp <- resolve_scen_file(sp$files)
   if (is.na(fp)) next
-  rr <- tryCatch(readRDS(fp), error = function(e) NULL)
-  if (is.null(rr) || is.null(rr$bootstrap_ate$fit_E) || is.null(rr$bootstrap_ate$fit_F)) next
-  be_df <- as.data.frame(rr$bootstrap_ate$fit_E$replicate_summary)
-  bf_df <- as.data.frame(rr$bootstrap_ate$fit_F$replicate_summary)
+  rr <- tryCatch(normalize_oklahoma_fit_letters(readRDS(fp)), error = function(e) NULL)
+  boot_pair <- scen_primary_boot(rr$bootstrap_ate)
+  if (is.null(rr) || is.null(boot_pair$naive) || is.null(boot_pair$sem)) next
+  be_df <- as.data.frame(boot_pair$naive$replicate_summary)
+  bf_df <- as.data.frame(boot_pair$sem$replicate_summary)
   if ("is_stable" %in% names(be_df)) {
     be_df <- be_df[!is.na(be_df$is_stable) & be_df$is_stable, , drop = FALSE]
   }
@@ -2423,28 +2472,29 @@ for (sp in scen_specs) {
   }
   be_raw <- be_df$ate_total_mean
   bf_raw <- bf_df$ate_total_mean
-  pe <- point_mean_scen(rr$fits_named$E)
-  pf <- point_mean_scen(rr$fits_named$F)
+  fit_pair <- scen_primary_fits(rr$fits_named)
+  pe <- point_mean_scen(fit_pair$naive)
+  pf <- point_mean_scen(fit_pair$sem)
   be <- retain_boot_vals(be_raw)
   bf <- retain_boot_vals(bf_raw)
-  attempted_E <- rr$bootstrap_ate$fit_E$n_attempted %||%
+  attempted_C <- boot_pair$naive$n_attempted %||%
     rr$bootstrap_ate$config$reps %||% be$n_in
-  attempted_F <- rr$bootstrap_ate$fit_F$n_attempted %||%
+  attempted_D <- boot_pair$sem$n_attempted %||%
     rr$bootstrap_ate$config$reps %||% bf$n_in
   scen_n_note <- c(
     scen_n_note,
     sprintf(
-      "%s retained E=%d/%d, F=%d/%d",
-      sp$id, length(be$vals), attempted_E, length(bf$vals), attempted_F
+      "%s retained C=%d/%d, D=%d/%d",
+      sp$id, length(be$vals), attempted_C, length(bf$vals), attempted_D
     )
   )
   scen_boot_rows[[length(scen_boot_rows) + 1L]] <- rbind(
     data.frame(
-      Law = sp$law, Contrast = sp$contrast, Model = "Naive (E)",
+      Law = sp$law, Contrast = sp$contrast, Model = "Naive (C)",
       TotalATE = recenter_boot_scen(be$vals, pe), stringsAsFactors = FALSE
     ),
     data.frame(
-      Law = sp$law, Contrast = sp$contrast, Model = "SEM (F)",
+      Law = sp$law, Contrast = sp$contrast, Model = "SEM (D)",
       TotalATE = recenter_boot_scen(bf$vals, pf), stringsAsFactors = FALSE
     )
   )
@@ -2454,7 +2504,7 @@ if (length(scen_boot_rows) > 0) {
   scen_boot_df <- scen_boot_df[is.finite(scen_boot_df$TotalATE), , drop = FALSE]
   scen_boot_df$Law <- factor(scen_boot_df$Law, levels = c("Univariate", "Bivariate"))
   scen_boot_df$Contrast <- factor(scen_boot_df$Contrast, levels = c("All-or-nothing", "Observed vs control"))
-  scen_boot_df$Model <- factor(scen_boot_df$Model, levels = c("Naive (E)", "SEM (F)"))
+  scen_boot_df$Model <- factor(scen_boot_df$Model, levels = c("Naive (C)", "SEM (D)"))
   scen_means <- aggregate(TotalATE ~ Law + Contrast + Model, scen_boot_df, mean)
   ggplot(scen_boot_df, aes(x = TotalATE, fill = Model)) +
     geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
@@ -2462,8 +2512,8 @@ if (length(scen_boot_rows) > 0) {
     geom_vline(data = scen_means, aes(xintercept = TotalATE, colour = Model),
                linewidth = 0.9, show.legend = FALSE) +
     facet_grid(Law ~ Contrast, scales = "free_y") +
-    scale_fill_manual(values = c("Naive (E)" = "#fdb462", "SEM (F)" = "#80b1d3")) +
-    scale_colour_manual(values = c("Naive (E)" = "#e6550d", "SEM (F)" = "#3182bd")) +
+    scale_fill_manual(values = c("Naive (C)" = "#fdb462", "SEM (D)" = "#80b1d3")) +
+    scale_colour_manual(values = c("Naive (C)" = "#e6550d", "SEM (D)" = "#3182bd")) +
     coord_cartesian(xlim = c(-1000, 1000)) +
     labs(
       x = bquote("Bias-corrected bootstrap " ~ hat(Delta) ~ "(total saved /" ~ .(ate_days) ~ "days)"),
@@ -2570,7 +2620,7 @@ if (!is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 
 ```{r fig-ate-bootstrap-biv-obs}
 #| label: fig-ate-bootstrap-biv-obs
-#| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (E/F), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
+#| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (C/D), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
 #| fig-height: 4
 #| eval: !expr '!using_pre_bootstrap && !is.null(boot_obj)'
 # Companion scenario RDS written by launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
@@ -2586,25 +2636,27 @@ biv_obs_candidates <- unique(c(
 ))
 biv_obs_file <- biv_obs_candidates[file.exists(biv_obs_candidates)][1]
 if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
-  res_obs <- readRDS(biv_obs_file)
+  res_obs <- normalize_oklahoma_fit_letters(readRDS(biv_obs_file))
   boot_obs <- res_obs$bootstrap_ate
-  fit_E_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$E else NULL
-  fit_F_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$F else NULL
-  boot_E_obs <- if (!is.null(boot_obs$fit_E)) boot_obs$fit_E$replicate_summary else NULL
-  boot_F_obs <- if (!is.null(boot_obs$fit_F)) boot_obs$fit_F$replicate_summary else NULL
-  if (!is.null(boot_E_obs) && "is_stable" %in% names(boot_E_obs)) {
-    boot_E_obs <- boot_E_obs[
-      !is.na(boot_E_obs$is_stable) & boot_E_obs$is_stable, , drop = FALSE
+  fit_C_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$C else NULL
+  fit_D_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$D else NULL
+  boot_C_blk <- if (!is.null(boot_obs$fit_C)) boot_obs$fit_C else boot_obs$fit_E
+  boot_D_blk <- if (!is.null(boot_obs$fit_D)) boot_obs$fit_D else boot_obs$fit_F
+  boot_C_obs <- if (!is.null(boot_C_blk)) boot_C_blk$replicate_summary else NULL
+  boot_D_obs <- if (!is.null(boot_D_blk)) boot_D_blk$replicate_summary else NULL
+  if (!is.null(boot_C_obs) && "is_stable" %in% names(boot_C_obs)) {
+    boot_C_obs <- boot_C_obs[
+      !is.na(boot_C_obs$is_stable) & boot_C_obs$is_stable, , drop = FALSE
     ]
   }
-  if (!is.null(boot_F_obs) && "is_stable" %in% names(boot_F_obs)) {
-    boot_F_obs <- boot_F_obs[
-      !is.na(boot_F_obs$is_stable) & boot_F_obs$is_stable, , drop = FALSE
+  if (!is.null(boot_D_obs) && "is_stable" %in% names(boot_D_obs)) {
+    boot_D_obs <- boot_D_obs[
+      !is.na(boot_D_obs$is_stable) & boot_D_obs$is_stable, , drop = FALSE
     ]
   }
-  if (!is.null(boot_E_obs) && !is.null(boot_F_obs) &&
-      nrow(boot_E_obs) > 0 && nrow(boot_F_obs) > 0 &&
-      "ate_total_mean" %in% names(boot_E_obs) && "ate_total_mean" %in% names(boot_F_obs)) {
+  if (!is.null(boot_C_obs) && !is.null(boot_D_obs) &&
+      nrow(boot_C_obs) > 0 && nrow(boot_D_obs) > 0 &&
+      "ate_total_mean" %in% names(boot_C_obs) && "ate_total_mean" %in% names(boot_D_obs)) {
     obs_ate_mean_from_fit <- function(fit_obj) {
       if (is.null(fit_obj) || is.null(fit_obj$ate)) return(NA_real_)
       vals <- get_total_effect_sim(fit_obj$ate, n_tiles = n_cty)
@@ -2620,20 +2672,20 @@ if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
       if (!is.finite(bmean) || is.na(bmean)) return(bv)
       bv + (target_mean - bmean)
     }
-    lab_E <- "E: Naive Biv+KDE (all-free)"
-    lab_F <- "F: SEM Biv+KDE (all-free)"
-    mean_E_obs <- obs_ate_mean_from_fit(fit_E_obs)
-    mean_F_obs <- obs_ate_mean_from_fit(fit_F_obs)
-    filt_E_obs <- retain_boot_vals(boot_E_obs$ate_total_mean)
-    filt_F_obs <- retain_boot_vals(boot_F_obs$ate_total_mean)
+    lab_C <- "C: Naive Biv+KDE (all-free)"
+    lab_D <- "D: SEM Biv+KDE (all-free)"
+    mean_C_obs <- obs_ate_mean_from_fit(fit_C_obs)
+    mean_D_obs <- obs_ate_mean_from_fit(fit_D_obs)
+    filt_C_obs <- retain_boot_vals(boot_C_obs$ate_total_mean)
+    filt_D_obs <- retain_boot_vals(boot_D_obs$ate_total_mean)
     boot_cd_obs <- rbind(
-      data.frame(Model = lab_E, TotalATE = recenter_boot_obs(filt_E_obs$vals, mean_E_obs)),
-      data.frame(Model = lab_F, TotalATE = recenter_boot_obs(filt_F_obs$vals, mean_F_obs))
+      data.frame(Model = lab_C, TotalATE = recenter_boot_obs(filt_C_obs$vals, mean_C_obs)),
+      data.frame(Model = lab_D, TotalATE = recenter_boot_obs(filt_D_obs$vals, mean_D_obs))
     )
     boot_cd_obs <- boot_cd_obs[is.finite(boot_cd_obs$TotalATE), , drop = FALSE]
     if (nrow(boot_cd_obs) > 0) {
       boot_means_obs <- aggregate(TotalATE ~ Model, boot_cd_obs, mean)
-      n_drop_obs <- filt_E_obs$n_out + filt_F_obs$n_out
+      n_drop_obs <- filt_C_obs$n_out + filt_D_obs$n_out
       ate_days_obs <- suppressWarnings(as.numeric(res_obs$config$ATE_WINDOW_DAYS))
       if (!is.finite(ate_days_obs)) ate_days_obs <- ate_days
       ggplot(boot_cd_obs, aes(x = TotalATE, fill = Model)) +
@@ -2641,18 +2693,18 @@ if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
         geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
         geom_vline(data = boot_means_obs, aes(xintercept = TotalATE, colour = Model),
                    linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-        scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(lab_E, lab_F))) +
-        scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(lab_E, lab_F))) +
+        scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(lab_C, lab_D))) +
+        scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(lab_C, lab_D))) +
         coord_cartesian(xlim = c(-1000, 1000)) +
         labs(
           x = bquote(hat(Delta)[obs] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days_obs) ~ "days)"),
           y = "Bootstrap replicate count",
-          title = "Bias-corrected bootstrap observed-vs-control distribution (E/F, bivariate)",
+          title = "Bias-corrected bootstrap observed-vs-control distribution (C/D, bivariate)",
           subtitle = sprintf(
-            "Contrast: bivariate/observed; centers E=%.1f, F=%.1f; retained stable finite ATEs %d/%d (E) and %d/%d (F); omitted %d non-finite; source %s",
-            mean_E_obs, mean_F_obs,
-            length(filt_E_obs$vals), filt_E_obs$n_in,
-            length(filt_F_obs$vals), filt_F_obs$n_in,
+            "Contrast: bivariate/observed; centers C=%.1f, D=%.1f; retained stable finite ATEs %d/%d (C) and %d/%d (D); omitted %d non-finite; source %s",
+            mean_C_obs, mean_D_obs,
+            length(filt_C_obs$vals), filt_C_obs$n_in,
+            length(filt_D_obs$vals), filt_D_obs$n_in,
             n_drop_obs,
             basename(biv_obs_file)
           )
@@ -2669,7 +2721,7 @@ if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
     }
   } else {
     plot.new()
-    text(0.5, 0.5, sprintf("Bivariate observed bootstrap E/F summaries missing in %s.", basename(biv_obs_file)))
+    text(0.5, 0.5, sprintf("Bivariate observed bootstrap C/D summaries missing in %s.", basename(biv_obs_file)))
   }
 } else {
   plot.new()
@@ -2688,8 +2740,8 @@ sensitivity to spatial resolution:
 - **AOI region** partition: the AOI polygon defines one treated region,
   everything else is control (2 tiles total).
 
-For each partition, both the naive bivariate + KDE (E-type, all-free)
-and SEM bivariate + KDE (F-type, all-free) models are fitted.
+For each partition, both the naive bivariate + KDE (C-type, all-free)
+and SEM bivariate + KDE (D-type, all-free) models are fitted.
 
 ```{r fig-partition-all}
 #| label: fig-partition-all
@@ -2722,15 +2774,15 @@ part_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
-         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
+         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
 
   for (fit_type in list(
-    list(lab = "E: Naive Biv+KDE (all-free)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
-    list(lab = "F: SEM Biv+KDE (all-free)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
+    list(lab = "C: Naive Biv+KDE (all-free)", par = info$E_params, ate = ate_info$ate_E, sem_obj = NULL),
+    list(lab = "D: SEM Biv+KDE (all-free)",   par = info$F_params, ate = ate_info$ate_F, sem_obj = info$semF)
   )) {
     expected <- if (!is.null(fit_type$ate)) {
       get_expected_totals(fit_type$ate, n_tiles = info$n_tiles)
@@ -2761,7 +2813,7 @@ for (pname in names(pr)) {
       lp <- fit_type$sem_obj$adaptive$adaptive_labelling
       lp <- lp[lp$t >= 0, , drop = FALSE]
       sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
-    } else if (identical(fit_type$lab, "F: SEM Biv+KDE (all-free)") &&
+    } else if (identical(fit_type$lab, "D: SEM Biv+KDE (all-free)") &&
                !is.null(info$n_relabel) && is.finite(info$n_relabel)) {
       as.integer(info$n_relabel)
     } else { 0 }
@@ -2835,7 +2887,7 @@ if (exists("part_df") && nrow(part_df) > 0) {
     geom_line(alpha = 0.45) +
     geom_point(aes(size = is_county), alpha = 0.9) +
     scale_size_manual(values = c(`FALSE` = 2.1, `TRUE` = 3.6), guide = "none") +
-    scale_colour_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
+    scale_colour_manual(values = c("C: Naive Biv+KDE (all-free)" = "#fdb462", "D: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     facet_grid(Parameter ~ Process, scales = "free_y", labeller = label_parsed) +
     labs(x = "Partition scheme", y = "Estimate", colour = "Model") +
     theme_minimal(base_size = 12) +
@@ -2860,13 +2912,13 @@ part_sim_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
   ate_info <- if (info$label == "county") {
-    list(ate_E = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL,
-         ate_F = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL)
+    list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
+         ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
     ap[[pname]]
   }
-  for (fit_type in list(list(lab = "E: Naive Biv+KDE (all-free)", ate = ate_info$ate_E),
-                        list(lab = "F: SEM Biv+KDE (all-free)",   ate = ate_info$ate_F))) {
+  for (fit_type in list(list(lab = "C: Naive Biv+KDE (all-free)", ate = ate_info$ate_E),
+                        list(lab = "D: SEM Biv+KDE (all-free)",   ate = ate_info$ate_F))) {
     if (!is.null(fit_type$ate) && !is.null(fit_type$ate$all_nothing_sim)) {
       part_sim_rows[[length(part_sim_rows) + 1]] <- data.frame(
         Partition = info$label,
@@ -2891,7 +2943,7 @@ if (length(part_sim_rows) > 0) {
     geom_histogram(bins = 25, alpha = 0.55, position = "identity") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
     facet_wrap(~Partition, scales = "fixed") +
-    scale_fill_manual(values = c("E: Naive Biv+KDE (all-free)" = "#fdb462", "F: SEM Biv+KDE (all-free)" = "#80b1d3")) +
+    scale_fill_manual(values = c("C: Naive Biv+KDE (all-free)" = "#fdb462", "D: SEM Biv+KDE (all-free)" = "#80b1d3")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
          y = "Simulation count") +
     theme_minimal(base_size = 12) +
@@ -2940,8 +2992,8 @@ effect_direction <- function(x, tol = 10) {
 }
 ```
 
-**Inhomogeneous background rate focus.** Fits E and F use a
-spatially inhomogeneous background estimated from the first half of
+**Inhomogeneous background rate focus.** Fits C and D (primary all-free)
+use a spatially inhomogeneous background estimated from the first half of
 control pre-treatment data. This provides an independent estimate of
 the baseline seismicity pattern without using post-treatment data.
 
@@ -2956,15 +3008,13 @@ background ratio $\mu_1/\mu_0$ is:
 effect_lines <- c(
   paste0("- **Fit C (naive+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_C_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
   paste0("- **Fit D (SEM+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_D_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit E (naive+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit F (SEM+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit G (naive+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_G_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit H (SEM+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_H_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit E (naive+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit F (SEM+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
   {
-    sem_totals <- c(total_D_1yr, total_F_1yr, total_H_1yr)
+    sem_totals <- c(total_D_1yr, total_F_1yr)
     sem_totals <- sem_totals[is.finite(sem_totals)]
     if (length(sem_totals) > 0L) {
-      paste0("- **Interpretation:** Across KDE variants, SEM fits range from **",
+      paste0("- **Interpretation:** Across KDE bivariate SEM fits (D/F), effects range from **",
              effect_direction(min(sem_totals)),
              "** to **",
              effect_direction(max(sem_totals)),
@@ -2974,8 +3024,11 @@ effect_lines <- c(
     }
   }
 )
+if (!is.na(total_H_1yr)) {
+  effect_lines <- c(effect_lines, paste0("- **Fit H (SEM univariate+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_H_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
+}
 if (!is.na(total_J_1yr)) {
-  effect_lines <- c(effect_lines, paste0("- **Fit J (SEM univariate+KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
+  effect_lines <- c(effect_lines, paste0("- **Fit J (SEM univariate, no KDE):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_J_1yr, "** total earthquakes saved / ", ate_days_interp, " days"))
 }
 cat(paste(effect_lines, collapse = "\n"), "\n")
 ```

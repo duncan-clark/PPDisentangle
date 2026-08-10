@@ -31,7 +31,9 @@ etas_bivariate_loglik_cpp(
   areaS_0,
   areaS_1,
   t_max,
-  t_trunc = -1
+  t_trunc = -1,
+  bg_exposure_0 = -1,
+  bg_exposure_1 = -1
 )
 }
 \arguments{
@@ -68,6 +70,11 @@ etas_bivariate_loglik_cpp(
 \item{t_max}{Length of temporal observation window.}
 
 \item{t_trunc}{Temporal truncation (negative to disable).}
+
+\item{bg_exposure_0, bg_exposure_1}{Time span over which each background is
+switched on (compensator charge). Negative (default) means the full
+window \code{t_max}. Use these when a policy mask zeroes a background
+for part of the window (e.g. treated background only after treatment).}
 }
 \value{
 Scalar joint log-likelihood.
@@ -93,4 +100,10 @@ The four kernel components (child, parent) are:
 
 Temporal and spatial kernels g, f use shared structural parameters
 (c, p, D, gamma, q), identical to the univariate ETAS formulation.
+
+The pairwise product of power-law kernels is evaluated as a single fused
+exponential, exp(-p\emph{log(1+dt/c) - q}log(1+r2/d)), and all per-parent
+constants are hoisted out of the inner pair loop. This is mathematically
+identical to evaluating the two pow() factors separately (results agree
+to floating-point rounding).
 }

@@ -275,16 +275,16 @@ ATE_WINDOW_DAYS <- 100
 RUN_BOOTSTRAP_ATE <- tolower(Sys.getenv("OK_RUN_BOOTSTRAP_ATE", "false")) %in% c("1", "true", "yes", "y")
 BOOT_N_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_N_REPS", "0")))
 if (!is.finite(BOOT_N_REPS) || is.na(BOOT_N_REPS) || BOOT_N_REPS < 0L) BOOT_N_REPS <- 0L
-# Default to bootstrapping the all-free KDE pair (E and F).
-BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "E,F"))
+# Default to bootstrapping the all-free KDE pair (C and D; primary publication pair).
+BOOT_TARGETS_RAW <- toupper(Sys.getenv("OK_BOOT_TARGETS", "C,D"))
 BOOT_TARGETS <- unique(trimws(unlist(strsplit(BOOT_TARGETS_RAW, ","))))
-BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("E", "F")]
-if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("E", "F")
+BOOT_TARGETS <- BOOT_TARGETS[BOOT_TARGETS %in% c("C", "D")]
+if (length(BOOT_TARGETS) < 1) BOOT_TARGETS <- c("C", "D")
 # Sensitivity targets are wired directly from bootstrap targets.
 SENS_TARGETS <- unique(BOOT_TARGETS)
-if (!setequal(SENS_TARGETS, c("E", "F"))) {
+if (!setequal(SENS_TARGETS, c("C", "D"))) {
   stop(sprintf(
-    "Sensitivity/bootstrap target alignment requires E,F; got: %s",
+    "Sensitivity/bootstrap target alignment requires C,D; got: %s",
     paste(SENS_TARGETS, collapse = ",")
   ))
 }
@@ -429,15 +429,20 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   if (is.null(boot_chk)) {
     stop("OK_BOOTSTRAP_ONLY: could not readRDS patch file: ", boot_patch_check)
   }
-  has_E <- !is.null(boot_chk$fits_named$E$params) || !is.null(boot_chk$fitE$params)
-  has_F <- !is.null(boot_chk$fits_named$F$params) || !is.null(boot_chk$fitF$params)
-  if (!isTRUE(has_E) || !isTRUE(has_F)) {
-    stop("OK_BOOTSTRAP_ONLY: patch RDS must contain fits_named$E/F$params (or fitE/fitF$params).")
+  # Primary all-free pair is fits_named$C/D; accept legacy E/F or fitE/fitF aliases.
+  has_C <- !is.null(boot_chk$fits_named$C$params) ||
+    !is.null(boot_chk$fits_named$E$params) ||
+    !is.null(boot_chk$fitE$params)
+  has_D <- !is.null(boot_chk$fits_named$D$params) ||
+    !is.null(boot_chk$fits_named$F$params) ||
+    !is.null(boot_chk$fitF$params)
+  if (!isTRUE(has_C) || !isTRUE(has_D)) {
+    stop("OK_BOOTSTRAP_ONLY: patch RDS must contain fits_named$C/D$params (or legacy E/F / fitE/fitF).")
   }
   if (BOOT_N_REPS < 1L) {
     stop("OK_BOOTSTRAP_ONLY requires OK_BOOT_N_REPS >= 1.")
   }
-  # Faster early KDE setup; main E/F params come from the patch.
+  # Faster early KDE setup; main C/D (all_free) params come from the patch.
   KDE_VARIANT_MODE <- "single"
   RUN_KDE_PROFILE_SWEEP <- FALSE
   rm(boot_chk)
@@ -665,7 +670,7 @@ if (isTRUE(FIT_VARIABILITY_ONLY)) {
 }
 if (isTRUE(BOOTSTRAP_ONLY)) {
   cat(sprintf(
-    "Bootstrap ONLY mode: skip main county fits; hydrate E/F from %s; bivariate=%s contrast=%s reps=%d scope=%s\n",
+    "Bootstrap ONLY mode: skip main county fits; hydrate C/D (all_free) from %s; bivariate=%s contrast=%s reps=%d scope=%s\n",
     BOOTSTRAP_PATCH_FILE, OK_ATE_BIVARIATE, OK_ATE_CONTRAST, BOOT_N_REPS, BOOT_REFIT_SCOPE
   ))
 }
@@ -1305,7 +1310,7 @@ fit_b <- function() {
       treated_background_zero_before = 0,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
-      # Homogeneous A: all free except gamma=0 (same freedom as E/F KDE all-free).
+      # Homogeneous A: all free except gamma=0 (same freedom as C/D KDE all-free).
       maxit = VANILLA_MAXIT, fixed_params = with_gamma_fixed(NULL), trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
@@ -1617,19 +1622,14 @@ tryCatch({
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
 # Parameter profiles for county KDE bivariate fits.
-# - all_free: free except gamma=0 (magnitude-independent spatial scale); letters E/F
-# - control_only_fixed: legacy key for letters C/D; now also all-free except gamma=0
-#   (structural no longer pinned to first-half control pre-treatment)
-# - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment; G/H
+# - all_free: free except gamma=0 (magnitude-independent spatial scale); letters C/D (PRIMARY)
+# - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment; E/F
+# Internal objects still use fitE/semF / kde_variant_fits$E/$F for naive/SEM slots;
+# public fits_named letters follow C–J below.
 kde_variant_specs <- list(
   all_free = list(
     id = "all_free",
     label = "all free except gamma=0",
-    fixed_params = with_gamma_fixed(NULL)
-  ),
-  control_only_fixed = list(
-    id = "control_only_fixed",
-    label = "all free except gamma=0 (C/D slot; formerly structural-fixed)",
     fixed_params = with_gamma_fixed(NULL)
   ),
   productivity_free = list(
@@ -1638,21 +1638,21 @@ kde_variant_specs <- list(
     fixed_params = with_gamma_fixed(FIXED_STRUCTURAL)
   )
 )
-kde_primary_variant_id <- "control_only_fixed"
+kde_primary_variant_id <- "all_free"
 kde_variant_ids <- if (RUN_KDE_PROFILE_SWEEP) names(kde_variant_specs) else kde_primary_variant_id
 kde_variant_fits <- list(E = list(), F = list())
-# Sensitivity and bootstrap refits align with the all-free KDE pair (E/F).
+# Sensitivity and bootstrap refits align with the all-free KDE pair (C/D).
 SENSITIVITY_FIXED_PARAMS <- kde_variant_specs$all_free$fixed_params
+# Keys E/F here are naive/SEM slots in kde_variant_fits; values are public letters.
 KDE_FIT_LETTERS <- list(
-  control_only_fixed = list(E = "C", F = "D"),
-  all_free = list(E = "E", F = "F"),
-  productivity_free = list(E = "G", F = "H")
+  all_free = list(E = "C", F = "D"),
+  productivity_free = list(E = "E", F = "F")
 )
 kde_fit_label <- function(fit_type, variant_id) {
   letter <- KDE_FIT_LETTERS[[variant_id]][[fit_type]]
   sprintf("Fit %s [%s]", letter, variant_id)
 }
-# KDE bandwidth SEM (all-free F) uses this RNG key so stochastic SEM matches main Fit F
+# KDE bandwidth SEM (all-free D) uses this RNG key so stochastic SEM matches main Fit D
 # when sigma and data match (i.e. digglex2 vs main county KDE).
 OK_BW_SEM_RNG_LABEL <- kde_fit_label("F", "all_free")
 cat(sprintf(
@@ -2410,11 +2410,11 @@ H_params <- if (!is.null(kde_variant_fits$F$productivity_free) &&
 }
 
 # ============================================================================
-# 4I/4J/4K/4L. Univariate ETAS comparison (no cross-excitation)
-#   I/J: independent margins + KDE background
-#   K/L: independent margins, homogeneous background (no KDE)
+# 4G–4J. Univariate ETAS comparison (no cross-excitation)
+#   Public letters G/H: independent margins + KDE background (internal fitI/semJ)
+#   Public letters I/J: independent margins, homogeneous background (internal fitK/semL)
 # ============================================================================
-cat("\n--- Step 4I/4J/4K/4L: Univariate ETAS dispatch ---\n")
+cat("\n--- Step 4G-4J: Univariate ETAS dispatch (public G/H univ+KDE, I/J univ homog) ---\n")
 
 fit_indep_pair <- function(pp_data_in,
                            background_rate_var_in = NULL,
@@ -2653,9 +2653,9 @@ pp_post_sem_L <- if (!is.null(semL) && !is.null(semL$adaptive$adaptive_labelling
 pp_post_sem_L <- pp_post_sem_L[pp_post_sem_L$t >= 0, , drop = FALSE]
 
 # ============================================================================
-# 4I. KDE bandwidth sensitivity (county partition, inhomogeneous E/F)
+# 4K. KDE bandwidth sensitivity (county partition, inhomogeneous C/D = all_free)
 # ============================================================================
-cat("\n--- Step 4I: KDE bandwidth sensitivity (county, inhom E/F) ---\n")
+cat("\n--- Step 4K: KDE bandwidth sensitivity (county, inhom C/D all_free) ---\n")
 if (RUN_SENSITIVITY) {
   kde_bandwidth_specs <- list(
     list(label = "diggle", multiplier = 1),
@@ -2711,7 +2711,7 @@ run_kde_bandwidth_fit <- function(spec) {
       init_params_in = biv_init_local,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
-      # Match main Fit F (not SENS_SEM_INNER_ITER) so digglex2 reproduces F when sigma matches.
+      # Match main Fit D (not SENS_SEM_INNER_ITER) so digglex2 reproduces D when sigma matches.
       sem_inner_iter_in = SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("BW %s Fit D", bw_label),
@@ -3215,17 +3215,17 @@ ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
 add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
 t_ate_E <- proc.time()[["elapsed"]]
 ate_E <- ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
-                             "Fit E (naive biv+KDE, all-free)")
+                             "Fit C (naive biv+KDE, all-free)")
 ate_E_elapsed <- proc.time()[["elapsed"]] - t_ate_E
 add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else "failed")
 t_ate_F <- proc.time()[["elapsed"]]
 ate_F <- ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
-                             "Fit F (SEM biv+KDE, all-free)")
+                             "Fit D (SEM biv+KDE, all-free)")
 ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
 add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
 
 # Keep kde_variant_fits$E/F$all_free$ate aligned with the canonical bivariate
-# estimands. fits_named$E/F are built from these lists, so a later marginal
+# estimands. fits_named$C/D are built from these lists, so a later marginal
 # overwrite would otherwise clobber ate_E/ate_F in report/paper outputs.
 if (!is.null(kde_variant_fits$E$all_free)) {
   kde_variant_fits$E$all_free$ate <- ate_E
@@ -3236,7 +3236,7 @@ if (!is.null(kde_variant_fits$F$all_free)) {
   kde_variant_fits$F$all_free$marginals <- F_marginals
 }
 
-# Compute ATE/saved estimands for remaining KDE fix-profile pairs (C/D, G/H).
+# Compute ATE/saved estimands for remaining KDE fix-profile pairs (E/F = productivity_free).
 for (vid in names(kde_variant_specs)) {
   if (identical(vid, "all_free")) next
   if (!is.null(kde_variant_fits$E[[vid]])) {
@@ -3269,7 +3269,7 @@ for (vid in names(kde_variant_specs)) {
 }
 ate_I <- if (!is.null(I_marginals)) {
   t_ate_I <- proc.time()[["elapsed"]]
-  ate_univ_both(I_marginals, pp_post_bg, "Fit I (Naive univariate ETAS)")
+  ate_univ_both(I_marginals, pp_post_bg, "Fit G (Naive univariate ETAS + KDE)")
 } else NULL
 if (exists("t_ate_I", inherits = FALSE)) {
   ate_I_elapsed <- proc.time()[["elapsed"]] - t_ate_I
@@ -3277,7 +3277,7 @@ if (exists("t_ate_I", inherits = FALSE)) {
 }
 ate_J <- if (!is.null(J_marginals)) {
   t_ate_J <- proc.time()[["elapsed"]]
-  ate_univ_both(J_marginals, pp_post_sem_J, "Fit J (SEM univariate ETAS + KDE)")
+  ate_univ_both(J_marginals, pp_post_sem_J, "Fit H (SEM univariate ETAS + KDE)")
 } else NULL
 if (exists("t_ate_J", inherits = FALSE)) {
   ate_J_elapsed <- proc.time()[["elapsed"]] - t_ate_J
@@ -3285,7 +3285,7 @@ if (exists("t_ate_J", inherits = FALSE)) {
 }
 ate_K <- if (!is.null(K_marginals)) {
   t_ate_K <- proc.time()[["elapsed"]]
-  ate_univ_both(K_marginals, pp_post, "Fit K (Naive univariate ETAS, no KDE)")
+  ate_univ_both(K_marginals, pp_post, "Fit I (Naive univariate ETAS, no KDE)")
 } else NULL
 if (exists("t_ate_K", inherits = FALSE)) {
   ate_K_elapsed <- proc.time()[["elapsed"]] - t_ate_K
@@ -3293,7 +3293,7 @@ if (exists("t_ate_K", inherits = FALSE)) {
 }
 ate_L <- if (!is.null(L_marginals)) {
   t_ate_L <- proc.time()[["elapsed"]]
-  ate_univ_both(L_marginals, pp_post_sem_L, "Fit L (SEM univariate ETAS, no KDE)")
+  ate_univ_both(L_marginals, pp_post_sem_L, "Fit J (SEM univariate ETAS, no KDE)")
 } else NULL
 if (exists("t_ate_L", inherits = FALSE)) {
   ate_L_elapsed <- proc.time()[["elapsed"]] - t_ate_L
@@ -3302,26 +3302,33 @@ if (exists("t_ate_L", inherits = FALSE)) {
 
 } else {
   if (isTRUE(BOOTSTRAP_ONLY)) {
-    cat("\n--- BOOTSTRAP_ONLY: skipped Steps 4-6 (county fits / main ATEs); hydrating E/F from patch ---\n")
+    cat("\n--- BOOTSTRAP_ONLY: skipped Steps 4-6 (county fits / main ATEs); hydrating C/D from patch ---\n")
     boot_patch <- readRDS(normalizePath(BOOTSTRAP_PATCH_FILE, winslash = "/", mustWork = TRUE))
-    E_params <- if (!is.null(boot_patch$fits_named$E$params)) {
+    # Prefer new C/D (all_free); fall back to legacy E/F-as-primary or fitE/fitF aliases.
+    E_params <- if (!is.null(boot_patch$fits_named$C$params)) {
+      boot_patch$fits_named$C$params
+    } else if (!is.null(boot_patch$fits_named$E$params)) {
       boot_patch$fits_named$E$params
     } else {
       boot_patch$fitE$params
     }
-    F_params <- if (!is.null(boot_patch$fits_named$F$params)) {
+    F_params <- if (!is.null(boot_patch$fits_named$D$params)) {
+      boot_patch$fits_named$D$params
+    } else if (!is.null(boot_patch$fits_named$F$params)) {
       boot_patch$fits_named$F$params
     } else {
       boot_patch$fitF$params
     }
     if (is.null(E_params) || is.null(F_params)) {
-      stop("BOOTSTRAP_ONLY: failed to hydrate E_params/F_params from patch.")
+      stop("BOOTSTRAP_ONLY: failed to hydrate C/D (all_free) params from patch.")
     }
     E_marginals <- extract_marginals(E_params)
     F_marginals <- extract_marginals(F_params)
-    ate_E <- boot_patch$fits_named$E$ate
-    ate_F <- boot_patch$fits_named$F$ate
+    ate_E <- boot_patch$fits_named$C$ate
+    if (is.null(ate_E)) ate_E <- boot_patch$fits_named$E$ate
     if (is.null(ate_E)) ate_E <- boot_patch$fitE$ate
+    ate_F <- boot_patch$fits_named$D$ate
+    if (is.null(ate_F)) ate_F <- boot_patch$fits_named$F$ate
     if (is.null(ate_F)) ate_F <- boot_patch$fitF$ate
     # Prefer archived pre50 seed params when present (exact match to original paper run).
     pre50 <- boot_patch$control_snapshot_fits$pre50$params
@@ -3335,24 +3342,24 @@ if (exists("t_ate_L", inherits = FALSE)) {
       cat(sprintf("  Using SEM_T_TRUNC_DAYS=%.4f from patch config\n", SEM_T_TRUNC_DAYS))
     }
     cat(sprintf(
-      "  Hydrated E/F params for bivariate bootstrap (E ate_method=%s, F ate_method=%s)\n",
+      "  Hydrated C/D (all_free) params for bivariate bootstrap (C ate_method=%s, D ate_method=%s)\n",
       if (!is.null(ate_E$ate_method)) ate_E$ate_method else "NA",
       if (!is.null(ate_F$ate_method)) ate_F$ate_method else "NA"
     ))
     rm(boot_patch)
   } else {
-    cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, I/J, partition sensitivities, main ATEs) ---\n")
+    cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, univ, partition sensitivities, main ATEs) ---\n")
   }
 }
 
 # ============================================================================
-# 6a. Fit variability (repeat county all-free E/F fits)
+# 6a. Fit variability (repeat county all-free C/D fits; internal E/F objects)
 # ============================================================================
 fit_variability <- NULL
 fit_variability_elapsed <- NA_real_
 if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
   t_fitvar <- proc.time()[["elapsed"]]
-  cat(sprintf("\n--- Step 6a: Fit variability (E/F repeats; reps=%d, cores=%d) ---\n",
+  cat(sprintf("\n--- Step 6a: Fit variability (C/D all_free repeats; reps=%d, cores=%d) ---\n",
               FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
   ensure_ate_psock_pool()
 
@@ -3601,6 +3608,8 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
 if (!isTRUE(BOOTSTRAP_ONLY)) {
 cat("\n--- Step 6b checkpoint: saving pre-sensitivity results ---\n")
 pre_sens_saved_at <- as.character(Sys.time())
+# Public A–J lettering. Legacy top-level fitE/fitF alias the primary all_free
+# pair (fits_named$C/$D) for older checkpoint / bootstrap-only code paths.
 fits_named_pre_sensitivity <- list(
   A = list(
     letter = "A", label = "Naive bivariate (county)",
@@ -3612,41 +3621,35 @@ fits_named_pre_sensitivity <- list(
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
-  C = c(list(letter = "C", label = "Naive biv+KDE (all-free)",
-             method = "kde_all_free", algorithm = "naive"),
-        kde_variant_fits$E$control_only_fixed),
-  D = c(list(letter = "D", label = "SEM biv+KDE (all-free)",
-             method = "kde_all_free", algorithm = "sem"),
-        kde_variant_fits$F$control_only_fixed),
-  E = c(list(letter = "E", label = "Naive biv+KDE (all_free)",
+  C = c(list(letter = "C", label = "Naive biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "naive"),
         kde_variant_fits$E$all_free),
-  F = c(list(letter = "F", label = "SEM biv+KDE (all_free)",
+  D = c(list(letter = "D", label = "SEM biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "sem"),
         kde_variant_fits$F$all_free),
-  G = c(list(letter = "G", label = "Naive biv+KDE (productivity_free)",
+  E = c(list(letter = "E", label = "Naive biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "naive"),
         kde_variant_fits$E$productivity_free),
-  H = c(list(letter = "H", label = "SEM biv+KDE (productivity_free)",
+  F = c(list(letter = "F", label = "SEM biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
-  I = list(
-    letter = "I", label = "Naive univariate ETAS + KDE (county)",
+  G = list(
+    letter = "G", label = "Naive univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "naive",
     params = I_params, fit = fitI, ate = ate_I
   ),
-  J = list(
-    letter = "J", label = "SEM univariate ETAS + KDE (county)",
+  H = list(
+    letter = "H", label = "SEM univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
   ),
-  K = list(
-    letter = "K", label = "Naive univariate ETAS (county, no KDE)",
+  I = list(
+    letter = "I", label = "Naive univariate ETAS (county, no KDE)",
     method = "county_univariate_homog", algorithm = "naive",
     params = K_params, fit = fitK, ate = ate_K
   ),
-  L = list(
-    letter = "L", label = "SEM univariate ETAS (county, no KDE)",
+  J = list(
+    letter = "J", label = "SEM univariate ETAS (county, no KDE)",
     method = "county_univariate_homog", algorithm = "sem",
     params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
@@ -3654,6 +3657,7 @@ fits_named_pre_sensitivity <- list(
 results_pre_sensitivity <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
+  # Legacy aliases: fitE/fitF hold primary all_free content (= fits_named$C/$D).
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
   fitI = list(params = I_params, fit = fitI, ate = ate_I),
@@ -3701,9 +3705,7 @@ results_pre_sensitivity <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J",
-    K = "fits_named$K",
-    L = "fits_named$L"
+    J = "fits_named$J"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
@@ -3794,7 +3796,7 @@ invisible(gc(verbose = FALSE))
 cat("\n--- Step 7a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
 cat("  Stage meaning: MAIN-FIT ATE stage is complete; now computing sensitivity ATEs only.\n")
 
-# ATE sensitivity by KDE bandwidth (county only, inhomogeneous E/F)
+# ATE sensitivity by KDE bandwidth (county only, inhomogeneous C/D all_free)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
   if (is.null(kf) || is.null(kf$E_params) || is.null(kf$F_params)) return(NULL)
   em <- extract_marginals(kf$E_params)
@@ -3872,6 +3874,7 @@ cat("\n--- Step 7b checkpoint: saving pre-bootstrap results ---\n")
 # render from this checkpoint alone — same keys as final oklahoma_results.rds.
 pre_boot_saved_at <- as.character(Sys.time())
 
+# Public A–J lettering (same as pre-sensitivity). Legacy fitE/fitF alias C/D.
 fits_named <- list(
   A = list(
     letter = "A", label = "Naive bivariate (county)",
@@ -3883,41 +3886,35 @@ fits_named <- list(
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
-  C = c(list(letter = "C", label = "Naive biv+KDE (all-free)",
-             method = "kde_all_free", algorithm = "naive"),
-        kde_variant_fits$E$control_only_fixed),
-  D = c(list(letter = "D", label = "SEM biv+KDE (all-free)",
-             method = "kde_all_free", algorithm = "sem"),
-        kde_variant_fits$F$control_only_fixed),
-  E = c(list(letter = "E", label = "Naive biv+KDE (all_free)",
+  C = c(list(letter = "C", label = "Naive biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "naive"),
         kde_variant_fits$E$all_free),
-  F = c(list(letter = "F", label = "SEM biv+KDE (all_free)",
+  D = c(list(letter = "D", label = "SEM biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "sem"),
         kde_variant_fits$F$all_free),
-  G = c(list(letter = "G", label = "Naive biv+KDE (productivity_free)",
+  E = c(list(letter = "E", label = "Naive biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "naive"),
         kde_variant_fits$E$productivity_free),
-  H = c(list(letter = "H", label = "SEM biv+KDE (productivity_free)",
+  F = c(list(letter = "F", label = "SEM biv+KDE (productivity_free)",
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
-  I = list(
-    letter = "I", label = "Naive univariate ETAS + KDE (county)",
+  G = list(
+    letter = "G", label = "Naive univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "naive",
     params = I_params, fit = fitI, ate = ate_I
   ),
-  J = list(
-    letter = "J", label = "SEM univariate ETAS + KDE (county)",
+  H = list(
+    letter = "H", label = "SEM univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
   ),
-  K = list(
-    letter = "K", label = "Naive univariate ETAS (county, no KDE)",
+  I = list(
+    letter = "I", label = "Naive univariate ETAS (county, no KDE)",
     method = "county_univariate_homog", algorithm = "naive",
     params = K_params, fit = fitK, ate = ate_K
   ),
-  L = list(
-    letter = "L", label = "SEM univariate ETAS (county, no KDE)",
+  J = list(
+    letter = "J", label = "SEM univariate ETAS (county, no KDE)",
     method = "county_univariate_homog", algorithm = "sem",
     params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
@@ -3926,6 +3923,7 @@ fits_named <- list(
 results_pre_bootstrap <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D),
+  # Legacy aliases: fitE/fitF hold primary all_free content (= fits_named$C/$D).
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
   fitI = list(params = I_params, fit = fitI, ate = ate_I),
@@ -3963,7 +3961,7 @@ results_pre_bootstrap <- list(
     stage = "pre_bootstrap",
     saved_at = pre_boot_saved_at,
     boot_targets_requested = BOOT_TARGETS,
-    boot_targets_run = intersect(BOOT_TARGETS, c("E", "F")),
+    boot_targets_run = intersect(BOOT_TARGETS, c("C", "D")),
     boot_reps = BOOT_N_REPS
   ),
   fit_name_map = list(
@@ -3976,9 +3974,7 @@ results_pre_bootstrap <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J",
-    K = "fits_named$K",
-    L = "fits_named$L"
+    J = "fits_named$J"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
@@ -4056,9 +4052,9 @@ rm(results_pre_bootstrap)
 invisible(gc(verbose = FALSE))
 } # !BOOTSTRAP_ONLY: skip sensitivity / pre-bootstrap checkpoints
 
-# Parametric bootstrap ATEs for the all-free KDE pair (E/F).
+# Parametric bootstrap ATEs for the all-free KDE pair (C/D).
 bootstrap_ate <- NULL
-boot_targets_run <- intersect(BOOT_TARGETS, c("E", "F"))
+boot_targets_run <- intersect(BOOT_TARGETS, c("C", "D"))
 bootstrap_elapsed <- NA_real_
 if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   t_bootstrap <- proc.time()[["elapsed"]]
@@ -4066,7 +4062,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
 
   if (BOOT_REFIT_SCOPE == "full") {
-    cat("  Full scope selected: for current targets (E/F), this runs per-replicate refits before ATE estimation.\n")
+    cat("  Full scope selected: for current targets (C/D), this runs per-replicate refits before ATE estimation.\n")
   }
 
   as_pp_df <- function(sim_obj, location_process_value, inferred_process_value = NULL) {
@@ -4107,7 +4103,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   pre_window_boot <- c(min(pp_pre$t, na.rm = TRUE), 0)
   post_window_boot <- windowT_post
   pre_ctrl_seed <- PRE_CTRL_BOOT_PARAMS
-  # Bootstrap targets E/F correspond to the all-free KDE pair.
+  # Bootstrap targets C/D correspond to the all-free KDE pair (internal E_*/F_*).
   c_ctrl_seed <- E_marginals$ctrl
   c_treat_seed <- E_marginals$treat
   d_ctrl_seed <- F_marginals$ctrl
@@ -4406,8 +4402,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     boot_ate_crn_seed <- as.integer(100000L + 1000L * boot_rep_seed)
     out <- list(rep = rep_id)
 
-    if ("E" %in% boot_targets_run) {
-      out$E <- tryCatch({
+    if ("C" %in% boot_targets_run) {
+      out$C <- tryCatch({
         sim_C <- simulate_boot_data(
           c_ctrl_seed, c_treat_seed,
           biv_seed = E_params,
@@ -4442,7 +4438,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               fixed_params_in = SENSITIVITY_FIXED_PARAMS,
               ctrl_init_in = c_ctrl_seed,
               treat_init_in = c_treat_seed,
-              fit_label = sprintf("Boot E #%d", rep_id)
+              fit_label = sprintf("Boot C #%d", rep_id)
             )
             if (is.null(fit_c_boot) || is.null(fit_c_boot$fit_control) ||
                 is.null(fit_c_boot$fit_treated)) {
@@ -4457,7 +4453,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         c_stability <- assess_boot_stability(
           c_params_boot, bivariate = OK_ATE_BIVARIATE
         )
-        stop_explosive_boot(c_stability, "E", rep_id)
+        stop_explosive_boot(c_stability, "C", rep_id)
         c_marg_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
           extract_marginals(c_params_boot)
         } else {
@@ -4469,7 +4465,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             windowT = windowT_ate,
             windowS = win_km,
             state_spaces_obs = state_spaces,
-            label = sprintf("Boot E #%d", rep_id),
+            label = sprintf("Boot C #%d", rep_id),
             n_sims = ATE_N_SIMS,
             m0 = ETAS_M0,
             beta_gr = BETA_GR,
@@ -4485,7 +4481,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         } else {
           ate_estim_fast(
             c_marg_boot$ctrl, c_marg_boot$treat, sim_C$pp_post_bg_sim,
-            label = sprintf("Boot E #%d", rep_id),
+            label = sprintf("Boot C #%d", rep_id),
             filtration_history = sim_C$pre_df,
             crn_base_seed = boot_ate_crn_seed,
             phase = "bootstrap",
@@ -4503,12 +4499,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           simulation_law = sim_C$simulation_law
         )
       }, error = function(e) {
-        boot_failure(e, "E", rep_id)
+        boot_failure(e, "C", rep_id)
       })
     }
 
-    if ("F" %in% boot_targets_run) {
-      out$F <- tryCatch({
+    if ("D" %in% boot_targets_run) {
+      out$D <- tryCatch({
         sim_D <- simulate_boot_data(
           d_ctrl_seed, d_treat_seed,
           biv_seed = F_params,
@@ -4534,7 +4530,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             background_rate_var_in = "W",
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
             verbose_in = FALSE,
-            label = sprintf("Boot F #%d", rep_id)
+            label = sprintf("Boot D #%d", rep_id)
           )
           if (is.null(sem_boot)) stop("SEM refit returned NULL.")
           if (isTRUE(OK_ATE_BIVARIATE)) {
@@ -4560,7 +4556,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         d_stability <- assess_boot_stability(
           d_params_boot, bivariate = OK_ATE_BIVARIATE
         )
-        stop_explosive_boot(d_stability, "F", rep_id)
+        stop_explosive_boot(d_stability, "D", rep_id)
         d_marg_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
           extract_marginals(d_params_boot)
         } else {
@@ -4572,7 +4568,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             windowT = windowT_ate,
             windowS = win_km,
             state_spaces_obs = state_spaces,
-            label = sprintf("Boot F #%d", rep_id),
+            label = sprintf("Boot D #%d", rep_id),
             n_sims = ATE_N_SIMS,
             m0 = ETAS_M0,
             beta_gr = BETA_GR,
@@ -4588,7 +4584,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         } else {
           ate_estim_fast(
             d_marg_boot$ctrl, d_marg_boot$treat, pp_post_d_boot,
-            label = sprintf("Boot F #%d", rep_id),
+            label = sprintf("Boot D #%d", rep_id),
             filtration_history = sim_D$pre_df,
             crn_base_seed = boot_ate_crn_seed,
             phase = "bootstrap",
@@ -4606,7 +4602,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           simulation_law = sim_D$simulation_law
         )
       }, error = function(e) {
-        boot_failure(e, "F", rep_id)
+        boot_failure(e, "D", rep_id)
       })
     }
     rm_vars <- intersect(
@@ -4617,7 +4613,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
     if (length(rm_vars) > 0L) rm(list = rm_vars)
     invisible(gc(verbose = FALSE))
     elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
-    ok_targets <- names(out)[names(out) %in% c("E", "F")]
+    ok_targets <- names(out)[names(out) %in% c("C", "D")]
     ok_count <- if (length(ok_targets) > 0) {
       sum(vapply(out[ok_targets], function(x) !is.null(x) && isTRUE(x$ok), logical(1)))
     } else {
@@ -4730,40 +4726,40 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       bias_correction_stage = "after_stability_filter"
     )
   )
-  if ("E" %in% boot_targets_run) bootstrap_ate$fit_E <- make_boot_block("E")
-  if ("F" %in% boot_targets_run) bootstrap_ate$fit_F <- make_boot_block("F")
-  # Backward-compatibility aliases expected by older report code.
-  if (!is.null(bootstrap_ate$fit_E) && is.null(bootstrap_ate$fit_C)) bootstrap_ate$fit_C <- bootstrap_ate$fit_E
-  if (!is.null(bootstrap_ate$fit_F) && is.null(bootstrap_ate$fit_D)) bootstrap_ate$fit_D <- bootstrap_ate$fit_F
+  if ("C" %in% boot_targets_run) bootstrap_ate$fit_C <- make_boot_block("C")
+  if ("D" %in% boot_targets_run) bootstrap_ate$fit_D <- make_boot_block("D")
+  # Legacy aliases: older report/scenario code looked for fit_E/fit_F as primary.
+  if (!is.null(bootstrap_ate$fit_C) && is.null(bootstrap_ate$fit_E)) bootstrap_ate$fit_E <- bootstrap_ate$fit_C
+  if (!is.null(bootstrap_ate$fit_D) && is.null(bootstrap_ate$fit_F)) bootstrap_ate$fit_F <- bootstrap_ate$fit_D
 rm(boot_results)
 invisible(gc(verbose = FALSE))
 
-  if (!is.null(bootstrap_ate$fit_E)) {
-    bC <- bootstrap_ate$fit_E$replicate_summary
+  if (!is.null(bootstrap_ate$fit_C)) {
+    bC <- bootstrap_ate$fit_C$replicate_summary
     if (nrow(bC) > 0) {
-      cat(sprintf("  Bootstrap E complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bC), bootstrap_ate$fit_E$n_attempted,
-                  bootstrap_ate$fit_E$n_explosive,
-                  bootstrap_ate$fit_E$n_error,
+      cat(sprintf("  Bootstrap C complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bC), bootstrap_ate$fit_C$n_attempted,
+                  bootstrap_ate$fit_C$n_explosive,
+                  bootstrap_ate$fit_C$n_error,
                   mean(bC$ate_total_mean, na.rm = TRUE),
                   stats::sd(bC$ate_total_mean, na.rm = TRUE)))
     } else {
-      cat(sprintf("  Bootstrap E complete: success=%d, fail=%d\n",
-                  bootstrap_ate$fit_E$n_success, bootstrap_ate$fit_E$n_fail))
+      cat(sprintf("  Bootstrap C complete: success=%d, fail=%d\n",
+                  bootstrap_ate$fit_C$n_success, bootstrap_ate$fit_C$n_fail))
     }
   }
-  if (!is.null(bootstrap_ate$fit_F)) {
-    bD <- bootstrap_ate$fit_F$replicate_summary
+  if (!is.null(bootstrap_ate$fit_D)) {
+    bD <- bootstrap_ate$fit_D$replicate_summary
     if (nrow(bD) > 0) {
-      cat(sprintf("  Bootstrap F complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
-                  nrow(bD), bootstrap_ate$fit_F$n_attempted,
-                  bootstrap_ate$fit_F$n_explosive,
-                  bootstrap_ate$fit_F$n_error,
+      cat(sprintf("  Bootstrap D complete: retained=%d/%d, explosive=%d, other_fail=%d, mean total ATE=%.1f, SD(rep means)=%.1f\n",
+                  nrow(bD), bootstrap_ate$fit_D$n_attempted,
+                  bootstrap_ate$fit_D$n_explosive,
+                  bootstrap_ate$fit_D$n_error,
                   mean(bD$ate_total_mean, na.rm = TRUE),
                   stats::sd(bD$ate_total_mean, na.rm = TRUE)))
     } else {
-      cat(sprintf("  Bootstrap F complete: success=%d, fail=%d\n",
-                  bootstrap_ate$fit_F$n_success, bootstrap_ate$fit_F$n_fail))
+      cat(sprintf("  Bootstrap D complete: success=%d, fail=%d\n",
+                  bootstrap_ate$fit_D$n_success, bootstrap_ate$fit_D$n_fail))
     }
   }
 
@@ -4841,17 +4837,24 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   }
   ate_E <- recompute_point_ate(
     E_params, E_marginals, pp_post,
-    sprintf("Fit E point (%s)", OK_ATE_METHOD_LABEL)
+    sprintf("Fit C point (%s)", OK_ATE_METHOD_LABEL)
   )
   ate_F <- recompute_point_ate(
     F_params, F_marginals, pp_post,
-    sprintf("Fit F point (%s)", OK_ATE_METHOD_LABEL)
+    sprintf("Fit D point (%s)", OK_ATE_METHOD_LABEL)
   )
-  if (!is.null(results_final$fits_named$E)) {
+  # Write into public primary slots C/D; also refresh legacy E/F-as-primary if present.
+  if (!is.null(results_final$fits_named$C)) {
+    results_final$fits_named$C$ate <- ate_E
+    results_final$fits_named$C$params <- E_params
+  } else if (!is.null(results_final$fits_named$E)) {
     results_final$fits_named$E$ate <- ate_E
     results_final$fits_named$E$params <- E_params
   }
-  if (!is.null(results_final$fits_named$F)) {
+  if (!is.null(results_final$fits_named$D)) {
+    results_final$fits_named$D$ate <- ate_F
+    results_final$fits_named$D$params <- F_params
+  } else if (!is.null(results_final$fits_named$F)) {
     results_final$fits_named$F$ate <- ate_F
     results_final$fits_named$F$params <- F_params
   }
@@ -4956,21 +4959,23 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     if (is.null(ate$all_nothing_sim$total_saved)) return(NA_real_)
     mean(ate$all_nothing_sim$total_saved, na.rm = TRUE)
   }
-  cat(sprintf("  Point ATE E=%.1f F=%.1f method=%s\n",
+  cat(sprintf("  Point ATE C=%.1f D=%.1f method=%s\n",
               point_mean(ate_E), point_mean(ate_F), OK_ATE_METHOD_LABEL))
-  if (!is.null(bootstrap_ate$fit_E$replicate_summary) &&
-      nrow(bootstrap_ate$fit_E$replicate_summary) > 0) {
-    cat(sprintf("  E boot mean=%.1f sd=%.1f (n=%d)\n",
-                mean(bootstrap_ate$fit_E$replicate_summary$ate_total_mean, na.rm = TRUE),
-                stats::sd(bootstrap_ate$fit_E$replicate_summary$ate_total_mean, na.rm = TRUE),
-                nrow(bootstrap_ate$fit_E$replicate_summary)))
+  boot_c_blk <- if (!is.null(bootstrap_ate$fit_C)) bootstrap_ate$fit_C else bootstrap_ate$fit_E
+  boot_d_blk <- if (!is.null(bootstrap_ate$fit_D)) bootstrap_ate$fit_D else bootstrap_ate$fit_F
+  if (!is.null(boot_c_blk$replicate_summary) &&
+      nrow(boot_c_blk$replicate_summary) > 0) {
+    cat(sprintf("  C boot mean=%.1f sd=%.1f (n=%d)\n",
+                mean(boot_c_blk$replicate_summary$ate_total_mean, na.rm = TRUE),
+                stats::sd(boot_c_blk$replicate_summary$ate_total_mean, na.rm = TRUE),
+                nrow(boot_c_blk$replicate_summary)))
   }
-  if (!is.null(bootstrap_ate$fit_F$replicate_summary) &&
-      nrow(bootstrap_ate$fit_F$replicate_summary) > 0) {
-    cat(sprintf("  F boot mean=%.1f sd=%.1f (n=%d)\n",
-                mean(bootstrap_ate$fit_F$replicate_summary$ate_total_mean, na.rm = TRUE),
-                stats::sd(bootstrap_ate$fit_F$replicate_summary$ate_total_mean, na.rm = TRUE),
-                nrow(bootstrap_ate$fit_F$replicate_summary)))
+  if (!is.null(boot_d_blk$replicate_summary) &&
+      nrow(boot_d_blk$replicate_summary) > 0) {
+    cat(sprintf("  D boot mean=%.1f sd=%.1f (n=%d)\n",
+                mean(boot_d_blk$replicate_summary$ate_total_mean, na.rm = TRUE),
+                stats::sd(boot_d_blk$replicate_summary$ate_total_mean, na.rm = TRUE),
+                nrow(boot_d_blk$replicate_summary)))
   }
   cat("\n=== Oklahoma bootstrap stage finished successfully ===\n")
   quit(save = "no", status = 0)
@@ -5129,6 +5134,7 @@ if (nrow(timing_df) > 0L) {
 results <- list(
   fitB = list(params = B_params, loglik = B_loglik, fit = fitB, ate = ate_B),
   fitD = list(params = D_params, ctrl = D_ctrl, treat = D_treat, sem = semD, ate = ate_D, louis = louis_D),
+  # Legacy aliases: fitE/fitF hold primary all_free content (= fits_named$C/$D).
   fitE = list(params = E_params, loglik = E_loglik, fit = fitE, ate = ate_E),
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F, louis = louis_F),
   fitI = list(params = I_params, fit = fitI, ate = ate_I),
@@ -5172,9 +5178,7 @@ results <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J",
-    K = "fits_named$K",
-    L = "fits_named$L"
+    J = "fits_named$J"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,

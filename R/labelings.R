@@ -180,7 +180,14 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
         changes <- points
       } else {
         possible_labels <- which(inds == i & dat$inferred_process == relabel_label)
-        changes <- sample(possible_labels, size = min(n_thin, length(possible_labels)), replace = FALSE)
+        # sample() gotcha: with a single candidate index k, sample(k, ...)
+        # would draw from 1:k. Sample positions instead (stream-identical
+        # to sample(x, ...) when there are 2+ candidates).
+        changes <- possible_labels[sample.int(
+          length(possible_labels),
+          size = min(n_thin, length(possible_labels)),
+          replace = FALSE
+        )]
       }
       total_changes <- total_changes + length(changes)
       current_labels <- dat$inferred_process[changes]
@@ -246,7 +253,11 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
         changes <- points
       } else {
         possible_labels <- which(inds == i & dat$inferred_process == relabel_label)
-        changes <- sample(possible_labels, size = min(n_thin, length(possible_labels)), replace = FALSE)
+        changes <- possible_labels[sample.int(
+          length(possible_labels),
+          size = min(n_thin, length(possible_labels)),
+          replace = FALSE
+        )]
       }
       current_labels <- dat$location_process[changes]
       new_labels <- c("control", "treated")[1 * (current_labels == "control") + 1]
@@ -423,29 +434,6 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
   return(list(labellings = labellings, likelihoods = likelihoods))
 }
 
-#' Simulation-based fast labeling with proximity weighting
-#'
-#' Uses discrepancy-guided proposals with distance-based weighting for
-#' selecting which points to relabel near process boundaries.
-#'
-#' @param pp_data Data frame with columns x, y, t, inferred_process
-#' @param partition A spatstat tess object
-#' @param partition_process Character vector of process names per tile
-#' @param statespace Full observation window (owin)
-#' @param windowT Numeric vector c(start, end)
-#' @param state_spaces Optional precomputed state spaces
-#' @param hawkes_params_control Control Hawkes parameters
-#' @param hawkes_params_treated Treated Hawkes parameters
-#' @param change_factor Scaling factor for relabeling count
-#' @param filtration Optional pre-treatment history
-#' @param verbose Print progress
-#' @param partition_mask Optional mask for fast tile lookup
-#' @param proximity_weight Weight for distance-based vs uniform sampling (0-1)
-#' @param points_tile_index Optional precomputed tile index for \code{pp_data} (same length as rows); skips \code{tileindex()} when provided
-#' @param ... Additional arguments passed to generate_inhomogeneous_hawkes
-#' @return pp_data with updated inferred_process
-#' @export
-#'
 #' Generate all single-flip labelling proposals
 #'
 #' For each post-treatment point, create one proposal where that point's
@@ -469,6 +457,28 @@ single_flip_proposals <- function(post, pre) {
   })
 }
 
+#' Simulation-based fast labeling with proximity weighting
+#'
+#' Uses discrepancy-guided proposals with distance-based weighting for
+#' selecting which points to relabel near process boundaries.
+#'
+#' @param pp_data Data frame with columns x, y, t, inferred_process
+#' @param partition A spatstat tess object
+#' @param partition_process Character vector of process names per tile
+#' @param statespace Full observation window (owin)
+#' @param windowT Numeric vector c(start, end)
+#' @param state_spaces Optional precomputed state spaces
+#' @param hawkes_params_control Control Hawkes parameters
+#' @param hawkes_params_treated Treated Hawkes parameters
+#' @param change_factor Scaling factor for relabeling count
+#' @param filtration Optional pre-treatment history
+#' @param verbose Print progress
+#' @param partition_mask Optional mask for fast tile lookup
+#' @param proximity_weight Weight for distance-based vs uniform sampling (0-1)
+#' @param points_tile_index Optional precomputed tile index for \code{pp_data} (same length as rows); skips \code{tileindex()} when provided
+#' @param ... Additional arguments passed to generate_inhomogeneous_hawkes
+#' @return pp_data with updated inferred_process
+#' @export
 simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    partition,
                                                    partition_process,
@@ -727,12 +737,26 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
       win_box <- owin(range(dat$x), range(dat$y))
       X_attract <- ppp(dat$x[attractor_idx], dat$y[attractor_idx], window = win_box, check = FALSE)
       if (use_precompute && proximity_weight > 0) {
-        relabel_idx <- which(dat$inferred_process == relabel_label)
-        if (length(relabel_idx) > 0) {
-          X_relabel <- ppp(dat$x[relabel_idx], dat$y[relabel_idx], window = win_box, check = FALSE)
-          dists_all <- nncross(X_relabel, X_attract)$dist
-          geom_weight_raw <- numeric(n_pts)
-          geom_weight_raw[relabel_idx] <- 1 / (dists_all + 1e-4)
+        gw_cache <- proposal_sim_cache$geom_weights
+        if (!is.null(gw_cache) &&
+            identical(gw_cache$target_label, target_label) &&
+            !is.null(gw_cache$weights)) {
+          # All proposals in one batch start from the same labelling, so the
+          # nncross distance weights are deterministic and identical; reuse
+          # the first proposal's computation (no RNG involved).
+          geom_weight_raw <- gw_cache$weights
+        } else {
+          relabel_idx <- which(dat$inferred_process == relabel_label)
+          if (length(relabel_idx) > 0) {
+            X_relabel <- ppp(dat$x[relabel_idx], dat$y[relabel_idx], window = win_box, check = FALSE)
+            dists_all <- nncross(X_relabel, X_attract)$dist
+            geom_weight_raw <- numeric(n_pts)
+            geom_weight_raw[relabel_idx] <- 1 / (dists_all + 1e-4)
+          }
+          proposal_sim_cache_out$geom_weights <- list(
+            target_label = target_label,
+            weights = geom_weight_raw
+          )
         }
       }
     }
@@ -799,6 +823,12 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
         sampling_weights <- base_weights
       }
 
+      # Uniform weights: drop prob so base-R sampling is used; this is
+      # distributionally identical but keeps the RNG stream bitwise-aligned
+      # with the non-fast proposal path.
+      if (!is.null(sampling_weights) && length(unique(sampling_weights)) <= 1L) {
+        sampling_weights <- NULL
+      }
       changes_local <- sample(
         length(candidates),
         size = min(n_thin, length(candidates)),
@@ -914,6 +944,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
             sampling_weights_t <- tw_t / sum(tw_t)
           }
         }
+        if (!is.null(sampling_weights_t) &&
+            length(unique(sampling_weights_t)) <= 1L) {
+          sampling_weights_t <- NULL
+        }
         changes_local <- sample(length(candidates_t),
                                 size = min(n_thin, length(candidates_t)),
                                 replace = FALSE, prob = sampling_weights_t)
@@ -969,6 +1003,8 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #'   no-flip iterations.
 #' @param MCMC_style Use MCMC acceptance/rejection
 #' @param verbose Print progress
+#' @param biv_n_threads Worker threads for the batched bivariate metric
+#'   kernel (default 1 = serial, identical to previous behaviour).
 #' @param ... Additional arguments
 #' @return List with labelling, treated_par, control_par, accuracies, etc.
 #' @export
@@ -1005,7 +1041,12 @@ em_style_labelling <- function(pp_data,
                                model_type = "hawkes",
                                temporal_weight = 0,
                                temporal_scale_days = NULL,
+                               biv_n_threads = 1L,
                                ...) {
+  biv_n_threads <- suppressWarnings(as.integer(biv_n_threads))
+  if (!is.finite(biv_n_threads) || is.na(biv_n_threads) || biv_n_threads < 1L) {
+    biv_n_threads <- 1L
+  }
   sem_timing_verbose <- tolower(Sys.getenv("OK_SEM_TIMING_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
   sem_proposal_verbose <- tolower(Sys.getenv("OK_SEM_PROPOSAL_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
   dots <- list(...)
@@ -1210,6 +1251,65 @@ em_style_labelling <- function(pp_data,
     out <- out[out$t < time_window[1], , drop = FALSE]
     out[order(out$t), , drop = FALSE]
   }
+
+  # Bivariate metric precompute. The event geometry never changes across
+  # labelling iterations (only labels do), so the sorted pre+post frame,
+  # background masks, active areas, and the post-row -> sorted-row index are
+  # built once here instead of once per iteration; each proposal then only
+  # writes its labels into a preallocated integer matrix.
+  if (is_biv_etas) {
+    biv_n_pre <- nrow(pre_data)
+    biv_n_post <- nrow(post_data)
+    biv_perm <- order(c(pre_data$t, post_data$t))
+    biv_geom_full <- rbind(pre_data, post_data)[biv_perm, , drop = FALSE]
+    biv_nn <- nrow(biv_geom_full)
+    biv_post_slot <- match(biv_n_pre + seq_len(biv_n_post), biv_perm)
+    biv_aS0 <- spatstat.geom::area(control_state_space)
+    biv_aS1 <- spatstat.geom::area(treated_state_space)
+    if (!is.finite(biv_aS0) || biv_aS0 <= 0) biv_aS0 <- 1
+    if (!is.finite(biv_aS1) || biv_aS1 <= 0) biv_aS1 <- 1
+    biv_W0 <- rep(1.0, biv_nn)
+    biv_W1 <- rep(1.0, biv_nn)
+    biv_W0[inside.owin(biv_geom_full$x, biv_geom_full$y, treated_state_space)] <- 0
+    biv_W1[inside.owin(biv_geom_full$x, biv_geom_full$y, control_state_space)] <- 0
+    if (!is.null(treated_background_zero_before)) {
+      biv_W1[biv_geom_full$t < as.numeric(treated_background_zero_before)] <- 0
+    }
+    if (!is.null(background_rate_var) && background_rate_var %in% names(biv_geom_full)) {
+      W_cov <- as.numeric(biv_geom_full[[background_rate_var]])
+      W_cov[!is.finite(W_cov)] <- 0
+      min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+      if (!is.finite(min_pos)) min_pos <- 1e-12
+      W_cov[W_cov <= 0] <- min_pos
+      biv_W0 <- biv_W0 * W_cov
+      biv_W1 <- biv_W1 * W_cov
+    }
+    biv_pid_base <- integer(biv_nn)
+    if (biv_n_pre > 0) {
+      pre_lab <- if ("inferred_process" %in% names(pre_data)) {
+        pre_data$inferred_process
+      } else {
+        pre_data$location_process
+      }
+      biv_pid_base[match(seq_len(biv_n_pre), biv_perm)] <-
+        as.integer(pre_lab == "treated")
+    }
+    biv_tt <- biv_geom_full$t - history_window[1]
+    biv_tmax <- history_window[2] - history_window[1]
+    # Fallback for labellings that do not preserve the post_data row order
+    # (none of the current proposal generators reorder rows).
+    biv_label_slow_path <- function(post_realiz) {
+      post_ord <- post_realiz[order(post_realiz$t), , drop = FALSE]
+      full <- rbind(pre_data, post_ord)
+      full <- full[order(full$t), , drop = FALSE]
+      proc_col <- if ("inferred_process" %in% names(full)) {
+        full$inferred_process
+      } else {
+        full$location_process
+      }
+      if (is.character(proc_col)) as.integer(proc_col == "treated") else as.integer(proc_col)
+    }
+  }
   hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
     if (nrow(post_realiz) < 1L) return(-Inf)
     post_realiz <- post_realiz[order(post_realiz$t), , drop = FALSE]
@@ -1349,6 +1449,12 @@ em_style_labelling <- function(pp_data,
           post_proposals[[j]] <- prop_result$data
           if (is.null(proposal_sim_cache)) {
             proposal_sim_cache <- prop_result$proposal_sim_cache
+          } else if (is.null(proposal_sim_cache$geom_weights) &&
+                     !is.null(prop_result$proposal_sim_cache$geom_weights)) {
+            # Adopt nncross weights computed by a later proposal (the first
+            # proposal may have drawn zero relabellings and skipped them).
+            proposal_sim_cache$geom_weights <-
+              prop_result$proposal_sim_cache$geom_weights
           }
           if (verbose && sem_timing_verbose) {
             flips_j <- sum(post_data$inferred_process != post_proposals[[j]]$inferred_process, na.rm = TRUE)
@@ -1414,73 +1520,151 @@ em_style_labelling <- function(pp_data,
             rho_max = biv_rho_max
           )
         }
-        eval_biv <- function(realiz) {
-          # Include pre-treatment control history so post-treatment scoring
-          # reflects carryover/triggering from pre events.
-          realiz_full <- rbind(pre_data, realiz)
-          realiz_full <- realiz_full[order(realiz_full$t), , drop = FALSE]
+        # Shared geometry for all proposals (post + pre history); only labels
+        # differ. Geometry, W masks, and index maps were precomputed before
+        # the loop (biv_* variables); each proposal writes its labels into a
+        # preallocated pid matrix and all are scored in one batched C++ call.
+        eval_biv_batch <- function(post_list) {
+          K_m <- length(post_list)
+          if (K_m == 0L) return(numeric(0))
+          pid_mat <- matrix(biv_pid_base, biv_nn, K_m)
+          for (kk in seq_len(K_m)) {
+            pl <- post_list[[kk]]
+            if (nrow(pl) == biv_n_post && !is.unsorted(pl$t)) {
+              proc_col <- if ("inferred_process" %in% names(pl)) {
+                pl$inferred_process
+              } else {
+                pl$location_process
+              }
+              pid_mat[biv_post_slot, kk] <- if (is.character(proc_col)) {
+                as.integer(proc_col == "treated")
+              } else {
+                as.integer(proc_col)
+              }
+            } else {
+              pid_mat[, kk] <- biv_label_slow_path(pl)
+            }
+          }
           do.call(
-            loglik_etas_bivariate,
+            loglik_etas_bivariate_batch,
             c(
               list(
-                params = biv_par, realiz = realiz_full,
-                windowT = history_window, windowS = statespace,
-                control_state_space = control_state_space,
-                treated_state_space = treated_state_space,
-                background_rate_var = background_rate_var,
+                params = biv_par,
+                t = biv_tt,
+                x = biv_geom_full$x, y = biv_geom_full$y,
+                mag = biv_geom_full$mag,
+                process_ids = pid_mat,
+                W0s = matrix(biv_W0, biv_nn, K_m),
+                W1s = matrix(biv_W1, biv_nn, K_m),
+                areaS_0 = biv_aS0, areaS_1 = biv_aS1,
+                t_max = biv_tmax,
+                windowT = history_window,
                 treated_background_zero_before = treated_background_zero_before,
-                t_trunc = t_trunc
+                t_trunc = t_trunc, t_already_shifted = TRUE,
+                n_threads = biv_n_threads
               ),
               biv_ll_extra
             )
           )
         }
         if (length(unchanged_idx) > 0) {
-          if (!is.finite(current_metric_cache)) current_metric_cache <- eval_biv(ref_post)
+          if (!is.finite(current_metric_cache)) {
+            current_metric_cache <- eval_biv_batch(list(ref_post))[1]
+          }
           metric[unchanged_idx] <- current_metric_cache
         }
         if (length(changed_idx) > 0) {
-          metric[changed_idx] <- vapply(changed_idx, function(j) {
-            y <- labelling_proposals[[j]]
-            eval_biv(y)
-          }, numeric(1))
+          metric[changed_idx] <- eval_biv_batch(
+            lapply(changed_idx, function(j) labelling_proposals[[j]])
+          )
+        }
+      } else if (hawkes_use_filtration_history && !is_etas) {
+        # Hawkes filtration metric: batch control+treated over shared geometry.
+        printed_metric_diag <- FALSE
+        score_hawkes_batch <- function(post_list) {
+          K_m <- length(post_list)
+          if (K_m == 0L) return(numeric(0))
+          labs <- lapply(post_list, function(post_realiz) {
+            rbind(pre_data, post_realiz[order(post_realiz$t), , drop = FALSE])
+          })
+          ctrl_mem <- .hawkes_batch_membership(labs, "control", time_window[1], TRUE)
+          treat_mem <- .hawkes_batch_membership(labs, "treated", time_window[1], TRUE)
+          total_area <- spatstat.geom::area(statespace)
+          W_ctrl <- rep(1.0, length(ctrl_mem$t))
+          W_treat <- rep(1.0, length(treat_mem$t))
+          if (!is.null(background_rate_var) && background_rate_var %in% names(ctrl_mem$geom)) {
+            W_ctrl <- as.numeric(ctrl_mem$geom[[background_rate_var]])
+            W_treat <- as.numeric(treat_mem$geom[[background_rate_var]])
+            W_ctrl[!is.finite(W_ctrl)] <- 0
+            W_treat[!is.finite(W_treat)] <- 0
+          }
+          area_ctrl <- total_area
+          area_treat <- total_area
+          if (!is.null(treated_state_space)) {
+            area_ctrl <- max(1e-12, total_area - spatstat.geom::area(treated_state_space))
+            W_ctrl[inside.owin(ctrl_mem$x, ctrl_mem$y, w = treated_state_space)] <- 0
+          }
+          if (!is.null(control_state_space)) {
+            area_treat <- max(1e-12, total_area - spatstat.geom::area(control_state_space))
+            W_treat[inside.owin(treat_mem$x, treat_mem$y, w = control_state_space)] <- 0
+          }
+          ctrl_liks <- loglik_hawk_filtration_batch(
+            params = ctrl_params_vec,
+            t = ctrl_mem$t, x = ctrl_mem$x, y = ctrl_mem$y,
+            is_observed = ctrl_mem$is_observed, member = ctrl_mem$member,
+            W_val = W_ctrl, areaS = area_ctrl,
+            t_start = time_window[1], t_end = time_window[2],
+            t_trunc = t_trunc,
+            kernel = hawkes_kernel, spatial_kernel = hawkes_spatial_kernel,
+            spatial_q = hawkes_spatial_q, spatial_d = hawkes_spatial_d
+          )
+          treat_liks <- loglik_hawk_filtration_batch(
+            params = treat_params_vec,
+            t = treat_mem$t, x = treat_mem$x, y = treat_mem$y,
+            is_observed = treat_mem$is_observed, member = treat_mem$member,
+            W_val = W_treat, areaS = area_treat,
+            t_start = time_window[1], t_end = time_window[2],
+            t_trunc = t_trunc,
+            kernel = hawkes_kernel, spatial_kernel = hawkes_spatial_kernel,
+            spatial_q = hawkes_spatial_q, spatial_d = hawkes_spatial_d
+          )
+          if (verbose && !printed_metric_diag && K_m > 0L) {
+            cat(sprintf("  [metric diag] proposal 1: ctrl_lik=%s treat_lik=%s\n",
+                        signif(ctrl_liks[1], 6), signif(treat_liks[1], 6)))
+            printed_metric_diag <<- TRUE
+          }
+          ctrl_liks + treat_liks
+        }
+        if (length(unchanged_idx) > 0) {
+          if (!is.finite(current_metric_cache)) {
+            current_metric_cache <- score_hawkes_batch(list(ref_post))[1]
+          }
+          metric[unchanged_idx] <- current_metric_cache
+        }
+        if (length(changed_idx) > 0) {
+          metric[changed_idx] <- score_hawkes_batch(
+            lapply(changed_idx, function(j) labelling_proposals[[j]])
+          )
         }
       } else {
       pc_ctrl_all <- precompute_loglik_args(ref_post, statespace, treated_state_space)
       pc_treat_all <- precompute_loglik_args(ref_post, statespace, control_state_space)
       printed_metric_diag <- FALSE
-      pre_ctrl_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("control") else NULL
-      pre_treat_hist <- if (hawkes_use_filtration_history && !is_etas) select_pre_history_by_label("treated") else NULL
       eval_nonbiv <- function(realiz, ctrl_idx, treat_idx) {
         if (length(ctrl_idx) < 1L) return(-Inf)
         if (length(treat_idx) < 1L) return(-Inf)
-        if (hawkes_use_filtration_history && !is_etas) {
-          control_lik <- hawkes_conditional_loglik(
-            params_vec = ctrl_params_vec,
-            post_realiz = realiz[ctrl_idx, , drop = FALSE],
-            zero_background_region = treated_state_space,
-            pre_hist = pre_ctrl_hist
-          )
-          treat_lik <- hawkes_conditional_loglik(
-            params_vec = treat_params_vec,
-            post_realiz = realiz[treat_idx, , drop = FALSE],
-            zero_background_region = control_state_space,
-            pre_hist = pre_treat_hist
-          )
-        } else {
-          control_lik <- loglik_fn(
-            params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
-            windowT = time_window, windowS = statespace,
-            precomp = list(active_area = pc_ctrl_all$active_area,
-                           in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
-          )
-          treat_lik <- loglik_fn(
-            params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
-            windowT = time_window, windowS = statespace,
-            precomp = list(active_area = pc_treat_all$active_area,
-                           in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
-          )
-        }
+        control_lik <- loglik_fn(
+          params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
+          windowT = time_window, windowS = statespace,
+          precomp = list(active_area = pc_ctrl_all$active_area,
+                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
+        )
+        treat_lik <- loglik_fn(
+          params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
+          windowT = time_window, windowS = statespace,
+          precomp = list(active_area = pc_treat_all$active_area,
+                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
+        )
         if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
                       length(ctrl_idx), length(treat_idx), signif(control_lik, 6), signif(treat_lik, 6)))
@@ -1656,6 +1840,9 @@ em_style_labelling <- function(pp_data,
             process_id = process_id_full
           )
           biv_obj <- function(par15) {
+            # precomp already includes event-side W masks / process_id, so do
+            # not re-pass background_rate_var. The activation cutoff is still
+            # passed: loglik uses it only for the mu_1 compensator exposure.
             do.call(
               loglik_etas_bivariate,
               c(
@@ -1664,7 +1851,6 @@ em_style_labelling <- function(pp_data,
                   windowT = history_window, windowS = statespace,
                   control_state_space = control_state_space,
                   treated_state_space = treated_state_space,
-                  background_rate_var = background_rate_var,
                   treated_background_zero_before = treated_background_zero_before,
                   t_trunc = t_trunc,
                   precomp = biv_precomp

@@ -12,7 +12,12 @@ fit_hawkes_with_filtration(
   windowS = c(0, 1, 0, 1),
   maxit = 1000,
   poisson_flag = FALSE,
-  zero_background_region = NULL
+  zero_background_region = NULL,
+  kernel = NULL,
+  spatial_kernel = NULL,
+  spatial_q = NULL,
+  spatial_d = NULL,
+  t_trunc = NULL
 )
 }
 \arguments{

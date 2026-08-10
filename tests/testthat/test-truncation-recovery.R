@@ -44,5 +44,5 @@ test_that("parameter recovery is equivalent with high truncation vs no truncatio
   expect_equal(fit_no_trunc$par, fit_high_trunc$par, tolerance = 1e-5)
   
   # And they should be reasonably close to true parameters
-  expect_equal(unname(fit_no_trunc$par["K"]), true_params$K, tolerance = 0.3)
+  expect_equal(fit_no_trunc$par[["K"]], true_params$K, tolerance = 0.3)
 })

@@ -355,7 +355,7 @@ test_that("fit_hawkes uses precomputed spatial masks without changing the fitted
                                  precomp = list(active_area = pc$active_area,
                                                 in_zero_bg = pc$in_zero_bg_all))
 
-  expect_true(all(is.finite(unlist(fit$par))))
+  expect_true(all(is.finite(unlist(fit$par[c("mu", "alpha", "beta", "K")]))))
   expect_equal(ll_precomp, ll_direct)
 })
 

@@ -2,7 +2,7 @@
 % Please edit documentation in R/labelings.R
 \name{single_flip_proposals}
 \alias{single_flip_proposals}
-\title{Simulation-based fast labeling with proximity weighting}
+\title{Generate all single-flip labelling proposals}
 \usage{
 single_flip_proposals(post, pre)
 }
@@ -10,43 +10,12 @@ single_flip_proposals(post, pre)
 \item{post}{Data frame of post-treatment points (with inferred_process)}
 
 \item{pre}{Data frame of pre-treatment points (all labelled "control")}
-
-\item{pp_data}{Data frame with columns x, y, t, inferred_process}
-
-\item{partition}{A spatstat tess object}
-
-\item{partition_process}{Character vector of process names per tile}
-
-\item{statespace}{Full observation window (owin)}
-
-\item{windowT}{Numeric vector c(start, end)}
-
-\item{state_spaces}{Optional precomputed state spaces}
-
-\item{hawkes_params_control}{Control Hawkes parameters}
-
-\item{hawkes_params_treated}{Treated Hawkes parameters}
-
-\item{change_factor}{Scaling factor for relabeling count}
-
-\item{filtration}{Optional pre-treatment history}
-
-\item{verbose}{Print progress}
-
-\item{partition_mask}{Optional mask for fast tile lookup}
-
-\item{proximity_weight}{Weight for distance-based vs uniform sampling (0-1)}
-
-\item{points_tile_index}{Optional precomputed tile index for \code{pp_data} (same length as rows); skips \code{tileindex()} when provided}
-
-\item{...}{Additional arguments passed to generate_inhomogeneous_hawkes}
 }
 \value{
-pp_data with updated inferred_process
-
 List of N data frames, each with one point's label flipped
 }
 \description{
-Uses discrepancy-guided proposals with distance-based weighting for
-selecting which points to relabel near process boundaries.
+For each post-treatment point, create one proposal where that point's
+label is toggled (control <-> treated). Returns N proposals for N post
+points -- exhaustive over all single-point moves.
 }

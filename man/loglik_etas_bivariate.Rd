@@ -23,12 +23,13 @@ loglik_etas_bivariate(
   finite_moment_soft_power = 2,
   enforce_alpha_subcritical = TRUE,
   alpha_beta_gap_min = 1e-04,
+  alpha_m_lower_bound = 0,
   alpha_beta_soft_gap = 0.05,
   alpha_beta_soft_weight = 2000,
   alpha_beta_soft_power = 2,
   max_branching_radius = Inf,
   stability_barrier_start = 0.95,
-  stability_barrier_weight = 50000,
+  stability_barrier_weight = 0,
   stability_barrier_power = 4,
   t_trunc = NULL,
   ...
@@ -50,9 +51,21 @@ loglik_etas_bivariate(
 
 \item{treated_state_space}{owin for the treated region.}
 
+\item{background_rate_var}{Optional column of \code{realiz} with a
+mean-one spatial background weight (e.g. KDE), multiplied into both
+background weights. Skipped when a \code{precomp} is supplied via
+\code{...} (precomputed weights must already include it).}
+
+\item{treated_background_zero_before}{Optional activation time of the
+treated background. Event-side weights before this time are zeroed
+(baked into \code{precomp} weights when one is supplied) and the
+\code{mu_1} compensator is charged only from this time onward, so this
+argument must be passed even alongside a \code{precomp}.}
+
 \item{t_trunc}{Temporal truncation (NULL = none).}
 
-\item{...}{Ignored.}
+\item{...}{Optionally \code{precomp} (list with \code{W_0}, \code{W_1},
+\code{areaS_0}, \code{areaS_1}, and optionally \code{process_id}).}
 }
 \value{
 Scalar log-likelihood.

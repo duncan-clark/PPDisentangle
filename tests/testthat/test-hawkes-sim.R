@@ -138,7 +138,7 @@ test_that("fit_hawkes recovers mu on irregular window (oracle-style fit)", {
       use_fast = TRUE,
       fixed_params = list(alpha = 1, beta = 1)
     )
-    unname(fit$par["mu"])
+    fit$par[["mu"]]
   })
 
   expect_true(abs(mean(mu_hats) - true_mu) < 4)

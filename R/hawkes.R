@@ -309,6 +309,118 @@ as_hawkes_params <- function(params, kernel = NULL, spatial_kernel = NULL,
   out
 }
 
+#' Batched Hawkes filtration log-likelihoods for shared-geometry labellings
+#'
+#' Evaluates the filtration Hawkes log-likelihood under many labellings that
+#' share event geometry \code{(t,x,y)} and differ only in process membership.
+#' Pairwise kernel terms are computed once. Matches
+#' \code{hawkes_loglik_inhom_filtration_cpp} per labelling.
+#'
+#' @param params Hawkes parameter list/vector.
+#' @param t,x,y Shared event geometry (sorted ascending in time).
+#' @param is_observed Integer 0/1 length-n; 1 = post-treatment observation.
+#' @param member Integer matrix n x K of process membership.
+#' @param W_val Length-n background weights (observed events only).
+#' @param areaS Active spatial area.
+#' @param t_start,t_end Observation window for the compensator.
+#' @param t_trunc Temporal truncation (NULL = none).
+#' @param n_threads Worker threads (default 1).
+#' @param kernel,spatial_kernel,spatial_q,spatial_d Kernel options.
+#' @return Length-K numeric vector of log-likelihoods.
+#' @export
+loglik_hawk_filtration_batch <- function(params,
+                                         t, x, y,
+                                         is_observed,
+                                         member,
+                                         W_val,
+                                         areaS,
+                                         t_start, t_end,
+                                         adjust_factor = 1.0,
+                                         t_trunc = NULL,
+                                         kernel = NULL,
+                                         spatial_kernel = NULL,
+                                         spatial_q = NULL,
+                                         spatial_d = NULL,
+                                         n_threads = 1L) {
+  par_obj <- as_hawkes_params(params, kernel, spatial_kernel, spatial_q, spatial_d)
+  Klab <- ncol(member)
+  if (is.null(Klab) || Klab < 1L) return(numeric(0))
+  reject <- rep(-1e15, Klab)
+
+  mu <- par_obj$mu; alpha <- par_obj$alpha; beta <- par_obj$beta; K <- par_obj$K
+  cc <- par_obj[["c"]]; p <- par_obj$p
+  q_spatial <- if (is.null(par_obj$spatial_q)) 2.0 else as.numeric(par_obj$spatial_q)
+  d_spatial <- if (is.null(par_obj$spatial_d)) NA_real_ else as.numeric(par_obj$spatial_d)
+  if (!is.finite(mu) || !is.finite(alpha) || !is.finite(K)) return(reject)
+  if (mu < 0 || alpha < 0 || K < 0 || K >= 1) return(reject)
+  if (identical(par_obj$kernel, "power_law")) {
+    if (!is.finite(cc) || !is.finite(p) || cc <= 0 || p <= 1) return(reject)
+  } else if (!is.finite(beta) || beta <= 0) {
+    return(reject)
+  }
+  n <- length(t)
+  if (n == 0L || length(x) != n || length(y) != n || length(is_observed) != n ||
+      length(W_val) != n || nrow(member) != n) {
+    stop("t/x/y/is_observed/W_val/member length mismatch.")
+  }
+  if (!is.finite(areaS) || areaS <= 0 || !is.finite(t_end - t_start) || (t_end - t_start) <= 0) {
+    return(reject)
+  }
+
+  liks <- hawkes_loglik_inhom_filtration_batch_cpp(
+    t = as.numeric(t), x = as.numeric(x), y = as.numeric(y),
+    is_observed = as.integer(is_observed),
+    member = as.matrix(member),
+    W_val = as.numeric(W_val),
+    mu = mu, alpha = alpha, beta = if (is.null(beta) || !is.finite(beta)) 1.0 else beta, K = K,
+    areaS = areaS,
+    t_start = as.numeric(t_start), t_end = as.numeric(t_end),
+    adjust_factor = as.numeric(adjust_factor),
+    t_trunc = if (!is.null(t_trunc)) as.numeric(t_trunc) else -1.0,
+    kernel_type = hawkes_kernel_type(par_obj$kernel),
+    cc = if (is.null(cc)) 1.0 else as.numeric(cc),
+    p = if (is.null(p)) 2.0 else as.numeric(p),
+    spatial_kernel_type = hawkes_spatial_kernel_type(par_obj$spatial_kernel),
+    spatial_q = q_spatial,
+    spatial_d = d_spatial,
+    n_threads = as.integer(n_threads)
+  )
+  liks[!is.finite(liks)] <- -1e15
+  liks
+}
+
+#' Build shared-geometry membership arrays for Hawkes SEM batch likelihood
+#' @keywords internal
+.hawkes_batch_membership <- function(labellings,
+                                     process_label,
+                                     treatment_time,
+                                     use_filtration_history = TRUE) {
+  Klab <- length(labellings)
+  if (Klab < 1L) {
+    return(list(t = numeric(0), x = numeric(0), y = numeric(0),
+                is_observed = integer(0), member = matrix(integer(0), 0, 0)))
+  }
+  geom0 <- labellings[[1]][order(labellings[[1]]$t), , drop = FALSE]
+  n <- nrow(geom0)
+  is_obs <- as.integer(geom0$t >= treatment_time)
+  member <- matrix(0L, n, Klab)
+  for (kk in seq_len(Klab)) {
+    r <- labellings[[kk]][order(labellings[[kk]]$t), , drop = FALSE]
+    if (nrow(r) != n) {
+      stop("Hawkes SEM labellings must share event geometry for batch likelihood.")
+    }
+    proc <- if ("inferred_process" %in% names(r)) r$inferred_process else r$location_process
+    in_proc <- if (is.character(proc)) proc == process_label else as.integer(proc) == as.integer(process_label == "treated")
+    if (isTRUE(use_filtration_history)) {
+      member[, kk] <- as.integer(in_proc)
+    } else {
+      member[, kk] <- as.integer(in_proc & is_obs)
+    }
+  }
+  list(t = as.numeric(geom0$t), x = as.numeric(geom0$x), y = as.numeric(geom0$y),
+       is_observed = is_obs, member = member, geom = geom0)
+}
+
 loglik_hawk_fast <- function(params,
                              realiz,
                              windowT,

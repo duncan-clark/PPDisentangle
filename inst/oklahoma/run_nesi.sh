@@ -45,7 +45,7 @@ PP_SIM_PROGRESS_EVERY="${PP_SIM_PROGRESS_EVERY:-10000}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
 PP_BOOT_REFIT_SCOPE="${PP_BOOT_REFIT_SCOPE:-}"
-PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
+PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-C,D}"
 PP_KDE_VARIANT_MODE="${PP_KDE_VARIANT_MODE:-}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
 PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
@@ -178,7 +178,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=200; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=50; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
-      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=1; fi
@@ -216,7 +216,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
       # Full profile default: full parametric bootstrap (simulate + refit + ATE).
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
-      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
@@ -255,7 +255,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2000; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
-      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="E,F"; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
       if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
@@ -317,14 +317,14 @@ has_e=0
 has_f=0
 IFS=',' read -r -a _boot_target_tokens <<< "$boot_targets_norm"
 for tok in "${_boot_target_tokens[@]}"; do
-  [ "$tok" = "E" ] && has_e=1
-  [ "$tok" = "F" ] && has_f=1
+  [ "$tok" = "C" ] && has_e=1
+  [ "$tok" = "D" ] && has_f=1
 done
 if [ "$has_e" -ne 1 ] || [ "$has_f" -ne 1 ]; then
-  echo "Invalid --boot-targets '$PP_BOOT_TARGETS': sensitivity/bootstrap alignment requires E,F"
+  echo "Invalid --boot-targets '$PP_BOOT_TARGETS': sensitivity/bootstrap alignment requires C,D"
   exit 1
 fi
-PP_BOOT_TARGETS="E,F"
+PP_BOOT_TARGETS="C,D"
 # Default policy (manual mode): one bootstrap replicate per available outer bootstrap core.
 # Do not override mode-specific defaults already assigned above.
 if [ "$BOOT_REPS_EXPLICIT" -ne 1 ] && [ -z "${PP_BOOT_REPS:-}" ]; then
@@ -740,7 +740,7 @@ if [ -n "${PP_MODE:-}" ]; then
     export OK_BOOT_SEM_INNER_ITER=2
     export OK_BOOT_OUTER_CORES="${JOB_CORES}"
     export OK_BOOT_N_REPS="${PP_BOOT_REPS:-1}"
-    export OK_BOOT_TARGETS="${PP_BOOT_TARGETS:-E,F}"
+    export OK_BOOT_TARGETS="${PP_BOOT_TARGETS:-C,D}"
   fi
 fi
 
@@ -759,7 +759,7 @@ if [ "$PP_SETUP_TEST" = "1" ]; then
   if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then
     export OK_RUN_SENSITIVITY=false
   fi
-  export OK_BOOT_TARGETS="E,F"
+  export OK_BOOT_TARGETS="C,D"
   export OK_RUN_BOOTSTRAP_ATE=true
 fi
 

@@ -45,17 +45,15 @@
     if (!is.finite(gap) || gap <= 1e-8) return(Inf)
     A * beta_eff / gap
   }
-  M <- matrix(
-    c(
-      eta_ij(pv[["A_00"]], pv[["alpha_m_00"]]),
-      eta_ij(pv[["A_01"]], pv[["alpha_m_01"]]),
-      eta_ij(pv[["A_10"]], pv[["alpha_m_10"]]),
-      eta_ij(pv[["A_11"]], pv[["alpha_m_11"]])
-    ),
-    nrow = 2, byrow = TRUE
-  )
-  if (!all(is.finite(M))) return(Inf)
-  max(Re(eigen(M, only.values = TRUE)$values))
+  a <- eta_ij(pv[["A_00"]], pv[["alpha_m_00"]])
+  b <- eta_ij(pv[["A_01"]], pv[["alpha_m_01"]])
+  c <- eta_ij(pv[["A_10"]], pv[["alpha_m_10"]])
+  d <- eta_ij(pv[["A_11"]], pv[["alpha_m_11"]])
+  if (!all(is.finite(c(a, b, c, d)))) return(Inf)
+  # Closed-form Perron root of the nonnegative 2x2 branching matrix.
+  disc <- (a - d) * (a - d) + 4 * b * c
+  if (disc < 0) disc <- 0
+  0.5 * (a + d + sqrt(disc))
 }
 
 #' Project bivariate ETAS params into a hard-subcritical set
@@ -96,6 +94,21 @@
   pv
 }
 
+#' Background time exposure under an activation cutoff
+#'
+#' Length of the part of \code{windowT} on which a background component is
+#' switched on when it only activates at \code{cutoff} (e.g. the treated
+#' background under \code{treated_background_zero_before}). \code{NULL} or
+#' non-finite \code{cutoff} means the background is on for the whole window.
+#' @keywords internal
+.etas_bg_exposure <- function(windowT, cutoff = NULL) {
+  tval <- windowT[2] - windowT[1]
+  if (is.null(cutoff)) return(tval)
+  cut <- suppressWarnings(as.numeric(cutoff))
+  if (length(cut) != 1L || !is.finite(cut)) return(tval)
+  max(0, windowT[2] - max(windowT[1], cut))
+}
+
 #' Log-likelihood for bivariate ETAS with cross-excitation
 #'
 #' @param params Named list or vector with the 15 bivariate ETAS parameters.
@@ -106,8 +119,18 @@
 #' @param m0 Reference magnitude. NULL = min(mag).
 #' @param control_state_space owin for the control region.
 #' @param treated_state_space owin for the treated region.
+#' @param background_rate_var Optional column of \code{realiz} with a
+#'   mean-one spatial background weight (e.g. KDE), multiplied into both
+#'   background weights. Skipped when a \code{precomp} is supplied via
+#'   \code{...} (precomputed weights must already include it).
+#' @param treated_background_zero_before Optional activation time of the
+#'   treated background. Event-side weights before this time are zeroed
+#'   (baked into \code{precomp} weights when one is supplied) and the
+#'   \code{mu_1} compensator is charged only from this time onward, so this
+#'   argument must be passed even alongside a \code{precomp}.
 #' @param t_trunc Temporal truncation (NULL = none).
-#' @param ... Ignored.
+#' @param ... Optionally \code{precomp} (list with \code{W_0}, \code{W_1},
+#'   \code{areaS_0}, \code{areaS_1}, and optionally \code{process_id}).
 #' @return Scalar log-likelihood.
 #' @export
 loglik_etas_bivariate <- function(params,
@@ -135,10 +158,12 @@ loglik_etas_bivariate <- function(params,
                                   alpha_beta_soft_weight = 2000,
                                   alpha_beta_soft_power = 2,
                                   # Hard upper bound on GR branching spectral radius.
-                                  # NULL/Inf disables the hard reject (soft barrier may still apply).
+                                  # NULL/Inf disables the hard reject.
                                   max_branching_radius = Inf,
+                                  # Soft stability barrier is off by default
+                                  # (weight 0); the hard cap is the guardrail.
                                   stability_barrier_start = 0.95,
-                                  stability_barrier_weight = 50000,
+                                  stability_barrier_weight = 0,
                                   stability_barrier_power = 4,
                                   t_trunc = NULL,
                                   ...) {
@@ -269,27 +294,32 @@ loglik_etas_bivariate <- function(params,
   if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- 1
   if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
 
-  # Optional inhomogeneous background covariate:
-  # W scales the baseline intensity for both processes after region masking.
-  if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
-    W_cov <- realiz[[background_rate_var]]
-    if (length(W_cov) != n) stop("background_rate_var length mismatch in realiz.")
-    W_cov <- as.numeric(W_cov)
-    W_cov[!is.finite(W_cov)] <- 0
-    min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
-    if (!is.finite(min_pos)) min_pos <- 1e-12
-    W_cov[W_cov <= 0] <- min_pos
-    W_0 <- W_0 * W_cov
-    W_1 <- W_1 * W_cov
-  }
-
-  # Optional policy mask: force treated-process background to zero before
-  # treatment (or any user-specified cutoff), while keeping control unchanged.
-  if (!is.null(treated_background_zero_before)) {
-    W_1[realiz$t < as.numeric(treated_background_zero_before)] <- 0
+  # Optional inhomogeneous background covariate / treated-background time mask.
+  # When precomp is supplied these are assumed already baked into W_0/W_1
+  # (SEM outer/inner precomp does that); re-applying would double-weight.
+  if (is.null(precomp)) {
+    if (!is.null(background_rate_var) && background_rate_var %in% names(realiz)) {
+      W_cov <- realiz[[background_rate_var]]
+      if (length(W_cov) != n) stop("background_rate_var length mismatch in realiz.")
+      W_cov <- as.numeric(W_cov)
+      W_cov[!is.finite(W_cov)] <- 0
+      min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
+      if (!is.finite(min_pos)) min_pos <- 1e-12
+      W_cov[W_cov <= 0] <- min_pos
+      W_0 <- W_0 * W_cov
+      W_1 <- W_1 * W_cov
+    }
+    if (!is.null(treated_background_zero_before)) {
+      W_1[realiz$t < as.numeric(treated_background_zero_before)] <- 0
+    }
   }
 
   tval <- windowT[2] - windowT[1]
+  # Compensator exposure: the treated background is only on from the cutoff
+  # onward, so mu_1 must be charged over that span only (never over the full
+  # window). This applies whether or not precomp is supplied, so callers with
+  # precomp must still pass treated_background_zero_before.
+  t_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
 
   loglik <- etas_bivariate_loglik_cpp(
     t         = realiz$t - windowT[1],
@@ -308,7 +338,9 @@ loglik_etas_bivariate <- function(params,
     m0 = m0,
     areaS_0 = areaS_0, areaS_1 = areaS_1,
     t_max = tval,
-    t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0
+    t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+    bg_exposure_0 = tval,
+    bg_exposure_1 = t_expo_1
   )
   if (!is.finite(loglik)) return(-1e15)
 
@@ -365,6 +397,250 @@ loglik_etas_bivariate <- function(params,
     }
   }
   loglik
+}
+
+#' Shared soft-penalty term for bivariate ETAS (params only; labelling-invariant)
+#' @keywords internal
+.etas_bivariate_param_penalty <- function(pv,
+                                          beta_eff,
+                                          enforce_finite_trigger_moments = TRUE,
+                                          p_lower_bound = 2.001,
+                                          q_lower_bound = 1.501,
+                                          finite_moment_soft_width = 0.05,
+                                          finite_moment_soft_weight = 2000,
+                                          finite_moment_soft_power = 2,
+                                          enforce_alpha_subcritical = TRUE,
+                                          alpha_beta_gap_min = 1e-4,
+                                          alpha_beta_soft_gap = 0.05,
+                                          alpha_beta_soft_weight = 2000,
+                                          alpha_beta_soft_power = 2,
+                                          stability_barrier_start = 0.95,
+                                          stability_barrier_weight = 0,
+                                          stability_barrier_power = 4) {
+  pen <- 0
+  p <- pv[["p"]]; q <- pv[["q"]]
+  if (isTRUE(enforce_finite_trigger_moments)) {
+    p_min <- suppressWarnings(as.numeric(p_lower_bound))
+    if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
+    q_min <- suppressWarnings(as.numeric(q_lower_bound))
+    if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
+    soft_width <- suppressWarnings(as.numeric(finite_moment_soft_width))
+    soft_weight <- suppressWarnings(as.numeric(finite_moment_soft_weight))
+    soft_power <- suppressWarnings(as.numeric(finite_moment_soft_power))
+    if (length(soft_width) != 1L || !is.finite(soft_width) || soft_width <= 0) soft_width <- 0
+    if (length(soft_weight) != 1L || !is.finite(soft_weight) || soft_weight <= 0) soft_weight <- 0
+    if (length(soft_power) != 1L || !is.finite(soft_power) || soft_power <= 0) soft_power <- 2
+    if (soft_width > 0 && soft_weight > 0) {
+      p_excess <- max(0, (p_min + soft_width) - p)
+      q_excess <- max(0, (q_min + soft_width) - q)
+      if (p_excess > 0) pen <- pen + soft_weight * (p_excess ^ soft_power)
+      if (q_excess > 0) pen <- pen + soft_weight * (q_excess ^ soft_power)
+    }
+  }
+  if (isTRUE(enforce_alpha_subcritical) && is.finite(beta_eff)) {
+    gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
+    if (length(gap_min) != 1L || !is.finite(gap_min) || gap_min < 0) gap_min <- 1e-4
+    soft_gap <- suppressWarnings(as.numeric(alpha_beta_soft_gap))
+    if (length(soft_gap) != 1L || !is.finite(soft_gap) || soft_gap <= 0) soft_gap <- 0
+    soft_weight <- suppressWarnings(as.numeric(alpha_beta_soft_weight))
+    if (length(soft_weight) != 1L || !is.finite(soft_weight) || soft_weight <= 0) soft_weight <- 0
+    soft_power <- suppressWarnings(as.numeric(alpha_beta_soft_power))
+    if (length(soft_power) != 1L || !is.finite(soft_power) || soft_power <= 0) soft_power <- 2
+    if (soft_gap > 0 && soft_weight > 0) {
+      alpha_gaps <- beta_eff - pv[.etas_biv_alpha_names]
+      min_gap <- min(alpha_gaps, na.rm = TRUE)
+      gap_excess <- max(0, (gap_min + soft_gap) - min_gap)
+      if (gap_excess > 0) pen <- pen + soft_weight * (gap_excess ^ soft_power)
+    }
+  }
+  barrier_weight <- suppressWarnings(as.numeric(stability_barrier_weight))
+  if (length(barrier_weight) == 1L && is.finite(barrier_weight) && barrier_weight > 0 &&
+      is.finite(beta_eff)) {
+    rho <- .etas_biv_spectral_radius(pv, beta_eff)
+    if (!is.finite(rho)) return(Inf)
+    barrier_start <- suppressWarnings(as.numeric(stability_barrier_start))
+    if (length(barrier_start) != 1L || !is.finite(barrier_start)) barrier_start <- 0.95
+    barrier_power <- suppressWarnings(as.numeric(stability_barrier_power))
+    if (length(barrier_power) != 1L || !is.finite(barrier_power) || barrier_power <= 0) {
+      barrier_power <- 2
+    }
+    excess <- max(0, rho - barrier_start)
+    if (excess > 0) pen <- pen + barrier_weight * (excess ^ barrier_power)
+  }
+  pen
+}
+
+#' Batched bivariate ETAS log-likelihoods for shared-geometry labellings
+#'
+#' Evaluates the joint log-likelihood under many labellings that share the
+#' same event geometry \code{(t,x,y,mag)} and differ only in process labels
+#' (and optionally background masks). Pairwise kernel terms are computed once.
+#' Soft penalties that depend only on parameters are applied once to every
+#' entry (matching \code{loglik_etas_bivariate}).
+#'
+#' @param params Named length-15 parameter vector/list.
+#' @param t,x,y,mag Shared event geometry (t already shifted so window starts at 0,
+#'   or pass \code{windowT} and unshifted times).
+#' @param process_ids Integer matrix \code{n x K} (0/1).
+#' @param W0s,W1s Numeric matrices \code{n x K} of background weights.
+#' @param areaS_0,areaS_1 Active areas.
+#' @param t_max Window length. If NULL, uses \code{diff(windowT)}.
+#' @param windowT Optional \code{c(start,end)}; used when \code{t_max} is NULL,
+#'   to shift \code{t} when \code{t_already_shifted=FALSE}, and to anchor
+#'   \code{treated_background_zero_before}.
+#' @param treated_background_zero_before Optional activation time (raw scale)
+#'   of the treated background; requires \code{windowT}. Callers must still
+#'   zero the pre-cutoff entries of \code{W1s} themselves; this argument only
+#'   fixes the \code{mu_1} compensator exposure.
+#' @param t_already_shifted If FALSE, subtracts \code{windowT[1]} from \code{t}.
+#' @param n_threads Worker threads for the C++ kernel (default 1).
+#' @param ... Same barrier/penalty arguments as \code{loglik_etas_bivariate}.
+#' @return Length-K numeric vector of log-likelihoods.
+#' @export
+loglik_etas_bivariate_batch <- function(params,
+                                        t, x, y, mag,
+                                        process_ids,
+                                        W0s, W1s,
+                                        areaS_0, areaS_1,
+                                        t_max = NULL,
+                                        windowT = NULL,
+                                        treated_background_zero_before = NULL,
+                                        m0 = NULL,
+                                        beta_gr = NULL,
+                                        enforce_finite_trigger_moments = TRUE,
+                                        p_lower_bound = 2.001,
+                                        q_lower_bound = 1.501,
+                                        finite_moment_soft_width = 0.05,
+                                        finite_moment_soft_weight = 2000,
+                                        finite_moment_soft_power = 2,
+                                        enforce_alpha_subcritical = TRUE,
+                                        alpha_beta_gap_min = 1e-4,
+                                        alpha_m_lower_bound = 0,
+                                        alpha_beta_soft_gap = 0.05,
+                                        alpha_beta_soft_weight = 2000,
+                                        alpha_beta_soft_power = 2,
+                                        max_branching_radius = Inf,
+                                        stability_barrier_start = 0.95,
+                                        stability_barrier_weight = 0,
+                                        stability_barrier_power = 4,
+                                        t_trunc = NULL,
+                                        t_already_shifted = TRUE,
+                                        n_threads = 1L,
+                                        ...) {
+  if (is.list(params) && !is.null(names(params))) {
+    pv <- unlist(params)
+  } else {
+    pv <- as.numeric(params)
+    if (is.null(names(pv))) names(pv) <- .etas_bivariate_par_names
+  }
+  K <- ncol(process_ids)
+  if (is.null(K) || K < 1L) return(numeric(0))
+  reject <- rep(-1e15, K)
+
+  mu_0 <- pv[["mu_0"]]; mu_1 <- pv[["mu_1"]]
+  A_00 <- pv[["A_00"]]; alpha_m_00 <- pv[["alpha_m_00"]]
+  A_11 <- pv[["A_11"]]; alpha_m_11 <- pv[["alpha_m_11"]]
+  A_01 <- pv[["A_01"]]; alpha_m_01 <- pv[["alpha_m_01"]]
+  A_10 <- pv[["A_10"]]; alpha_m_10 <- pv[["alpha_m_10"]]
+  cc <- pv[["c"]]; p <- pv[["p"]]; D <- pv[["D"]]
+  gamma_p <- pv[["gamma"]]; q <- pv[["q"]]
+
+  core_par <- c(mu_0, mu_1, A_00, A_11, A_01, A_10, cc, p, D, gamma_p, q)
+  if (any(!is.finite(core_par))) return(reject)
+  if (min(mu_0, mu_1, A_00, A_11, cc, D) < 0 ||
+      A_01 < 0 || A_10 < 0 || p <= 1 || q <= 1 || gamma_p < 0) {
+    return(reject)
+  }
+  p_min <- suppressWarnings(as.numeric(p_lower_bound))
+  if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
+  q_min <- suppressWarnings(as.numeric(q_lower_bound))
+  if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
+  if (isTRUE(enforce_finite_trigger_moments) && (p <= p_min || q <= q_min)) return(reject)
+
+  n <- length(t)
+  if (n == 0L || length(x) != n || length(y) != n || length(mag) != n) return(reject)
+  if (nrow(process_ids) != n || nrow(W0s) != n || nrow(W1s) != n ||
+      ncol(W0s) != K || ncol(W1s) != K) {
+    stop("process_ids/W0s/W1s must be n x K with n = length(t).")
+  }
+  if (!all(is.finite(t)) || !all(is.finite(x)) || !all(is.finite(y)) || !all(is.finite(mag))) {
+    return(reject)
+  }
+
+  if (is.null(m0)) m0 <- min(mag)
+  beta_eff <- .etas_resolve_beta_gr(beta_gr, m0 = m0)
+  alpha_vals <- c(alpha_m_00, alpha_m_11, alpha_m_01, alpha_m_10)
+  alpha_lo <- suppressWarnings(as.numeric(alpha_m_lower_bound))
+  if (length(alpha_lo) != 1L || is.na(alpha_lo)) alpha_lo <- 0
+  if (is.finite(alpha_lo) && any(!is.finite(alpha_vals) | alpha_vals <= alpha_lo)) {
+    return(reject)
+  }
+  if (isTRUE(enforce_alpha_subcritical)) {
+    gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
+    if (length(gap_min) != 1L || !is.finite(gap_min) || gap_min < 0) gap_min <- 1e-4
+    if (!is.finite(beta_eff) || any(alpha_vals >= (beta_eff - gap_min))) return(reject)
+  }
+  rho_max <- suppressWarnings(as.numeric(max_branching_radius))
+  if (length(rho_max) == 1L && is.finite(rho_max) && rho_max > 0 && is.finite(beta_eff)) {
+    rho_hat <- .etas_biv_spectral_radius(pv, beta_eff)
+    if (!is.finite(rho_hat) || rho_hat >= rho_max) return(reject)
+  }
+
+  if (is.null(t_max)) {
+    if (is.null(windowT)) stop("Provide t_max or windowT.")
+    t_max <- windowT[2] - windowT[1]
+  }
+  tt <- if (isTRUE(t_already_shifted)) {
+    as.numeric(t)
+  } else {
+    if (is.null(windowT)) stop("t_already_shifted=FALSE requires windowT.")
+    as.numeric(t) - windowT[1]
+  }
+  # mu_1 compensator exposure under the treated-background activation cutoff.
+  bg_expo_1 <- t_max
+  if (!is.null(treated_background_zero_before)) {
+    if (is.null(windowT)) {
+      stop("treated_background_zero_before requires windowT in loglik_etas_bivariate_batch.")
+    }
+    bg_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
+  }
+
+  liks <- etas_bivariate_loglik_batch_cpp(
+    t = tt, x = as.numeric(x), y = as.numeric(y), mag = as.numeric(mag),
+    process_ids = as.matrix(process_ids),
+    W0s = as.matrix(W0s), W1s = as.matrix(W1s),
+    mu_0 = mu_0, mu_1 = mu_1,
+    A_00 = A_00, alpha_m_00 = alpha_m_00,
+    A_11 = A_11, alpha_m_11 = alpha_m_11,
+    A_01 = A_01, alpha_m_01 = alpha_m_01,
+    A_10 = A_10, alpha_m_10 = alpha_m_10,
+    cc = cc, p = p, D = D, gamma_par = gamma_p, q = q,
+    m0 = m0, areaS_0 = areaS_0, areaS_1 = areaS_1,
+    t_max = t_max,
+    t_trunc = if (!is.null(t_trunc)) as.numeric(t_trunc) else -1.0,
+    bg_exposure_0 = t_max,
+    bg_exposure_1 = bg_expo_1,
+    n_threads = as.integer(n_threads)
+  )
+  liks[!is.finite(liks)] <- -1e15
+  pen <- .etas_bivariate_param_penalty(
+    pv, beta_eff,
+    enforce_finite_trigger_moments = enforce_finite_trigger_moments,
+    p_lower_bound = p_lower_bound, q_lower_bound = q_lower_bound,
+    finite_moment_soft_width = finite_moment_soft_width,
+    finite_moment_soft_weight = finite_moment_soft_weight,
+    finite_moment_soft_power = finite_moment_soft_power,
+    enforce_alpha_subcritical = enforce_alpha_subcritical,
+    alpha_beta_gap_min = alpha_beta_gap_min,
+    alpha_beta_soft_gap = alpha_beta_soft_gap,
+    alpha_beta_soft_weight = alpha_beta_soft_weight,
+    alpha_beta_soft_power = alpha_beta_soft_power,
+    stability_barrier_start = stability_barrier_start,
+    stability_barrier_weight = stability_barrier_weight,
+    stability_barrier_power = stability_barrier_power
+  )
+  if (!is.finite(pen)) return(reject)
+  liks - pen
 }
 
 
@@ -529,6 +805,12 @@ fit_etas_bivariate <- function(params_init,
     W_cov[W_cov <= 0] <- min_pos
     W_0 <- W_0 * W_cov
     W_1 <- W_1 * W_cov
+  }
+  # Policy mask must be baked in here: loglik_etas_bivariate skips event-side
+  # masking when precomp is supplied (it still uses the cutoff, forwarded via
+  # ll_args, for the mu_1 compensator exposure).
+  if (!is.null(treated_background_zero_before)) {
+    W_1[realiz$t < as.numeric(treated_background_zero_before)] <- 0
   }
   precomp <- list(W_0 = W_0, W_1 = W_1, areaS_0 = areaS_0, areaS_1 = areaS_1)
 

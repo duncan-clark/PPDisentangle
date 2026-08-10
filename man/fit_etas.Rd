@@ -66,8 +66,9 @@ observed event counts into background and triggered components.
 Default \code{FALSE}.}
 
 \item{hard_subcritical}{If TRUE (default), constrain
-\code{alpha_m < beta_gr - alpha_beta_gap_min}, initialize inside
-\code{eta < max_branching_ratio}, and return a projected stable fit.}
+\code{alpha_m_lower_bound < alpha_m < beta_gr - alpha_beta_gap_min},
+initialize inside \code{eta < max_branching_ratio}, and return a projected
+stable fit. The default lower bound is 0 (magnitude-increasing productivity).}
 
 \item{...}{Passed through to \code{loglik_etas}.}
 }
