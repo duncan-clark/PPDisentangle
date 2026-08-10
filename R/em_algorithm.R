@@ -64,6 +64,16 @@ adaptive_SEM <- function(pp_data,
   } else {
     NULL
   }
+  control_background_everywhere_before <- if ("control_background_everywhere_before" %in% names(dots)) {
+    .etas_bg_cutoff(dots$control_background_everywhere_before)
+  } else {
+    NULL
+  }
+  control_background_pre_mass_ratio <- if ("control_background_pre_mass_ratio" %in% names(dots)) {
+    suppressWarnings(as.numeric(dots$control_background_pre_mass_ratio))
+  } else {
+    NULL
+  }
   dots_no_trunc <- dots
   dots_no_trunc$t_trunc <- NULL
 
@@ -380,7 +390,13 @@ adaptive_SEM <- function(pp_data,
       aS1 <- spatstat.geom::area(treated_state_space)
       if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
       W0 <- rep(1.0, nn); W1 <- rep(1.0, nn)
-      W0[inside.owin(geom0$x, geom0$y, treated_state_space)] <- 0
+      in_treated_w <- inside.owin(geom0$x, geom0$y, treated_state_space)
+      if (is.null(control_background_everywhere_before)) {
+        W0[in_treated_w] <- 0
+      } else {
+        # Control background covers the whole domain before the policy cutoff.
+        W0[in_treated_w & geom0$t >= control_background_everywhere_before] <- 0
+      }
       W1[inside.owin(geom0$x, geom0$y, control_state_space)] <- 0
       if (!is.null(treated_background_zero_before)) {
         W1[geom0$t < treated_background_zero_before] <- 0
@@ -420,6 +436,8 @@ adaptive_SEM <- function(pp_data,
         t_max = biv_wT[2] - biv_wT[1],
         windowT = biv_wT,
         treated_background_zero_before = treated_background_zero_before,
+        control_background_everywhere_before = control_background_everywhere_before,
+        control_background_pre_mass_ratio = control_background_pre_mass_ratio,
         t_trunc = t_trunc, t_already_shifted = TRUE,
         m0 = dots$m0, beta_gr = dots$beta_gr,
         max_branching_radius = if (!is.null(dots$max_branching_radius)) dots$max_branching_radius else 0.98,
@@ -736,7 +754,13 @@ adaptive_SEM <- function(pp_data,
       if (aS0 <= 0) aS0 <- 1; if (aS1 <= 0) aS1 <- 1
       W0_shared <- rep(1.0, nn)
       W1_shared <- rep(1.0, nn)
-      W0_shared[inside.owin(geom0$x, geom0$y, treated_state_space)] <- 0
+      in_treated_m <- inside.owin(geom0$x, geom0$y, treated_state_space)
+      if (is.null(control_background_everywhere_before)) {
+        W0_shared[in_treated_m] <- 0
+      } else {
+        # Control background covers the whole domain before the policy cutoff.
+        W0_shared[in_treated_m & geom0$t >= control_background_everywhere_before] <- 0
+      }
       W1_shared[inside.owin(geom0$x, geom0$y, control_state_space)] <- 0
       if (!is.null(treated_background_zero_before)) {
         W1_shared[geom0$t < treated_background_zero_before] <- 0
@@ -806,6 +830,8 @@ adaptive_SEM <- function(pp_data,
               areaS_0 = aS0, areaS_1 = aS1, t_max = t_max_biv,
               windowT = biv_wT,
               treated_background_zero_before = treated_background_zero_before,
+              control_background_everywhere_before = control_background_everywhere_before,
+              control_background_pre_mass_ratio = control_background_pre_mass_ratio,
               t_trunc = t_trunc, t_already_shifted = TRUE,
               n_threads = biv_n_threads
             ),

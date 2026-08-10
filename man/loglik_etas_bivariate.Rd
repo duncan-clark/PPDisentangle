@@ -14,6 +14,8 @@ loglik_etas_bivariate(
   treated_state_space = NULL,
   background_rate_var = NULL,
   treated_background_zero_before = NULL,
+  control_background_everywhere_before = NULL,
+  control_background_pre_mass_ratio = NULL,
   beta_gr = NULL,
   enforce_finite_trigger_moments = TRUE,
   p_lower_bound = 2.001,
@@ -61,6 +63,24 @@ treated background. Event-side weights before this time are zeroed
 (baked into \code{precomp} weights when one is supplied) and the
 \code{mu_1} compensator is charged only from this time onward, so this
 argument must be passed even alongside a \code{precomp}.}
+
+\item{control_background_everywhere_before}{Optional policy cutoff time
+(same scale as \code{realiz$t}/\code{windowT}) before which the control
+background covers the whole domain. Events before this time keep their
+control background weight even inside \code{treated_state_space}; from
+this time onward the control background is zero there (the pre-fix
+behaviour of zeroing at all times corresponds to \code{NULL}). The
+\code{mu_0} compensator is charged \code{mu_0 *
+control_background_pre_mass_ratio} per pre-cutoff unit time
+(density-continuous convention). Must be passed even alongside a
+\code{precomp} (which must already bake the event-side mask).}
+
+\item{control_background_pre_mass_ratio}{Ratio of full-domain to
+control-region background mass used for the pre-cutoff \code{mu_0}
+compensator charge. Defaults to \code{(areaS_0 + areaS_1) / areaS_0},
+which is exact for a flat background; callers using
+\code{background_rate_var} (e.g. a KDE) must pass the KDE mass ratio
+\code{integral(full) / integral(control region)}.}
 
 \item{t_trunc}{Temporal truncation (NULL = none).}
 

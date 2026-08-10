@@ -109,6 +109,40 @@
   max(0, windowT[2] - max(windowT[1], cut))
 }
 
+#' Parse a background policy cutoff time
+#'
+#' Returns a single numeric cutoff (possibly infinite) or \code{NULL} when the
+#' input is \code{NULL}/\code{NA}/malformed, meaning "no policy cutoff".
+#' @keywords internal
+.etas_bg_cutoff <- function(x) {
+  if (is.null(x)) return(NULL)
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) != 1L || is.na(v)) return(NULL)
+  v
+}
+
+#' Effective control-background exposure when the pre-cutoff support is larger
+#'
+#' Under \code{control_background_everywhere_before = cutoff} the control
+#' background covers the whole domain before \code{cutoff} and only its own
+#' region afterwards. With the spatial density held fixed (density-continuous
+#' convention), each pre-cutoff day charges \code{mu_0 * mass_ratio} instead of
+#' \code{mu_0}, where \code{mass_ratio} is the full-domain to control-region
+#' background mass ratio (area ratio for a flat background, KDE mass ratio for
+#' a weighted one). The returned value is the effective time exposure
+#' \code{mass_ratio * pre_len + post_len} to multiply \code{mu_0} by in the
+#' compensator.
+#' @keywords internal
+.etas_bg_exposure_control <- function(windowT, cutoff = NULL, mass_ratio = NULL) {
+  tval <- windowT[2] - windowT[1]
+  cut <- .etas_bg_cutoff(cutoff)
+  if (is.null(cut)) return(tval)
+  mr <- suppressWarnings(as.numeric(mass_ratio))
+  if (length(mr) != 1L || !is.finite(mr) || is.na(mr) || mr <= 0) mr <- 1
+  cut <- min(max(cut, windowT[1]), windowT[2])
+  mr * (cut - windowT[1]) + (windowT[2] - cut)
+}
+
 #' Log-likelihood for bivariate ETAS with cross-excitation
 #'
 #' @param params Named list or vector with the 15 bivariate ETAS parameters.
@@ -128,6 +162,22 @@
 #'   (baked into \code{precomp} weights when one is supplied) and the
 #'   \code{mu_1} compensator is charged only from this time onward, so this
 #'   argument must be passed even alongside a \code{precomp}.
+#' @param control_background_everywhere_before Optional policy cutoff time
+#'   (same scale as \code{realiz$t}/\code{windowT}) before which the control
+#'   background covers the whole domain. Events before this time keep their
+#'   control background weight even inside \code{treated_state_space}; from
+#'   this time onward the control background is zero there (the pre-fix
+#'   behaviour of zeroing at all times corresponds to \code{NULL}). The
+#'   \code{mu_0} compensator is charged \code{mu_0 *
+#'   control_background_pre_mass_ratio} per pre-cutoff unit time
+#'   (density-continuous convention). Must be passed even alongside a
+#'   \code{precomp} (which must already bake the event-side mask).
+#' @param control_background_pre_mass_ratio Ratio of full-domain to
+#'   control-region background mass used for the pre-cutoff \code{mu_0}
+#'   compensator charge. Defaults to \code{(areaS_0 + areaS_1) / areaS_0},
+#'   which is exact for a flat background; callers using
+#'   \code{background_rate_var} (e.g. a KDE) must pass the KDE mass ratio
+#'   \code{integral(full) / integral(control region)}.
 #' @param t_trunc Temporal truncation (NULL = none).
 #' @param ... Optionally \code{precomp} (list with \code{W_0}, \code{W_1},
 #'   \code{areaS_0}, \code{areaS_1}, and optionally \code{process_id}).
@@ -142,6 +192,8 @@ loglik_etas_bivariate <- function(params,
                                   treated_state_space = NULL,
                                   background_rate_var = NULL,
                                   treated_background_zero_before = NULL,
+                                  control_background_everywhere_before = NULL,
+                                  control_background_pre_mass_ratio = NULL,
                                   beta_gr = NULL,
                                   enforce_finite_trigger_moments = TRUE,
                                   p_lower_bound = 2.001,
@@ -275,7 +327,14 @@ loglik_etas_bivariate <- function(params,
     if (!is.null(treated_state_space)) {
       areaS_1 <- spatstat.geom::area(as.owin(treated_state_space))
       in_treated <- inside.owin(realiz$x, realiz$y, treated_state_space)
-      W_0[in_treated] <- 0
+      cb_cut <- .etas_bg_cutoff(control_background_everywhere_before)
+      if (is.null(cb_cut)) {
+        W_0[in_treated] <- 0
+      } else {
+        # Pre-cutoff the control background covers the whole domain; it is
+        # only excluded from the treated region once treatment switches on.
+        W_0[in_treated & realiz$t >= cb_cut] <- 0
+      }
     } else {
       areaS_1 <- total_area / 2
     }
@@ -320,6 +379,17 @@ loglik_etas_bivariate <- function(params,
   # window). This applies whether or not precomp is supplied, so callers with
   # precomp must still pass treated_background_zero_before.
   t_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
+  # Control-background exposure: before its policy cutoff the control
+  # background covers the whole domain, so each pre-cutoff day charges
+  # mu_0 * mass_ratio (density-continuous convention). Also applies with a
+  # precomp, so callers must pass the cutoff/mass ratio alongside it.
+  cb_mass <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
+  if (length(cb_mass) != 1L || !is.finite(cb_mass) || is.na(cb_mass) || cb_mass <= 0) {
+    cb_mass <- (areaS_0 + areaS_1) / areaS_0
+  }
+  t_expo_0 <- .etas_bg_exposure_control(
+    windowT, control_background_everywhere_before, cb_mass
+  )
 
   loglik <- etas_bivariate_loglik_cpp(
     t         = realiz$t - windowT[1],
@@ -339,7 +409,7 @@ loglik_etas_bivariate <- function(params,
     areaS_0 = areaS_0, areaS_1 = areaS_1,
     t_max = tval,
     t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
-    bg_exposure_0 = tval,
+    bg_exposure_0 = t_expo_0,
     bg_exposure_1 = t_expo_1
   )
   if (!is.finite(loglik)) return(-1e15)
@@ -492,6 +562,15 @@ loglik_etas_bivariate <- function(params,
 #'   of the treated background; requires \code{windowT}. Callers must still
 #'   zero the pre-cutoff entries of \code{W1s} themselves; this argument only
 #'   fixes the \code{mu_1} compensator exposure.
+#' @param control_background_everywhere_before Optional policy cutoff (raw
+#'   scale) before which the control background covers the whole domain;
+#'   requires \code{windowT}. Callers must themselves keep the pre-cutoff
+#'   treated-region entries of \code{W0s} unmasked; this argument only fixes
+#'   the \code{mu_0} compensator exposure.
+#' @param control_background_pre_mass_ratio Full-domain to control-region
+#'   background mass ratio for the pre-cutoff \code{mu_0} charge. Defaults to
+#'   \code{(areaS_0 + areaS_1) / areaS_0} (flat background); pass the KDE
+#'   mass ratio when \code{W0s} carries KDE weights.
 #' @param t_already_shifted If FALSE, subtracts \code{windowT[1]} from \code{t}.
 #' @param n_threads Worker threads for the C++ kernel (default 1).
 #' @param ... Same barrier/penalty arguments as \code{loglik_etas_bivariate}.
@@ -505,6 +584,8 @@ loglik_etas_bivariate_batch <- function(params,
                                         t_max = NULL,
                                         windowT = NULL,
                                         treated_background_zero_before = NULL,
+                                        control_background_everywhere_before = NULL,
+                                        control_background_pre_mass_ratio = NULL,
                                         m0 = NULL,
                                         beta_gr = NULL,
                                         enforce_finite_trigger_moments = TRUE,
@@ -604,6 +685,21 @@ loglik_etas_bivariate_batch <- function(params,
     }
     bg_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
   }
+  # mu_0 compensator exposure when the control background covers the whole
+  # domain before its policy cutoff (density-continuous convention).
+  bg_expo_0 <- t_max
+  if (!is.null(control_background_everywhere_before)) {
+    if (is.null(windowT)) {
+      stop("control_background_everywhere_before requires windowT in loglik_etas_bivariate_batch.")
+    }
+    cb_mass <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
+    if (length(cb_mass) != 1L || !is.finite(cb_mass) || is.na(cb_mass) || cb_mass <= 0) {
+      cb_mass <- (areaS_0 + areaS_1) / areaS_0
+    }
+    bg_expo_0 <- .etas_bg_exposure_control(
+      windowT, control_background_everywhere_before, cb_mass
+    )
+  }
 
   liks <- etas_bivariate_loglik_batch_cpp(
     t = tt, x = as.numeric(x), y = as.numeric(y), mag = as.numeric(mag),
@@ -618,7 +714,7 @@ loglik_etas_bivariate_batch <- function(params,
     m0 = m0, areaS_0 = areaS_0, areaS_1 = areaS_1,
     t_max = t_max,
     t_trunc = if (!is.null(t_trunc)) as.numeric(t_trunc) else -1.0,
-    bg_exposure_0 = t_max,
+    bg_exposure_0 = bg_expo_0,
     bg_exposure_1 = bg_expo_1,
     n_threads = as.integer(n_threads)
   )
@@ -653,6 +749,14 @@ loglik_etas_bivariate_batch <- function(params,
 #' @param m0 Reference magnitude (NULL = auto).
 #' @param control_state_space owin for control region.
 #' @param treated_state_space owin for treated region.
+#' @param treated_background_zero_before Optional treated-background
+#'   activation time (see \code{loglik_etas_bivariate}).
+#' @param control_background_everywhere_before Optional policy cutoff before
+#'   which the control background covers the whole domain (see
+#'   \code{loglik_etas_bivariate}).
+#' @param control_background_pre_mass_ratio Full-domain to control-region
+#'   background mass ratio for the pre-cutoff \code{mu_0} charge; pass the
+#'   KDE mass ratio when using \code{background_rate_var}.
 #' @param maxit Maximum optim iterations.
 #' @param fixed_params Named list of parameters to hold fixed.
 #' @param symmetric If TRUE, constrain A_01=A_10 and alpha_m_01=alpha_m_10.
@@ -675,6 +779,8 @@ fit_etas_bivariate <- function(params_init,
                                treated_state_space = NULL,
                                background_rate_var = NULL,
                                treated_background_zero_before = NULL,
+                               control_background_everywhere_before = NULL,
+                               control_background_pre_mass_ratio = NULL,
                                maxit = 5000,
                                fixed_params = NULL,
                                symmetric = FALSE,
@@ -786,7 +892,14 @@ fit_etas_bivariate <- function(params_init,
   total_area <- spatstat.geom::area(as.owin(windowS))
   if (!is.null(treated_state_space)) {
     areaS_1 <- spatstat.geom::area(as.owin(treated_state_space))
-    W_0[inside.owin(realiz$x, realiz$y, treated_state_space)] <- 0
+    in_treated_fit <- inside.owin(realiz$x, realiz$y, treated_state_space)
+    cb_cut_fit <- .etas_bg_cutoff(control_background_everywhere_before)
+    if (is.null(cb_cut_fit)) {
+      W_0[in_treated_fit] <- 0
+    } else {
+      # Control background covers the whole domain before the policy cutoff.
+      W_0[in_treated_fit & realiz$t >= cb_cut_fit] <- 0
+    }
   } else { areaS_1 <- total_area / 2 }
   if (!is.null(control_state_space)) {
     areaS_0 <- spatstat.geom::area(as.owin(control_state_space))
@@ -831,6 +944,8 @@ fit_etas_bivariate <- function(params_init,
       treated_state_space = treated_state_space,
       background_rate_var = background_rate_var,
       treated_background_zero_before = treated_background_zero_before,
+      control_background_everywhere_before = control_background_everywhere_before,
+      control_background_pre_mass_ratio = control_background_pre_mass_ratio,
       t_trunc = t_trunc,
       precomp = precomp
     )
@@ -903,6 +1018,15 @@ fit_etas_bivariate <- function(params_init,
 #' @param covariate_lookup Optional function \code{f(x, y)} shared by both
 #'   backgrounds, or a named list with \code{control} and \code{treated}
 #'   functions. Each function should have spatial mean one on its state space.
+#' @param bg_ref_areas Optional named list with \code{control} and/or
+#'   \code{treated} reference areas for the background density. Each
+#'   background is generated with spatial density \code{mu / ref_area *
+#'   w(x,y)} over its state space, so \code{mu} is the expected per-unit-time
+#'   count on a region of size \code{ref_area} rather than on the (possibly
+#'   larger) simulation support. Defaults to each state space's own area,
+#'   which reproduces the total-rate behaviour. Use this to extend a fitted
+#'   background density onto a larger support (e.g. a control-everywhere
+#'   counterfactual with \code{ref_area = area(fitted control region)}).
 #' @param t_trunc Temporal truncation.
 #' @param ... Ignored.
 #' @return Data frame with x, y, t, mag, process_id, background columns.
@@ -916,6 +1040,7 @@ sim_etas_bivariate <- function(params,
                                mag_pool = NULL,
                                filtration = NULL,
                                covariate_lookup = NULL,
+                               bg_ref_areas = NULL,
                                t_trunc = NULL,
                                ...) {
   if (!inherits(windowS, "owin")) {
@@ -939,26 +1064,33 @@ sim_etas_bivariate <- function(params,
     else rep(m0, n)
   }
 
-  # Background for each process in its own state space
-  gen_bg <- function(mu, ss, proc_id, lookup = NULL) {
+  # Background for each process in its own state space. ref_area is the
+  # density reference: intensity is mu / ref_area * w(x,y), so with the
+  # default ref_area = area(ss) the total per-unit-time rate is mu, while a
+  # smaller ref_area extends the same spatial density onto a larger support.
+  gen_bg <- function(mu, ss, proc_id, lookup = NULL, ref_area = NULL) {
     if (mu < 1e-10 || is.null(ss)) {
       return(list(x = numeric(0), y = numeric(0), t = numeric(0),
                   mag = numeric(0), proc = integer(0)))
     }
+    area_ss <- spatstat.geom::area(ss)
+    ref_area <- suppressWarnings(as.numeric(ref_area))
+    if (length(ref_area) != 1L || !is.finite(ref_area) || ref_area <= 0) {
+      ref_area <- area_ss
+    }
     duration <- windowT[2] - windowT[1]
     if (is.function(lookup)) {
-      area_ss <- spatstat.geom::area(ss)
       pixel_fun <- function(x, y) {
         w <- suppressWarnings(as.numeric(lookup(x, y)))
         w[!is.finite(w) | w < 0] <- 0
-        duration * (mu / area_ss) * w
+        duration * (mu / ref_area) * w
       }
       bg_pp <- spatstat.random::rpoispp(pixel_fun, win = ss)
       bx <- bg_pp$x
       by <- bg_pp$y
       n_ok <- bg_pp$n
     } else {
-      n_bg <- rpois(1, mu * duration)
+      n_bg <- rpois(1, mu * duration * (area_ss / ref_area))
       if (n_bg == 0) {
         return(list(x = numeric(0), y = numeric(0), t = numeric(0),
                     mag = numeric(0), proc = integer(0)))
@@ -993,8 +1125,11 @@ sim_etas_bivariate <- function(params,
     covariate_lookup
   }
 
-  bg0 <- gen_bg(mu_0, ctrl_ss, 0L, ctrl_lookup)
-  bg1 <- gen_bg(mu_1, treat_ss, 1L, treat_lookup)
+  ctrl_ref_area <- if (is.list(bg_ref_areas)) bg_ref_areas[["control"]] else NULL
+  treat_ref_area <- if (is.list(bg_ref_areas)) bg_ref_areas[["treated"]] else NULL
+
+  bg0 <- gen_bg(mu_0, ctrl_ss, 0L, ctrl_lookup, ctrl_ref_area)
+  bg1 <- gen_bg(mu_1, treat_ss, 1L, treat_lookup, treat_ref_area)
 
   p_x   <- c(bg0$x, bg1$x)
   p_y   <- c(bg0$y, bg1$y)

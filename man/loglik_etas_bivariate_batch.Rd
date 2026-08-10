@@ -18,6 +18,8 @@ loglik_etas_bivariate_batch(
   t_max = NULL,
   windowT = NULL,
   treated_background_zero_before = NULL,
+  control_background_everywhere_before = NULL,
+  control_background_pre_mass_ratio = NULL,
   m0 = NULL,
   beta_gr = NULL,
   enforce_finite_trigger_moments = TRUE,
@@ -64,6 +66,17 @@ to shift \code{t} when \code{t_already_shifted=FALSE}, and to anchor
 of the treated background; requires \code{windowT}. Callers must still
 zero the pre-cutoff entries of \code{W1s} themselves; this argument only
 fixes the \code{mu_1} compensator exposure.}
+
+\item{control_background_everywhere_before}{Optional policy cutoff (raw
+scale) before which the control background covers the whole domain;
+requires \code{windowT}. Callers must themselves keep the pre-cutoff
+treated-region entries of \code{W0s} unmasked; this argument only fixes
+the \code{mu_0} compensator exposure.}
+
+\item{control_background_pre_mass_ratio}{Full-domain to control-region
+background mass ratio for the pre-cutoff \code{mu_0} charge. Defaults to
+\code{(areaS_0 + areaS_1) / areaS_0} (flat background); pass the KDE
+mass ratio when \code{W0s} carries KDE weights.}
 
 \item{t_already_shifted}{If FALSE, subtracts \code{windowT[1]} from \code{t}.}
 

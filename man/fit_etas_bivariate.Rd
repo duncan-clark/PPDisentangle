@@ -14,6 +14,8 @@ fit_etas_bivariate(
   treated_state_space = NULL,
   background_rate_var = NULL,
   treated_background_zero_before = NULL,
+  control_background_everywhere_before = NULL,
+  control_background_pre_mass_ratio = NULL,
   maxit = 5000,
   fixed_params = NULL,
   symmetric = FALSE,
@@ -37,6 +39,17 @@ fit_etas_bivariate(
 \item{control_state_space}{owin for control region.}
 
 \item{treated_state_space}{owin for treated region.}
+
+\item{treated_background_zero_before}{Optional treated-background
+activation time (see \code{loglik_etas_bivariate}).}
+
+\item{control_background_everywhere_before}{Optional policy cutoff before
+which the control background covers the whole domain (see
+\code{loglik_etas_bivariate}).}
+
+\item{control_background_pre_mass_ratio}{Full-domain to control-region
+background mass ratio for the pre-cutoff \code{mu_0} charge; pass the
+KDE mass ratio when using \code{background_rate_var}.}
 
 \item{maxit}{Maximum optim iterations.}
 

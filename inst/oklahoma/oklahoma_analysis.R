@@ -1308,6 +1308,8 @@ fit_b <- function() {
       windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
       control_state_space = control_ss, treated_state_space = treated_ss,
       treated_background_zero_before = 0,
+      # Pre-treatment everywhere is control (flat background: area ratio).
+      control_background_everywhere_before = 0,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
       # Homogeneous A: all free except gamma=0 (same freedom as C/D KDE all-free).
@@ -1360,6 +1362,8 @@ run_sem_fit <- function(pp_data_in,
                         background_rate_var_in = NULL,
                         use_pre_history_for_biv_in = TRUE,
                         treated_background_zero_before_in = 0,
+                        control_background_everywhere_before_in = 0,
+                        control_background_pre_mass_ratio_in = NULL,
                         sem_t_trunc_in = SEM_T_TRUNC_DAYS,
                         sem_inner_iter_in = SEM_INNER_ITER,
                         sem_change_factor_in = SEM_CHANGE_FACTOR,
@@ -1438,6 +1442,8 @@ run_sem_fit <- function(pp_data_in,
       background_rate_var = background_rate_var_in,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
       treated_background_zero_before = treated_background_zero_before_in,
+      control_background_everywhere_before = control_background_everywhere_before_in,
+      control_background_pre_mass_ratio = control_background_pre_mass_ratio_in,
       t_trunc = sem_t_trunc_in
     )
   }
@@ -1545,6 +1551,46 @@ lambda_im$v[lambda_im$v <= 0] <- min_nz
 cat(sprintf("  KDE bandwidth: %.2f km (from %d held-out training events)\n",
             as.numeric(bw_sigma), n_pre_holdout_ctrl))
 
+# Full-domain / control-region background mass ratio. Pre-treatment the
+# control background covers the whole domain (density-continuous), so each
+# pre-cutoff day charges mu_0 * this ratio in the compensator.
+kde_pre_mass_ratio <- function(covariate_im, ctrl_win) {
+  total_mass <- spatstat.geom::integral.im(covariate_im)
+  ctrl_mass <- spatstat.geom::integral.im(covariate_im[ctrl_win, drop = FALSE])
+  if (!is.finite(total_mass) || !is.finite(ctrl_mass) || ctrl_mass <= 0) {
+    stop("Cannot compute control-background pre-treatment mass ratio.")
+  }
+  max(1, total_mass / ctrl_mass)
+}
+CTRL_BG_PRE_MASS_RATIO <- kde_pre_mass_ratio(lambda_im, control_ss)
+cat(sprintf("  Control-background pre-treatment KDE mass ratio: %.3f\n",
+            CTRL_BG_PRE_MASS_RATIO))
+
+# KDE background lookups normalized to spatial mean one on each observed
+# region, but evaluable over the whole domain. Used by simulation-based
+# estimands (ATE counterfactuals, bootstrap world sims) so simulated
+# backgrounds follow the fitted KDE field instead of a uniform density.
+make_kde_bg_lookup <- function(ref_win) {
+  cov_in_window <- lambda_im[ref_win, drop = FALSE]
+  total_mass <- spatstat.geom::integral.im(cov_in_window)
+  target_area <- spatstat.geom::area(ref_win)
+  if (!is.finite(total_mass) || total_mass <= 0 ||
+      !is.finite(target_area) || target_area <= 0) {
+    stop("Cannot normalize KDE background lookup on a state space.")
+  }
+  norm_factor <- target_area / total_mass
+  force(norm_factor)
+  function(x, y) {
+    vals <- spatstat.geom::interp.im(lambda_im, x, y)
+    vals[!is.finite(vals) | vals < 0] <- 0
+    vals * norm_factor
+  }
+}
+KDE_BG_LOOKUP <- list(
+  control = make_kde_bg_lookup(control_ss),
+  treated = make_kde_bg_lookup(treated_ss)
+)
+
 # Data-informed triggering range from the same subset used for KDE:
 # use a robust upper-local scale (90th percentile nearest-neighbor distance).
 nn_training <- nndist(X_bg)
@@ -1577,11 +1623,11 @@ build_background_weighted_data <- function(lambda_covariate, ctrl_ss, treat_ss) 
   pp_post_bg_local <- rbind(bg_ctrl_res$new_df, bg_treat_res$new_df)
   pp_post_bg_local <- pp_post_bg_local[order(pp_post_bg_local$t), ]
 
-  pp_pre_bg_ctrl <- normalize_bg_weights(pp_pre[pp_pre$location_process == "control", ],
-                                         ctrl_ss, lambda_covariate)
-  pp_pre_bg_treat <- normalize_bg_weights(pp_pre[pp_pre$location_process == "treated", ],
-                                          treat_ss, lambda_covariate)
-  pp_all_bg_local <- rbind(pp_pre_bg_ctrl$new_df, pp_pre_bg_treat$new_df, pp_post_bg_local)
+  # Pre-treatment everywhere is control: every pre event carries the
+  # control-normalized weight (valid anywhere on the KDE domain), so
+  # pre-cutoff events in treated counties are usable control background.
+  pp_pre_bg_res <- normalize_bg_weights(pp_pre, ctrl_ss, lambda_covariate)
+  pp_all_bg_local <- rbind(pp_pre_bg_res$new_df, pp_post_bg_local)
   pp_all_bg_local <- pp_all_bg_local[order(pp_all_bg_local$t), ]
   list(pp_post_bg = pp_post_bg_local, pp_all_bg = pp_all_bg_local)
 }
@@ -1593,11 +1639,11 @@ bg_treat_res <- normalize_bg_weights(pp_post[pp_post$location_process == "treate
 pp_post_bg <- rbind(bg_ctrl_res$new_df, bg_treat_res$new_df)
 pp_post_bg <- pp_post_bg[order(pp_post_bg$t), ]
 
-pp_pre_bg_ctrl <- normalize_bg_weights(pp_pre[pp_pre$location_process == "control", ],
-                                        control_ss, lambda_im)
-pp_pre_bg_treat <- normalize_bg_weights(pp_pre[pp_pre$location_process == "treated", ],
-                                         treated_ss, lambda_im)
-pp_all_bg <- rbind(pp_pre_bg_ctrl$new_df, pp_pre_bg_treat$new_df, pp_post_bg)
+# Pre-treatment everywhere is control: every pre event carries the
+# control-normalized KDE weight (the KDE is defined on the whole domain), so
+# pre-cutoff events in treated counties are usable control background.
+pp_pre_bg_res <- normalize_bg_weights(pp_pre, control_ss, lambda_im)
+pp_all_bg <- rbind(pp_pre_bg_res$new_df, pp_post_bg)
 pp_all_bg <- pp_all_bg[order(pp_all_bg$t), ]
 
 cat(sprintf("  Background weights assigned: post=%d, all=%d\n",
@@ -2035,6 +2081,8 @@ fit_e <- function(init_params = biv_init_E,
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      control_background_everywhere_before = 0,
+      control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = fixed_params, trace = 0,
@@ -2075,6 +2123,7 @@ fit_f <- function(init_params = biv_init_F,
       init_params_in = init_params_use,
       fixed_params_in = fixed_params,
       background_rate_var_in = "W",
+      control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
       verbose_in = DF_VERBOSE,
       label = fit_label
     )
@@ -2134,6 +2183,7 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
         init_params_in = biv_init_F,
         fixed_params_in = primary_kde_spec$fixed_params,
         background_rate_var_in = "W",
+        control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
         sem_inner_iter_in = SEM_PILOT_INNER_ITER,
         sem_change_factor_in = cf,
         sem_change_factor_min_mult_in = mn,
@@ -2681,6 +2731,7 @@ run_kde_bandwidth_fit <- function(spec) {
   bg_data <- build_background_weighted_data(lambda_local, control_ss, treated_ss)
   pp_post_bg_local <- bg_data$pp_post_bg
   pp_all_bg_local <- bg_data$pp_all_bg
+  mass_ratio_local <- kde_pre_mass_ratio(lambda_local, control_ss)
 
   biv_init_local <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   fitE_local <- tryCatch({
@@ -2690,6 +2741,8 @@ run_kde_bandwidth_fit <- function(spec) {
       control_state_space = control_ss, treated_state_space = treated_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      control_background_everywhere_before = 0,
+      control_background_pre_mass_ratio = mass_ratio_local,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
@@ -2711,6 +2764,7 @@ run_kde_bandwidth_fit <- function(spec) {
       init_params_in = biv_init_local,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
+      control_background_pre_mass_ratio_in = mass_ratio_local,
       # Match main Fit D (not SENS_SEM_INNER_ITER) so digglex2 reproduces D when sigma matches.
       sem_inner_iter_in = SEM_INNER_ITER,
       verbose_in = FALSE,
@@ -2910,13 +2964,11 @@ run_biv_for_partition <- function(part_info) {
                          p_treat_ss, lambda_im)$new_df
   )
   pp_post_p_bg <- pp_post_p_bg[order(pp_post_p_bg$t), ]
-  pp_pre_p_bg <- rbind(
-    normalize_bg_weights(pp_pre_p[pp_pre_p$location_process == "control", ],
-                         p_ctrl_ss, lambda_im)$new_df,
-    normalize_bg_weights(pp_pre_p[pp_pre_p$location_process == "treated", ],
-                         p_treat_ss, lambda_im)$new_df
-  )
+  # Pre-treatment everywhere is control: control-normalized weights for all
+  # pre events (partition-specific control region).
+  pp_pre_p_bg <- normalize_bg_weights(pp_pre_p, p_ctrl_ss, lambda_im)$new_df
   pp_pre_p_bg <- pp_pre_p_bg[order(pp_pre_p_bg$t), ]
+  mass_ratio_p <- kde_pre_mass_ratio(lambda_im, p_ctrl_ss)
   # Enforce carry-over convention in partition-specific SEM runs too.
   pp_pre_p_bg$process <- "control"
   pp_pre_p_bg$inferred_process <- "control"
@@ -2937,6 +2989,8 @@ run_biv_for_partition <- function(part_info) {
       control_state_space = p_ctrl_ss, treated_state_space = p_treat_ss,
       background_rate_var = "W",
       treated_background_zero_before = 0,
+      control_background_everywhere_before = 0,
+      control_background_pre_mass_ratio = mass_ratio_p,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
       maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
@@ -2957,6 +3011,7 @@ run_biv_for_partition <- function(part_info) {
       init_params_in = biv_init_sem_p,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
+      control_background_pre_mass_ratio_in = mass_ratio_p,
       sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("Partition %s Fit D", label)
@@ -3168,7 +3223,8 @@ ate_with_both_contrasts <- function(compute_one) {
   }
   primary
 }
-ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
+ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
+                                bg_lookup = NULL) {
   ate_with_both_contrasts(function(contrast) {
     if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
       ate_estim_bivariate(
@@ -3187,7 +3243,8 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
         use_crn = OK_ATE_USE_CRN,
         crn_pair = OK_ATE_CRN_PAIR,
         quiet = FALSE,
-        contrast = contrast
+        contrast = contrast,
+        covariate_lookup = bg_lookup
       )
     } else {
       ate_estim_fast(
@@ -3215,12 +3272,14 @@ ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
 add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
 t_ate_E <- proc.time()[["elapsed"]]
 ate_E <- ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
-                             "Fit C (naive biv+KDE, all-free)")
+                             "Fit C (naive biv+KDE, all-free)",
+                             bg_lookup = KDE_BG_LOOKUP)
 ate_E_elapsed <- proc.time()[["elapsed"]] - t_ate_E
 add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else "failed")
 t_ate_F <- proc.time()[["elapsed"]]
 ate_F <- ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
-                             "Fit D (SEM biv+KDE, all-free)")
+                             "Fit D (SEM biv+KDE, all-free)",
+                             bg_lookup = KDE_BG_LOOKUP)
 ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
 add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
 
@@ -3246,7 +3305,8 @@ for (vid in names(kde_variant_specs)) {
     kde_variant_fits$E[[vid]]$marginals <- m_e
     kde_variant_fits$E[[vid]]$ate <- ate_biv_or_marginal(
       p_e, m_e, pp_post_bg,
-      label = sprintf("Fit %s (naive biv+KDE, %s)", letter_e, vid)
+      label = sprintf("Fit %s (naive biv+KDE, %s)", letter_e, vid),
+      bg_lookup = KDE_BG_LOOKUP
     )
   }
   if (!is.null(kde_variant_fits$F[[vid]])) {
@@ -3263,7 +3323,8 @@ for (vid in names(kde_variant_specs)) {
     kde_variant_fits$F[[vid]]$marginals <- m_f
     kde_variant_fits$F[[vid]]$ate <- ate_biv_or_marginal(
       p_f, m_f, post_sem_local,
-      label = sprintf("Fit %s (SEM biv+KDE, %s)", letter_f, vid)
+      label = sprintf("Fit %s (SEM biv+KDE, %s)", letter_f, vid),
+      bg_lookup = KDE_BG_LOOKUP
     )
   }
 }
@@ -3401,6 +3462,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         control_state_space = control_ss, treated_state_space = treated_ss,
         background_rate_var = "W",
         treated_background_zero_before = 0,
+        control_background_everywhere_before = 0,
+        control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
         beta_gr = BETA_GR,
         max_branching_radius = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
@@ -3431,6 +3494,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         init_params_in = biv_init_F,
         fixed_params_in = SENSITIVITY_FIXED_PARAMS,
         background_rate_var_in = "W",
+        control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
         sem_inner_iter_in = SEM_INNER_ITER,
         verbose_in = FALSE,
         label = sprintf("FitVar F #%d", rep_id)
@@ -4109,26 +4173,19 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   d_ctrl_seed <- F_marginals$ctrl
   d_treat_seed <- F_marginals$treat
 
-  make_boot_covariate_lookup <- function(state_space) {
-    cov_in_window <- lambda_im[state_space, drop = FALSE]
-    total_mass <- spatstat.geom::integral.im(cov_in_window)
-    target_area <- spatstat.geom::area(state_space)
-    if (!is.finite(total_mass) || total_mass <= 0 ||
-        !is.finite(target_area) || target_area <= 0) {
-      stop("Cannot normalize bootstrap KDE background on a state space.")
-    }
-    norm_factor <- target_area / total_mass
-    force(norm_factor)
-    function(x, y) {
-      vals <- spatstat.geom::interp.im(lambda_im, x, y)
-      vals[!is.finite(vals) | vals < 0] <- 0
-      vals * norm_factor
-    }
+  # Same normalization as the global ATE lookups (mean one on each observed
+  # region, evaluable everywhere).
+  boot_covariate_lookup <- KDE_BG_LOOKUP
+
+  # Pre-treatment the control background covers the whole domain at the
+  # fitted control density (density-continuous convention). sim_etas
+  # normalizes the immigrant intensity by its own window area, so rescale
+  # the mean-one-on-control lookup by |win_km|/|S0| to keep the density
+  # (mu_0/|S0|) * w(x,y) when simulating on the full window.
+  pre_bg_area_scale <- spatstat.geom::area(win_km) / spatstat.geom::area(control_ss)
+  pre_ctrl_lookup_full <- function(x, y) {
+    boot_covariate_lookup$control(x, y) * pre_bg_area_scale
   }
-  boot_covariate_lookup <- list(
-    control = make_boot_covariate_lookup(control_ss),
-    treated = make_boot_covariate_lookup(treated_ss)
-  )
 
   get_num <- function(obj, nm, default = NA_real_) {
     if (is.null(obj) || is.null(obj[[nm]])) return(default)
@@ -4238,14 +4295,24 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         ))
       }
     }
+    # Pre-treatment: control background everywhere (full window), at the
+    # fitted control density. Matches the fitted law's pre-cutoff regime.
     pre_sim <- sim_etas(
-      pre_ctrl_seed, pre_window_boot, windowS = control_ss,
+      pre_ctrl_seed, pre_window_boot, windowS = win_km,
       m0 = ETAS_M0, beta_gr = BETA_GR,
-      covariate_lookup = boot_covariate_lookup$control,
+      covariate_lookup = pre_ctrl_lookup_full,
       t_trunc = SEM_T_TRUNC_DAYS
     )
     validate_sim_obj(pre_sim, "bootstrap pre_sim", BOOT_MAX_PRE_EVENTS)
     pre_df <- as_pp_df(pre_sim, "control", "control")
+    if (nrow(pre_df) > 0) {
+      # Keep the location label county-faithful (pre events can now fall in
+      # treated counties); the component label stays control, as in the
+      # observed-data pipeline.
+      in_treated_pre <- spatstat.geom::inside.owin(pre_df$x, pre_df$y, treated_ss)
+      pre_df$location_process[in_treated_pre] <- "treated"
+      pre_df$process[in_treated_pre] <- "treated"
+    }
     history_df <- pre_df[, c("x", "y", "t", "mag"), drop = FALSE]
     if (isTRUE(bivariate)) {
       if (is.null(biv_seed)) stop("Bivariate bootstrap requires biv_seed.")
@@ -4422,6 +4489,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               control_state_space = control_ss, treated_state_space = treated_ss,
               background_rate_var = "W",
               treated_background_zero_before = 0,
+              control_background_everywhere_before = 0,
+              control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
               beta_gr = BETA_GR,
               max_branching_radius = ETAS_BRANCHING_MAX,
               maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
@@ -4476,7 +4545,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             use_crn = OK_ATE_USE_CRN,
             crn_pair = OK_ATE_CRN_PAIR,
             quiet = TRUE,
-            contrast = OK_ATE_CONTRAST
+            contrast = OK_ATE_CONTRAST,
+            covariate_lookup = boot_covariate_lookup
           )
         } else {
           ate_estim_fast(
@@ -4528,6 +4598,7 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             model_type_in = if (isTRUE(OK_ATE_BIVARIATE)) "etas_bivariate" else "etas",
             fixed_params_in = SENSITIVITY_FIXED_PARAMS,
             background_rate_var_in = "W",
+            control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
             sem_inner_iter_in = BOOT_SEM_INNER_ITER,
             verbose_in = FALSE,
             label = sprintf("Boot D #%d", rep_id)
@@ -4579,7 +4650,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             use_crn = OK_ATE_USE_CRN,
             crn_pair = OK_ATE_CRN_PAIR,
             quiet = TRUE,
-            contrast = OK_ATE_CONTRAST
+            contrast = OK_ATE_CONTRAST,
+            covariate_lookup = boot_covariate_lookup
           )
         } else {
           ate_estim_fast(
@@ -4824,7 +4896,8 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
         crn_base_seed = ate_crn_base_seed_bootonly,
         use_crn = OK_ATE_USE_CRN,
         crn_pair = OK_ATE_CRN_PAIR,
-        contrast = OK_ATE_CONTRAST
+        contrast = OK_ATE_CONTRAST,
+        covariate_lookup = KDE_BG_LOOKUP
       )
     } else {
       ate_estim_fast(

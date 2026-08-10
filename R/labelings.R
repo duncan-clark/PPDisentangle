@@ -1098,6 +1098,16 @@ em_style_labelling <- function(pp_data,
   } else {
     NULL
   }
+  control_background_everywhere_before <- if ("control_background_everywhere_before" %in% names(dots)) {
+    .etas_bg_cutoff(dots$control_background_everywhere_before)
+  } else {
+    NULL
+  }
+  control_background_pre_mass_ratio <- if ("control_background_pre_mass_ratio" %in% names(dots)) {
+    suppressWarnings(as.numeric(dots$control_background_pre_mass_ratio))
+  } else {
+    NULL
+  }
   t_trunc <- if ("t_trunc" %in% names(dots)) dots$t_trunc else NULL
   sem_outer_maxit <- if ("outer_maxit" %in% names(dots)) {
     suppressWarnings(as.integer(dots$outer_maxit))
@@ -1270,7 +1280,14 @@ em_style_labelling <- function(pp_data,
     if (!is.finite(biv_aS1) || biv_aS1 <= 0) biv_aS1 <- 1
     biv_W0 <- rep(1.0, biv_nn)
     biv_W1 <- rep(1.0, biv_nn)
-    biv_W0[inside.owin(biv_geom_full$x, biv_geom_full$y, treated_state_space)] <- 0
+    biv_in_treated <- inside.owin(biv_geom_full$x, biv_geom_full$y, treated_state_space)
+    if (is.null(control_background_everywhere_before)) {
+      biv_W0[biv_in_treated] <- 0
+    } else {
+      # Control background covers the whole domain before the policy cutoff.
+      biv_W0[biv_in_treated &
+               biv_geom_full$t >= control_background_everywhere_before] <- 0
+    }
     biv_W1[inside.owin(biv_geom_full$x, biv_geom_full$y, control_state_space)] <- 0
     if (!is.null(treated_background_zero_before)) {
       biv_W1[biv_geom_full$t < as.numeric(treated_background_zero_before)] <- 0
@@ -1560,6 +1577,8 @@ em_style_labelling <- function(pp_data,
                 t_max = biv_tmax,
                 windowT = history_window,
                 treated_background_zero_before = treated_background_zero_before,
+                control_background_everywhere_before = control_background_everywhere_before,
+                control_background_pre_mass_ratio = control_background_pre_mass_ratio,
                 t_trunc = t_trunc, t_already_shifted = TRUE,
                 n_threads = biv_n_threads
               ),
@@ -1820,7 +1839,14 @@ em_style_labelling <- function(pp_data,
           if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
           W_0 <- rep(1.0, nrow(mml_full))
           W_1 <- rep(1.0, nrow(mml_full))
-          W_0[inside.owin(mml_full$x, mml_full$y, treated_state_space)] <- 0
+          in_treated_mml <- inside.owin(mml_full$x, mml_full$y, treated_state_space)
+          if (is.null(control_background_everywhere_before)) {
+            W_0[in_treated_mml] <- 0
+          } else {
+            # Control background covers the whole domain before the policy cutoff.
+            W_0[in_treated_mml &
+                  mml_full$t >= control_background_everywhere_before] <- 0
+          }
           W_1[inside.owin(mml_full$x, mml_full$y, control_state_space)] <- 0
           if (!is.null(background_rate_var) && background_rate_var %in% names(mml_full)) {
             W_cov <- as.numeric(mml_full[[background_rate_var]])
@@ -1841,8 +1867,8 @@ em_style_labelling <- function(pp_data,
           )
           biv_obj <- function(par15) {
             # precomp already includes event-side W masks / process_id, so do
-            # not re-pass background_rate_var. The activation cutoff is still
-            # passed: loglik uses it only for the mu_1 compensator exposure.
+            # not re-pass background_rate_var. The policy cutoffs are still
+            # passed: loglik uses them only for the mu compensator exposures.
             do.call(
               loglik_etas_bivariate,
               c(
@@ -1852,6 +1878,8 @@ em_style_labelling <- function(pp_data,
                   control_state_space = control_state_space,
                   treated_state_space = treated_state_space,
                   treated_background_zero_before = treated_background_zero_before,
+                  control_background_everywhere_before = control_background_everywhere_before,
+                  control_background_pre_mass_ratio = control_background_pre_mass_ratio,
                   t_trunc = t_trunc,
                   precomp = biv_precomp
                 ),

@@ -21,7 +21,17 @@ ate_estim_bivariate <- function(
     use_crn = TRUE,
     crn_pair = TRUE,
     quiet = FALSE,
-    contrast = c("all_or_nothing", "observed")
+    contrast = c("all_or_nothing", "observed"),
+    # Optional named list of background lookups (control/treated), each
+    # normalized to spatial mean one on its observed region but evaluable on
+    # the whole domain (e.g. the fitted KDE).
+    covariate_lookup = NULL,
+    # Density-continuous everywhere-worlds (matches the fitted law where the
+    # control background covers the whole domain pre-treatment at density
+    # mu_0/|S0_obs|): each counterfactual background keeps its fitted density
+    # and extends its support, so its total rate scales with the support
+    # mass. FALSE reproduces the legacy total-rate-preserving worlds.
+    density_reference = TRUE
 ) {
   contrast <- match.arg(contrast)
   if (is.null(biv_params)) stop("biv_params is NULL")
@@ -87,21 +97,43 @@ ate_estim_bivariate <- function(
   # Control everywhere: immigrants only on full window; treated support empty.
   # Right-hand regime: observed mixed supports, or treated-everywhere.
   # Triggering (incl. cross) unrestricted in both cases.
-  ss_all_control <- list(control = windowS, treated = NULL)
-  ss_right <- if (identical(contrast, "all_or_nothing")) {
-    list(control = NULL, treated = windowS)
+  obs_ctrl <- if (!is.null(state_spaces_obs)) state_spaces_obs$control else NULL
+  obs_treat <- if (!is.null(state_spaces_obs)) state_spaces_obs$treated else NULL
+  if (isTRUE(density_reference) && (is.null(obs_ctrl) || is.null(obs_treat))) {
+    stop("density_reference=TRUE requires state_spaces_obs$control/treated.")
+  }
+  everywhere_win <- if (isTRUE(density_reference) && is.null(covariate_lookup)) {
+    # Flat background: extend over the modelled domain (union of observed
+    # supports), matching the fit's (|S0|+|S1|)/|S0| mass-ratio convention.
+    spatstat.geom::union.owin(obs_ctrl, obs_treat)
+  } else {
+    # KDE background: the fitted field lives on the full window, so extend
+    # there (consistent with a full-domain KDE mass ratio in fitting).
+    windowS
+  }
+  ss_all_control <- list(control = everywhere_win, treated = NULL)
+  ref_all_control <- if (isTRUE(density_reference)) {
+    list(control = spatstat.geom::area(obs_ctrl))
+  } else {
+    NULL
+  }
+  if (identical(contrast, "all_or_nothing")) {
+    ss_right <- list(control = NULL, treated = everywhere_win)
+    ref_right <- if (isTRUE(density_reference)) {
+      list(treated = spatstat.geom::area(obs_treat))
+    } else {
+      NULL
+    }
   } else {
     if (is.null(state_spaces_obs)) {
       stop("state_spaces_obs required for contrast='observed'")
     }
-    list(
-      control = state_spaces_obs$control,
-      treated = state_spaces_obs$treated
-    )
+    ss_right <- list(control = obs_ctrl, treated = obs_treat)
+    ref_right <- NULL
   }
   right_lab <- if (identical(contrast, "all_or_nothing")) "all-treated" else "obs-regime"
 
-  sim_one <- function(ss) {
+  sim_one <- function(ss, ref_areas) {
     sim_etas_bivariate(
       params = params,
       windowT = windowT,
@@ -110,6 +142,8 @@ ate_estim_bivariate <- function(
       m0 = m0,
       beta_gr = beta_gr,
       filtration = pre_history,
+      covariate_lookup = covariate_lookup,
+      bg_ref_areas = ref_areas,
       t_trunc = t_trunc
     )
   }
@@ -128,18 +162,18 @@ ate_estim_bivariate <- function(
       seed_s <- as.integer(crn_base_seed + s_int)
       if (isTRUE(crn_pair)) {
         set.seed(seed_s)
-        c_sim <- sim_one(ss_all_control)
+        c_sim <- sim_one(ss_all_control, ref_all_control)
         set.seed(seed_s)
-        t_sim <- sim_one(ss_right)
+        t_sim <- sim_one(ss_right, ref_right)
       } else {
         set.seed(seed_s)
-        c_sim <- sim_one(ss_all_control)
+        c_sim <- sim_one(ss_all_control, ref_all_control)
         set.seed(as.integer(seed_s + 1000000L))
-        t_sim <- sim_one(ss_right)
+        t_sim <- sim_one(ss_right, ref_right)
       }
     } else {
-      c_sim <- sim_one(ss_all_control)
-      t_sim <- sim_one(ss_right)
+      c_sim <- sim_one(ss_all_control, ref_all_control)
+      t_sim <- sim_one(ss_right, ref_right)
     }
     c(c_count = nrow(c_sim), t_count = nrow(t_sim))
   }

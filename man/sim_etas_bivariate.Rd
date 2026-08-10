@@ -14,6 +14,7 @@ sim_etas_bivariate(
   mag_pool = NULL,
   filtration = NULL,
   covariate_lookup = NULL,
+  bg_ref_areas = NULL,
   t_trunc = NULL,
   ...
 )
@@ -38,6 +39,16 @@ sim_etas_bivariate(
 \item{covariate_lookup}{Optional function \code{f(x, y)} shared by both
 backgrounds, or a named list with \code{control} and \code{treated}
 functions. Each function should have spatial mean one on its state space.}
+
+\item{bg_ref_areas}{Optional named list with \code{control} and/or
+\code{treated} reference areas for the background density. Each
+background is generated with spatial density \code{mu / ref_area *
+w(x,y)} over its state space, so \code{mu} is the expected per-unit-time
+count on a region of size \code{ref_area} rather than on the (possibly
+larger) simulation support. Defaults to each state space's own area,
+which reproduces the total-rate behaviour. Use this to extend a fitted
+background density onto a larger support (e.g. a control-everywhere
+counterfactual with \code{ref_area = area(fitted control region)}).}
 
 \item{t_trunc}{Temporal truncation.}
 
