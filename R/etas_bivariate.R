@@ -60,24 +60,31 @@
 
 #' Project bivariate ETAS params into a hard-subcritical set
 #'
-#' Clamps each \code{alpha_m_*} below \code{beta - gap_min} and, if needed,
+#' Clamps each \code{alpha_m_*} into
+#' \code{(alpha_m_lower_bound, beta - gap_min)} and, if needed,
 #' scales all \code{A_*} so the GR spectral radius is at most \code{rho_max}.
 #' @keywords internal
 .etas_project_subcritical_biv <- function(params,
                                           beta_gr,
                                           gap_min = 1e-4,
-                                          rho_max = 0.98) {
+                                          rho_max = 0.98,
+                                          alpha_m_lower_bound = 0) {
   pv <- if (is.list(params)) unlist(params) else params
   if (is.null(names(pv))) names(pv) <- .etas_bivariate_par_names
-  beta_eff <- .etas_resolve_beta_gr(beta_gr)
+  bounds <- .etas_alpha_bounds(
+    beta_gr, gap_min = gap_min, alpha_m_lower_bound = alpha_m_lower_bound
+  )
+  beta_eff <- bounds$beta
   if (!is.finite(beta_eff)) return(pv)
-  gap_min <- suppressWarnings(as.numeric(gap_min))
-  if (!is.finite(gap_min) || gap_min < 0) gap_min <- 1e-4
   rho_max <- suppressWarnings(as.numeric(rho_max))
   if (!is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
-  alpha_cap <- beta_eff - gap_min - 1e-4
   for (nm in .etas_biv_alpha_names) {
-    if (is.finite(pv[[nm]])) pv[[nm]] <- min(pv[[nm]], alpha_cap)
+    if (is.finite(pv[[nm]])) {
+      a <- pv[[nm]]
+      if (is.finite(bounds$lo)) a <- max(a, bounds$lo + 1e-8)
+      if (is.finite(bounds$hi)) a <- min(a, bounds$hi - 1e-4)
+      pv[[nm]] <- a
+    }
   }
   rho <- .etas_biv_spectral_radius(pv, beta_eff)
   if (is.finite(rho) && rho > rho_max && rho > 0) {
@@ -121,6 +128,9 @@ loglik_etas_bivariate <- function(params,
                                   finite_moment_soft_power = 2,
                                   enforce_alpha_subcritical = TRUE,
                                   alpha_beta_gap_min = 1e-4,
+                                  # Default: larger magnitudes are more productive (alpha_m > 0).
+                                  # Set to -Inf to disable the lower bound.
+                                  alpha_m_lower_bound = 0,
                                   alpha_beta_soft_gap = 0.05,
                                   alpha_beta_soft_weight = 2000,
                                   alpha_beta_soft_power = 2,
@@ -178,10 +188,15 @@ loglik_etas_bivariate <- function(params,
 
   if (is.null(m0)) m0 <- min(realiz$mag)
   beta_eff <- .etas_resolve_beta_gr(beta_gr, realiz = realiz, m0 = m0)
+  alpha_vals <- c(alpha_m_00, alpha_m_11, alpha_m_01, alpha_m_10)
+  alpha_lo <- suppressWarnings(as.numeric(alpha_m_lower_bound))
+  if (length(alpha_lo) != 1L || is.na(alpha_lo)) alpha_lo <- 0
+  if (is.finite(alpha_lo) && any(!is.finite(alpha_vals) | alpha_vals <= alpha_lo)) {
+    return(-1e15)
+  }
   if (isTRUE(enforce_alpha_subcritical)) {
     gap_min <- suppressWarnings(as.numeric(alpha_beta_gap_min))
     if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
-    alpha_vals <- c(alpha_m_00, alpha_m_11, alpha_m_01, alpha_m_10)
     if (!is.finite(beta_eff) || is.na(beta_eff) || any(alpha_vals >= (beta_eff - gap_min))) return(-1e15)
   }
   rho_max <- suppressWarnings(as.numeric(max_branching_radius))
@@ -368,8 +383,10 @@ loglik_etas_bivariate <- function(params,
 #' @param trace Trace level for optim.
 #' @param t_trunc Temporal truncation.
 #' @param hard_subcritical If TRUE (default), reparameterize free
-#'   \code{alpha_m_*} so \code{alpha < beta - gap}, project the start into
-#'   \code{rho < max_branching_radius}, and project the returned fit.
+#'   \code{alpha_m_*} into
+#'   \code{(alpha_m_lower_bound, beta - gap)} (default lower bound 0),
+#'   project the start into \code{rho < max_branching_radius}, and project
+#'   the returned fit.
 #' @param ... Passed to loglik_etas_bivariate (include \code{beta_gr}).
 #' @return An optim result with par as a named length-15 vector.
 #' @export
@@ -417,11 +434,21 @@ fit_etas_bivariate <- function(params_init,
   if (length(gap_min) != 1L || !is.finite(gap_min) || is.na(gap_min) || gap_min < 0) gap_min <- 1e-4
   rho_max <- suppressWarnings(as.numeric(dots$max_branching_radius))
   if (length(rho_max) != 1L || !is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
+  alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
+  if (length(alpha_lo) != 1L || is.na(alpha_lo)) alpha_lo <- 0
+  dots$alpha_beta_gap_min <- gap_min
+  dots$max_branching_radius <- rho_max
+  dots$alpha_m_lower_bound <- alpha_lo
   beta_eff <- .etas_resolve_beta_gr(dots$beta_gr, realiz = realiz, m0 = m0)
-  if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical)) {
+  alpha_bounds <- .etas_alpha_bounds(
+    beta_eff, gap_min = gap_min, alpha_m_lower_bound = alpha_lo
+  )
+  if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical) ||
+      is.finite(alpha_lo)) {
     if (is.finite(beta_eff)) {
       full_init <- .etas_project_subcritical_biv(
-        full_init, beta_eff, gap_min = gap_min, rho_max = rho_max
+        full_init, beta_eff, gap_min = gap_min, rho_max = rho_max,
+        alpha_m_lower_bound = alpha_lo
       )
     }
   }
@@ -442,9 +469,11 @@ fit_etas_bivariate <- function(params_init,
   }
   free_idx <- setdiff(seq_along(all_names), fixed_idx)
   free_names <- all_names[free_idx]
-  # Hard alpha constraint via reparameterization:
-  #   u = log(beta - gap_min - alpha)  =>  alpha = beta - gap_min - exp(u)
-  use_alpha_reparam <- isTRUE(hard_subcritical) && is.finite(beta_eff)
+  # Hard alpha constraint via reparameterization onto (alpha_lo, alpha_hi):
+  #   alpha = alpha_lo + (alpha_hi - alpha_lo) * plogis(u)
+  # with alpha_hi = beta - gap_min (default alpha_lo = 0).
+  use_alpha_reparam <- (isTRUE(hard_subcritical) || is.finite(alpha_lo)) &&
+    is.finite(beta_eff)
   alpha_free_pos <- if (use_alpha_reparam) {
     which(free_names %in% .etas_biv_alpha_names)
   } else {
@@ -453,15 +482,18 @@ fit_etas_bivariate <- function(params_init,
   free_to_natural <- function(free_par) {
     nat <- free_par
     if (length(alpha_free_pos)) {
-      nat[alpha_free_pos] <- beta_eff - gap_min - exp(free_par[alpha_free_pos])
+      nat[alpha_free_pos] <- .etas_opt_to_alpha(
+        free_par[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
+      )
     }
     nat
   }
   natural_to_free <- function(nat_par) {
     free_par <- nat_par
     if (length(alpha_free_pos)) {
-      slack <- pmax(beta_eff - gap_min - nat_par[alpha_free_pos], 1e-12)
-      free_par[alpha_free_pos] <- log(slack)
+      free_par[alpha_free_pos] <- .etas_alpha_to_opt(
+        nat_par[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
+      )
     }
     free_par
   }
@@ -526,6 +558,7 @@ fit_etas_bivariate <- function(params_init,
     }
     ll_args$max_branching_radius <- rho_max
     ll_args$alpha_beta_gap_min <- gap_min
+    ll_args$alpha_m_lower_bound <- alpha_lo
     if (!is.null(dots$enforce_finite_trigger_moments)) ll_args$enforce_finite_trigger_moments <- dots$enforce_finite_trigger_moments
     if (!is.null(dots$p_lower_bound)) ll_args$p_lower_bound <- dots$p_lower_bound
     if (!is.null(dots$q_lower_bound)) ll_args$q_lower_bound <- dots$q_lower_bound
@@ -560,14 +593,16 @@ fit_etas_bivariate <- function(params_init,
     par15["A_10"] <- par15["A_01"]
     par15["alpha_m_10"] <- par15["alpha_m_01"]
   }
-  if (isTRUE(hard_subcritical) && is.finite(beta_eff)) {
+  if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
     par15 <- .etas_project_subcritical_biv(
-      par15, beta_eff, gap_min = gap_min, rho_max = rho_max
+      par15, beta_eff, gap_min = gap_min, rho_max = rho_max,
+      alpha_m_lower_bound = alpha_lo
     )
   }
   fit$par <- par15
   fit$m0 <- m0
   fit$hard_subcritical <- isTRUE(hard_subcritical)
+  fit$alpha_m_lower_bound <- alpha_lo
   fit$branching_radius <- if (is.finite(beta_eff)) .etas_biv_spectral_radius(par15, beta_eff) else NA_real_
   return(fit)
 }

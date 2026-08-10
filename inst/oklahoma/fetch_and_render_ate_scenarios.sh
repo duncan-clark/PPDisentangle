@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Fetch 4 ATE scenario RDS files from NeSI and render comparison HTML.
+# For full promote + report regen after a boot512 campaign, prefer:
+#   bash inst/oklahoma/watch_and_publish_ate_scenarios.sh launch_jobs_boot512.txt
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +26,8 @@ rsync -avz --human-readable \
   --include='for_paper_univ_obs.rds' \
   --include='for_paper_biv_aon.rds' \
   --include='for_paper_biv_obs.rds' \
+  --include='for_paper_*_boot512.rds' \
+  --include='for_paper_*_boot256.rds' \
   --include='oklahoma_results_job*.rds' \
   --exclude='*' || true
 

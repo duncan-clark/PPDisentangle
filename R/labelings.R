@@ -1106,12 +1106,15 @@ em_style_labelling <- function(pp_data,
         is.na(biv_rho_max) || biv_rho_max <= 0) {
       biv_rho_max <- 0.98
     }
+    biv_alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
+    if (length(biv_alpha_lo) != 1L || is.na(biv_alpha_lo)) biv_alpha_lo <- 0
     biv_ll_extra_names <- intersect(
       names(dots),
       c(
         "enforce_finite_trigger_moments", "p_lower_bound", "q_lower_bound",
         "finite_moment_soft_width", "finite_moment_soft_weight",
         "finite_moment_soft_power", "enforce_alpha_subcritical",
+        "alpha_m_lower_bound",
         "alpha_beta_soft_gap", "alpha_beta_soft_weight",
         "alpha_beta_soft_power", "stability_barrier_start",
         "stability_barrier_weight", "stability_barrier_power"
@@ -1122,12 +1125,14 @@ em_style_labelling <- function(pp_data,
     biv_ll_extra$beta_gr <- biv_beta_eff
     biv_ll_extra$alpha_beta_gap_min <- biv_gap_min
     biv_ll_extra$max_branching_radius <- biv_rho_max
+    biv_ll_extra$alpha_m_lower_bound <- biv_alpha_lo
     if (!is.null(biv_etas_params) && biv_hard_subcritical) {
       biv_etas_params <- .etas_project_subcritical_biv(
         biv_etas_params,
         beta_gr = biv_beta_eff,
         gap_min = biv_gap_min,
-        rho_max = biv_rho_max
+        rho_max = biv_rho_max,
+        alpha_m_lower_bound = biv_alpha_lo
       )
     }
   }

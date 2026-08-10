@@ -142,7 +142,11 @@ bash inst/oklahoma/fetch_and_render_ate_scenarios.sh
 Bootstrap-only inputs must come from a fit run produced with the current
 `beta_gr` stability constraints. The job rejects a source DGP outside
 `OK_ETAS_BRANCHING_MAX` (default `0.98`); it does not silently reuse an
-explosive legacy fit. Bivariate scenarios simulate and refit the full
+explosive legacy fit. Magnitude productivity is also constrained by default:
+all `alpha_m` / `alpha_m_*` satisfy `0 < alpha < beta_gr - gap` (larger events
+more triggering). Override with `alpha_m_lower_bound = -Inf` only if needed.
+Spatial scale is magnitude-independent: `gamma` is fixed at `0` in every fit
+(`d(m) = D`). Univariate comparisons include I/J (KDE) and K/L (homogeneous). Bivariate scenarios simulate and refit the full
 cross-exciting bivariate law, while univariate scenarios simulate and refit
 independent univariate laws. The requested replicate count is the number
 attempted. Failed or explosive refits (`eta >= 1` or `rho >= 1`) are excluded,

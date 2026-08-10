@@ -89,6 +89,10 @@ adaptive_SEM <- function(pp_data,
       is.na(etas_rho_max) || etas_rho_max <= 0) {
     etas_rho_max <- 0.98
   }
+  etas_alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
+  if (length(etas_alpha_lo) != 1L || is.na(etas_alpha_lo)) {
+    etas_alpha_lo <- 0
+  }
   hard_subcritical <- !isFALSE(dots$hard_subcritical)
   if ((is_etas || is_biv_etas) && !is.finite(etas_beta_eff)) {
     stop("adaptive_SEM requires a finite positive beta_gr for stable ETAS fitting.")
@@ -98,7 +102,8 @@ adaptive_SEM <- function(pp_data,
       dots$etas_bivariate_params,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      rho_max = etas_rho_max
+      rho_max = etas_rho_max,
+      alpha_m_lower_bound = etas_alpha_lo
     )
   }
   if (is_etas) {
@@ -106,19 +111,22 @@ adaptive_SEM <- function(pp_data,
       hawkes_params_control,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      eta_max = etas_eta_max
+      eta_max = etas_eta_max,
+      alpha_m_lower_bound = etas_alpha_lo
     ))
     hawkes_params_treated <- as.list(.etas_project_subcritical(
       hawkes_params_treated,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      eta_max = etas_eta_max
+      eta_max = etas_eta_max,
+      alpha_m_lower_bound = etas_alpha_lo
     ))
   }
   dots$beta_gr <- etas_beta_eff
   dots$alpha_beta_gap_min <- etas_gap_min
   dots$max_branching_ratio <- etas_eta_max
   dots$max_branching_radius <- etas_rho_max
+  dots$alpha_m_lower_bound <- etas_alpha_lo
   dots$hard_subcritical <- hard_subcritical
   dots_no_trunc <- dots
   dots_no_trunc$t_trunc <- NULL
@@ -660,6 +668,7 @@ adaptive_SEM <- function(pp_data,
           "p_lower_bound", "q_lower_bound", "finite_moment_soft_width",
           "finite_moment_soft_weight", "finite_moment_soft_power",
           "enforce_alpha_subcritical", "alpha_beta_gap_min",
+          "alpha_m_lower_bound",
           "alpha_beta_soft_gap", "alpha_beta_soft_weight",
           "alpha_beta_soft_power", "max_branching_radius",
           "stability_barrier_start", "stability_barrier_weight",
@@ -819,6 +828,7 @@ adaptive_SEM <- function(pp_data,
             "p_lower_bound", "q_lower_bound", "finite_moment_soft_width",
             "finite_moment_soft_weight", "finite_moment_soft_power",
             "enforce_alpha_subcritical", "alpha_beta_gap_min",
+            "alpha_m_lower_bound",
             "alpha_beta_soft_gap", "alpha_beta_soft_weight",
             "alpha_beta_soft_power", "max_branching_ratio",
             "stability_barrier_start", "stability_barrier_weight",

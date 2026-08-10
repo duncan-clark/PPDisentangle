@@ -1,6 +1,6 @@
 ---
 title: "Oklahoma Induced Seismicity: Causal ETAS Analysis"
-subtitle: "Bivariate ETAS · all-or-nothing DTAITE (E/F)"
+subtitle: "Point estimates (pre-bootstrap) · univariate I/J counts + bivariate E/F"
 author: "PPDisentangle"
 date: today
 format:
@@ -341,9 +341,11 @@ Primary county-partition fits (publication pair):
 | **E** | Naive bivariate ETAS | KDE (non-parametric) | Location-based |
 | **F** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
+All fits fix $\gamma\equiv 0$ (magnitude-independent spatial scale $d(m)=D$).
 Partition-sensitivity refits use the same E/F specifications on
-alternative tessellations. Other labelled fits in the RDS (A–D, G–J),
-when present, are retained for diagnostics only.
+alternative tessellations. Other labelled fits in the RDS when present:
+**A/B** bivariate homogeneous; **C–H** bivariate+KDE profiles; **I/J**
+univariate+KDE; **K/L** univariate homogeneous (no KDE).
 
 # Study Design
 
@@ -541,11 +543,14 @@ and
 
 $$
 f(\Delta x,\Delta y \mid m_j) =
-\frac{q-1}{\pi\,d(m_j)}\,
-\left(1+\frac{r^2}{d(m_j)}\right)^{-q},
-\quad r^2 = \Delta x^2 + \Delta y^2,
-\quad d(m_j)=D\exp\{\gamma(m_j-m_0)\}.
+\frac{q-1}{\pi\,D}\,
+\left(1+\frac{r^2}{D}\right)^{-q},
+\quad r^2 = \Delta x^2 + \Delta y^2.
 $$
+
+The spatial scale is **magnitude-independent**: we fix $\gamma\equiv 0$ in
+every fit (equivalently $d(m)=D$), so larger events are more productive only
+through $\alpha_m>0$, not through a wider spatial kernel.
 
 ## Bivariate Extension
 
@@ -555,9 +560,62 @@ $$
 
 Off-diagonal terms $A_{01}$ (treated$\to$control) and $A_{10}$
 (control$\to$treated) capture cross-excitation. For the KDE background
-models (E, F), $W_k(x,y)$ is the normalized kernel density estimate from
-control pre-treatment data; for the homogeneous models (B, D),
+models (E, F, I, J), $W_k(x,y)$ is the normalized kernel density estimate from
+control pre-treatment data; for the homogeneous models (A, B, K, L),
 $W_k \equiv 1$.
+
+## Branching Matrix, Spectral Radius, and Explosiveness
+
+The bivariate ETAS law admits a Poisson-cluster (branching) representation.
+Averaging productivity over magnitudes under a Gutenberg–Richter law with
+slope $\beta$ (here $\beta=`r signif(as.numeric(cfg$BETA_GR %||% 2.3), 3)`$)
+gives the expected number of type-$k$ offspring of a type-$\ell$ parent,
+
+$$
+\eta_{k\ell}
+=
+A_{k\ell}\,\frac{\beta}{\beta-\alpha_{m,k\ell}},
+\qquad
+\alpha_{m,k\ell}<\beta
+$$
+
+(and $\eta_{k\ell}=\infty$ if $\alpha_{m,k\ell}\ge\beta$). These four
+channel means form the **reproduction matrix**
+
+$$
+M
+=
+\begin{pmatrix}
+\eta_{00} & \eta_{01} \\
+\eta_{10} & \eta_{11}
+\end{pmatrix}.
+$$
+
+Its **spectral radius** $\rho(M)=\max\{|\lambda|:\lambda\text{ eigenvalue of }M\}$
+is the long-run growth factor of a typical cluster:
+
+- $\rho(M)<1$ (**subcritical**): clusters die out almost surely; the expected
+  total progeny of one immigrant is finite, equal to
+  $\mathbf{1}^\top(I-M)^{-1}\mathbf{e}_\ell$ from a type-$\ell$ immigrant.
+  Mean event counts over a finite horizon are well-defined, so all-or-nothing
+  DAITE contrasts computed by forward simulation are meaningful.
+- $\rho(M)=1$ (**critical**): expected cluster size diverges; finite-horizon
+  counts remain random but have heavy tails.
+- $\rho(M)>1$ (**explosive / supercritical**): clusters grow exponentially in
+  expectation. Simulated catalogues routinely explode, and plug-in causal
+  contrasts become numerically unstable and scientifically uninterpretable
+  as finite expected savings.
+
+In the independent (univariate) case there is no cross-excitation, so
+$M=\mathrm{diag}(\eta_0,\eta_1)$ and $\rho(M)=\max(\eta_0,\eta_1)$: each
+margin is checked separately. With cross-excitation, even two subcritical
+self-excitation ratios can combine with large off-diagonal $\eta_{01},\eta_{10}$
+to push $\rho(M)$ above one.
+
+Fits in this analysis enforce a hard subcritical constraint
+$\rho(M)<`r signif(as.numeric(cfg$ETAS_BRANCHING_MAX %||% 0.98), 3)`$
+(and $\alpha_m>0$), projecting productivity when needed. Parameter tables
+below report $\rho$ and an explosive flag for each fitted law.
 
 ## Likelihood Truncation in This Run
 
@@ -675,10 +733,40 @@ its control events are used to estimate the KDE background via
 
 ```{r fig-kde-bg}
 #| label: fig-kde-bg
-#| fig-cap: "Estimated inhomogeneous background rate from held-out control pre-treatment events."
-bg_plot_file <- resolve_plot_file("background_rate_kde.png")
-if (file.exists(bg_plot_file)) {
-  knitr::include_graphics(bg_plot_file)
+#| fig-cap: "Estimated inhomogeneous background rate (KDE) from held-out control pre-treatment events."
+#| fig-height: 6
+bg_plot <- NULL
+if (!is.null(results$plots) && !is.null(results$plots$background_rate_kde)) {
+  bg_plot <- results$plots$background_rate_kde
+}
+if (inherits(bg_plot, "gg") || inherits(bg_plot, "ggplot")) {
+  # Analysis stores this ggplot on the results RDS; PNG export is optional.
+  if (exists("counties_km") && inherits(counties_km, "sf")) {
+    county_xy <- tryCatch({
+      as.data.frame(sf::st_coordinates(sf::st_cast(counties_km, "MULTILINESTRING")))
+    }, error = function(e) NULL)
+    if (!is.null(county_xy) && all(c("X", "Y", "L1") %in% names(county_xy))) {
+      bg_plot <- bg_plot +
+        geom_path(
+          data = county_xy,
+          aes(x = X, y = Y, group = L1),
+          inherit.aes = FALSE,
+          colour = "grey25",
+          linewidth = 0.2,
+          alpha = 0.7
+        )
+    }
+  }
+  print(bg_plot)
+} else {
+  bg_plot_file <- resolve_plot_file("background_rate_kde.png")
+  if (is.character(bg_plot_file) && length(bg_plot_file) == 1L &&
+      nzchar(bg_plot_file) && file.exists(bg_plot_file)) {
+    knitr::include_graphics(bg_plot_file)
+  } else {
+    plot.new()
+    text(0.5, 0.5, "KDE background-rate plot unavailable in this results file.")
+  }
 }
 ```
 
@@ -699,8 +787,8 @@ if (is.null(fixed_cfg) || length(fixed_cfg) == 0) {
   role_map <- c(
     c = "Omori onset delay",
     p = "Omori decay exponent",
-    D = "Spatial scale",
-    gamma = "Mag-spatial scaling",
+    D = "Spatial scale (magnitude-independent)",
+    gamma = "Fixed at 0 (no mag-spatial scaling)",
     q = "Spatial decay exponent"
   )
   fixed_df <- data.frame(
@@ -709,7 +797,19 @@ if (is.null(fixed_cfg) || length(fixed_cfg) == 0) {
     Role = unname(role_map[names(fixed_cfg)]),
     stringsAsFactors = FALSE
   )
-  cap <- "Fixed structural parameters."
+  if (!("gamma" %in% fixed_df$Parameter)) {
+    g0 <- suppressWarnings(as.numeric(cfg$GAMMA_FIXED %||% 0))
+    fixed_df <- rbind(
+      fixed_df,
+      data.frame(
+        Parameter = "gamma",
+        Value = if (is.finite(g0)) g0 else 0,
+        Role = role_map[["gamma"]],
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  cap <- "Fixed structural parameters (gamma=0 in all models)."
 }
 kable(fixed_df, align = "lcl", caption = cap) |>
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
@@ -850,6 +950,8 @@ fit_G_obj <- get_fit_by_letter("G")
 fit_H_obj <- get_fit_by_letter("H")
 fit_I_obj <- get_fit_by_letter("I", "fitI")
 fit_J_obj <- get_fit_by_letter("J", "fitJ")
+fit_K_obj <- get_fit_by_letter("K", "fitK")
+fit_L_obj <- get_fit_by_letter("L", "fitL")
 
 A_par <- if (!is.null(fit_A_obj)) fit_A_obj$params else NULL
 B_par <- if (!is.null(fit_B_obj)) fit_B_obj$params else NULL
@@ -1513,12 +1615,13 @@ if (length(diag_rows) > 0) {
 }
 ```
 
-# All-or-Nothing Treatment Effect (bivariate law)
+# All-or-Nothing Treatment Effect
 
 ## County Partition
 
-```{r tbl-ate-biv}
-#| label: tbl-ate-biv
+```{r tbl-ate-helpers}
+#| label: tbl-ate-helpers
+#| include: false
 n_cty <- suppressWarnings(as.integer(unlist(cfg$n_counties, use.names = FALSE)))
 if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[1]] < 1L) {
   n_cty <- suppressWarnings(as.integer(unlist(results$counties$n_counties, use.names = FALSE)))
@@ -1543,6 +1646,96 @@ if (!is.null(results$pp_data) && !is.null(results$pp_data$pp_post)) {
   }
 }
 
+get_total_effect_sim <- function(ate_obj, n_tiles = n_cty) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
+  if (!is.finite(n_tiles) || is.na(n_tiles) || n_tiles < 1) n_tiles <- 1
+  sim_df <- ate_obj$all_nothing_sim
+  if ("total_saved" %in% names(sim_df)) return(sim_df$total_saved)
+  if ("total_effect" %in% names(sim_df)) return(sim_df$total_effect)
+  sim_df$ATE * n_tiles
+}
+
+get_expected_totals <- function(ate_obj, n_tiles = n_cty) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
+  sim_df <- ate_obj$all_nothing_sim
+  if (all(c("c_total", "t_total") %in% names(sim_df))) {
+    return(list(c_total = sim_df$c_total, t_total = sim_df$t_total))
+  }
+  list(c_total = sim_df$c_mean * n_tiles, t_total = sim_df$t_mean * n_tiles)
+}
+
+paper_ok_counts_row <- function(method_label, ate_obj, estimand_label = NA_character_) {
+  expected <- tryCatch(get_expected_totals(ate_obj, n_tiles = n_cty), error = function(e) NULL)
+  if (is.null(expected)) return(NULL)
+  c_mean <- mean(expected$c_total, na.rm = TRUE)
+  t_mean <- mean(expected$t_total, na.rm = TRUE)
+  if (!is.finite(c_mean) || !is.finite(t_mean)) return(NULL)
+  data.frame(
+    Method = method_label,
+    Estimand = estimand_label,
+    `E[N(control)]` = round(c_mean, 0),
+    `E[N(right)]` = round(t_mean, 0),
+    `Delta = control - right` = round(c_mean - t_mean, 0),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+pick_ate_contrast_early <- function(ate_obj, contrast = c("all_or_nothing", "observed")) {
+  contrast <- match.arg(contrast)
+  if (is.null(ate_obj)) return(NULL)
+  bc <- ate_obj$by_contrast
+  if (is.list(bc) && !is.null(bc[[contrast]])) return(bc[[contrast]])
+  if (!is.null(ate_obj$contrast) && identical(as.character(ate_obj$contrast)[1], contrast)) {
+    return(ate_obj)
+  }
+  if (identical(contrast, "all_or_nothing") && !is.null(ate_obj$all_nothing_sim)) {
+    return(ate_obj)
+  }
+  NULL
+}
+```
+
+### Paper-style counts: univariate Naive vs SEM (I–L)
+
+Compact analogue of manuscript Table~13 (`tab:ok_counts`) for univariate fits,
+with both all-or-nothing and observed-vs-control estimands when available.
+
+```{r tbl-ok-counts-univ}
+#| label: tbl-ok-counts-univ
+univ_fit_specs <- list(
+  list(lab = "Naive (I, univariate+KDE)", ate = if (!is.null(fit_I_obj)) fit_I_obj$ate else NULL),
+  list(lab = "SEM (J, univariate+KDE)", ate = if (!is.null(fit_J_obj)) fit_J_obj$ate else NULL),
+  list(lab = "Naive (K, univariate, no KDE)", ate = if (!is.null(fit_K_obj)) fit_K_obj$ate else NULL),
+  list(lab = "SEM (L, univariate, no KDE)", ate = if (!is.null(fit_L_obj)) fit_L_obj$ate else NULL)
+)
+univ_count_rows <- Filter(Negate(is.null), unlist(lapply(univ_fit_specs, function(sp) {
+  list(
+    paper_ok_counts_row(sp$lab, pick_ate_contrast_early(sp$ate, "all_or_nothing"), "All-or-nothing"),
+    paper_ok_counts_row(sp$lab, pick_ate_contrast_early(sp$ate, "observed"), "Observed vs control")
+  )
+}), recursive = FALSE))
+if (length(univ_count_rows) > 0L) {
+  univ_counts <- do.call(rbind, univ_count_rows)
+  kable(
+    univ_counts,
+    align = "llrrr",
+    caption = paste0(
+      "Expected post-treatment earthquake counts for univariate fits I–L under both estimands ",
+      "(All-or-nothing: right = treated everywhere; Observed: right = AOI regime; ",
+      ate_days, "-day window). Point estimates only; bootstrap uncertainty omitted."
+    )
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
+} else {
+  cat("Univariate I–L ATE simulations are unavailable in this results file.\n")
+}
+```
+
+### Full model comparison (all available fits)
+
+```{r tbl-ate-biv}
+#| label: tbl-ate-biv
+
 biv_rows <- list(
   list(lab = "A: Naive Bivariate", ate = if (!is.null(fit_A_obj)) fit_A_obj$ate else NULL, louis = NULL),
   list(lab = "B: SEM Bivariate",   ate = if (!is.null(fit_B_obj)) fit_B_obj$ate else NULL, louis = if (!is.null(fit_B_obj)) fit_B_obj$louis else NULL),
@@ -1557,6 +1750,12 @@ if (!is.null(fit_I_obj) && !is.null(fit_I_obj$ate)) {
 }
 if (!is.null(fit_J_obj) && !is.null(fit_J_obj$ate)) {
   biv_rows[[length(biv_rows) + 1]] <- list(lab = "J: SEM Univ+KDE", ate = fit_J_obj$ate, louis = NULL)
+}
+if (!is.null(fit_K_obj) && !is.null(fit_K_obj$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "K: Naive Univ (no KDE)", ate = fit_K_obj$ate, louis = NULL)
+}
+if (!is.null(fit_L_obj) && !is.null(fit_L_obj$ate)) {
+  biv_rows[[length(biv_rows) + 1]] <- list(lab = "L: SEM Univ (no KDE)", ate = fit_L_obj$ate, louis = NULL)
 }
 
 boot_obj <- results$bootstrap_ate
@@ -1711,26 +1910,6 @@ boot_ci_quantile_length <- function(boot_vals, theta_hat, conf = 0.95, center_st
   )
 }
 
-get_total_effect_sim <- function(ate_obj, n_tiles = n_cty) {
-  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
-  if (!is.finite(n_tiles) || is.na(n_tiles) || n_tiles < 1) n_tiles <- 1
-  sim_df <- ate_obj$all_nothing_sim
-  if ("total_saved" %in% names(sim_df)) return(sim_df$total_saved)
-  if ("total_effect" %in% names(sim_df)) return(sim_df$total_effect)
-  # Backward compatibility with old result files.
-  sim_df$ATE * n_tiles
-}
-
-get_expected_totals <- function(ate_obj, n_tiles = n_cty) {
-  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NULL)
-  sim_df <- ate_obj$all_nothing_sim
-  if (all(c("c_total", "t_total") %in% names(sim_df))) {
-    return(list(c_total = sim_df$c_total, t_total = sim_df$t_total))
-  }
-  # Backward compatibility with old result files.
-  list(c_total = sim_df$c_mean * n_tiles, t_total = sim_df$t_mean * n_tiles)
-}
-
 format_partition_label <- function(part_id) {
   if (is.na(part_id) || is.null(part_id)) return(part_id)
   if (part_id == "county") return("County")
@@ -1744,10 +1923,40 @@ format_partition_label <- function(part_id) {
   part_id
 }
 
-ate_rows <- lapply(biv_rows, function(r) {
-  if (is.null(r$ate)) return(NULL)
-  expected <- tryCatch(get_expected_totals(r$ate, n_tiles = n_cty), error = function(e) NULL)
-  sim_totals <- tryCatch(get_total_effect_sim(r$ate, n_tiles = n_cty), error = function(e) NULL)
+# Prefer contrast-specific payload from $by_contrast when present (new dual-estimand runs).
+pick_ate_contrast <- function(ate_obj, contrast = c("all_or_nothing", "observed")) {
+  contrast <- match.arg(contrast)
+  if (is.null(ate_obj)) return(NULL)
+  bc <- ate_obj$by_contrast
+  if (is.list(bc) && !is.null(bc[[contrast]])) return(bc[[contrast]])
+  if (!is.null(ate_obj$contrast) && identical(as.character(ate_obj$contrast)[1], contrast)) {
+    return(ate_obj)
+  }
+  # Legacy single-contrast objects: only reuse for all_or_nothing if sims are present.
+  if (identical(contrast, "all_or_nothing") && !is.null(ate_obj$all_nothing_sim)) {
+    return(ate_obj)
+  }
+  NULL
+}
+
+estimand_specs <- list(
+  list(
+    id = "all_or_nothing",
+    label = "All-or-nothing",
+    right_lab = "E[N(treated everywhere)]"
+  ),
+  list(
+    id = "observed",
+    label = "Observed vs control",
+    right_lab = "E[N(actual treatment regime)]"
+  )
+)
+
+ate_row_for <- function(r, est) {
+  ate_use <- pick_ate_contrast(r$ate, est$id)
+  if (is.null(ate_use)) return(NULL)
+  expected <- tryCatch(get_expected_totals(ate_use, n_tiles = n_cty), error = function(e) NULL)
+  sim_totals <- tryCatch(get_total_effect_sim(ate_use, n_tiles = n_cty), error = function(e) NULL)
   c_mean <- if (!is.null(expected) && !is.null(expected$c_total) && length(expected$c_total) > 0) {
     mean(expected$c_total, na.rm = TRUE)
   } else { NA_real_ }
@@ -1764,22 +1973,26 @@ ate_rows <- lapply(biv_rows, function(r) {
   sim_sd_total  <- if (!is.null(sim_totals) && length(sim_totals) > 1L) sd(sim_totals, na.rm = TRUE) else NA_real_
   base_row <- data.frame(
     Model = r$lab,
+    Estimand = est$label,
     `Observed N(actual regime)` = obs_post_n,
     `E[N(control everywhere)]` = round(c_mean, 0),
-    `E[N(actual treatment regime)]` = round(t_mean, 0),
+    `E[N(right-hand regime)]` = round(t_mean, 0),
     `SD(control everywhere)` = round(c_sd, 0),
-    `SD(actual treatment regime)` = round(t_sd, 0),
-    `E[N(treated everywhere)]` = if (!is.null(r$ate$analytic) && !is.null(r$ate$analytic$eta_treat)) {
-      round(as.numeric(r$ate$analytic$eta_treat) * n_cty, 0)
-    } else { NA_real_ },
-    `Saved = control - actual` = round(saved_diff_mean, 0),
+    `SD(right-hand regime)` = round(t_sd, 0),
+    `Saved = control - right` = round(saved_diff_mean, 0),
     `SD(saved)` = round(sim_sd_total, 0),
-    check.names = FALSE
+    check.names = FALSE,
+    stringsAsFactors = FALSE
   )
   if (using_pre_bootstrap) return(base_row)
-  # Bootstrap uncertainty is only reported for the primary all-free pair (E/F).
+  # Bootstrap uncertainty only for primary all-free pair (E/F) on the run's primary contrast.
   boot_models_for_table <- c("E: Naive Biv+KDE (all-free)", "F: SEM Biv+KDE (all-free)")
-  boot_sum <- if (r$lab %in% boot_models_for_table) get_boot_summary(r$lab) else NULL
+  primary_contrast <- tolower(as.character(cfg$ATE_CONTRAST %||% "all_or_nothing")[1])
+  boot_sum <- if (r$lab %in% boot_models_for_table && identical(est$id, primary_contrast)) {
+    get_boot_summary(r$lab)
+  } else {
+    NULL
+  }
   boot_sd <- if (!is.null(boot_sum)) round(boot_sum$sd, 0) else NA
   boot_ci_q_len <- if (!is.null(boot_sum) && is.finite(saved_diff_mean)) {
     ci <- boot_ci_quantile_length(boot_sum$vals, saved_diff_mean, conf = 0.95, center_stat = "median")
@@ -1794,19 +2007,23 @@ ate_rows <- lapply(biv_rows, function(r) {
   base_row$`Bootstrap SD (ATE)` <- boot_sd
   base_row$`95% quantile-length CI` <- boot_ci_q_len
   base_row
-})
+}
+
+ate_rows <- unlist(lapply(biv_rows, function(r) {
+  lapply(estimand_specs, function(est) ate_row_for(r, est))
+}), recursive = FALSE)
 ate_rows <- Filter(Negate(is.null), ate_rows)
 ate_biv <- if (length(ate_rows) > 0L) do.call(rbind, ate_rows) else NULL
 if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
   core_cols <- c(
     "Model",
+    "Estimand",
     "Observed N(actual regime)",
     "E[N(control everywhere)]",
-    "E[N(actual treatment regime)]",
+    "E[N(right-hand regime)]",
     "SD(control everywhere)",
-    "SD(actual treatment regime)",
-    "E[N(treated everywhere)]",
-    "Saved = control - actual",
+    "SD(right-hand regime)",
+    "Saved = control - right",
     "SD(saved)"
   )
   if (using_pre_bootstrap) {
@@ -1817,28 +2034,40 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
   }
   kable(ate_biv,
         col.names = if (using_pre_bootstrap) {
-          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
-            "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
-            paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)")
+          c(
+            "Model", "Estimand",
+            paste0("Observed N(actual regime) / ", ate_days, "d"),
+            "E[N(control everywhere)]",
+            "E[N(right-hand regime)]",
+            "SD(control everywhere)", "SD(right-hand regime)",
+            paste0("Saved = control - right / ", n_cty, " counties / ", ate_days, "d"),
+            "SD(saved)"
+          )
         } else {
-          c("Model", paste0("Observed N(actual regime) / ", ate_days, "d"), "E[N(control everywhere)]", "E[N(actual treatment regime)]",
-            "SD(control everywhere)", "SD(actual treatment regime)", "E[N(treated everywhere)]",
-            paste0("Saved = control - actual / ", n_cty, " counties / ", ate_days, "d"),
-            "SD(saved)", "Bootstrap SD (ATE)", "95% quantile-length CI")
-        },
-        caption = if (using_pre_bootstrap) {
-          paste0("All-or-nothing expected counts over ", ate_days, " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)] (pre-bootstrap checkpoint).")
-        } else {
-          paste0(
-            "All-or-nothing expected counts over ", ate_days,
-            " days with saved shown as E[N(control everywhere)] - E[N(actual treatment regime)]. ",
-            "Bootstrap SD is estimated from parametric bootstrap replicates; ",
-            "the reported 95% interval uses bootstrap quantile lengths (2.5%/97.5%) ",
-            "recentered around the model's estimated ATE."
+          c(
+            "Model", "Estimand",
+            paste0("Observed N(actual regime) / ", ate_days, "d"),
+            "E[N(control everywhere)]",
+            "E[N(right-hand regime)]",
+            "SD(control everywhere)", "SD(right-hand regime)",
+            paste0("Saved = control - right / ", n_cty, " counties / ", ate_days, "d"),
+            "SD(saved)", "Bootstrap SD (ATE)", "95% quantile-length CI"
           )
         },
-        align = if (using_pre_bootstrap) "lcccccccc" else "lcccccccccc") |>
+        caption = paste0(
+          "Expected counts over ", ate_days, " days for both estimands: ",
+          "All-or-nothing (right-hand = treated everywhere) and Observed vs control ",
+          "(right-hand = actual AOI regime). Saved = E[N(control everywhere)] - E[N(right-hand)]. ",
+          if (using_pre_bootstrap) {
+            "Point estimates only (pre-bootstrap checkpoint)."
+          } else {
+            paste0(
+              "Bootstrap SD/CI (when present) apply to the run's primary contrast only; ",
+              "quantile-length 95% intervals recenter bootstrap lengths around the point ATE."
+            )
+          }
+        ),
+        align = if (using_pre_bootstrap) "llccccccc" else "llccccccccc") |>
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat(sprintf("ATE table unavailable in this checkpoint stage (%s). Run until pre-bootstrap or full stage for Table 6.1.\n",
@@ -1902,7 +2131,8 @@ ef_param_order <- c(
   "A_11", "alpha_m_11",
   "A_01", "alpha_m_01",
   "A_10", "alpha_m_10",
-  "c", "p", "D", "gamma", "q"
+  "c", "p", "D", "q"
+  # gamma omitted: fixed at 0 in all Oklahoma fits (d(m)=D)
 )
 E_vec <- to_named_num(if (!is.null(fit_E_obj)) fit_E_obj$params else NULL)
 F_vec <- to_named_num(if (!is.null(fit_F_obj)) fit_F_obj$params else NULL)
@@ -1944,8 +2174,9 @@ if (length(E_vec) > 0 || length(F_vec) > 0) {
   kable(
     ef_tbl,
     caption = paste0(
-      "All fitted bivariate ETAS parameters for Models E and F, plus the Gutenberg–Richter ",
-      "branching spectral radius rho (beta=", signif(beta_gr_tbl, 3), "). ",
+      "All fitted bivariate ETAS parameters for Models E and F (gamma fixed at 0), ",
+      "plus the Gutenberg–Richter branching spectral radius rho (beta=",
+      signif(beta_gr_tbl, 3), "). ",
       "Channel mean offspring: eta_ij = A_ij * beta / (beta - alpha_ij) ",
       "(Inf if alpha_ij >= beta). Explosive means rho(eta) >= 1 ",
       "(expected cluster size diverges)."
@@ -1955,6 +2186,420 @@ if (length(E_vec) > 0 || length(F_vec) > 0) {
     kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
 } else {
   cat("E/F parameter table unavailable in this results checkpoint.")
+}
+```
+
+### Full A/B Parameter Estimates (homogeneous, no KDE)
+
+```{r tbl-ab-params-all}
+#| label: tbl-ab-params-all
+# Same bivariate parameter layout as E/F, for the homogeneous-background fits
+# (A = naive, B = SEM) that do not use the KDE background.
+A_vec <- to_named_num(if (!is.null(fit_A_obj)) fit_A_obj$params else NULL)
+B_vec <- to_named_num(if (!is.null(fit_B_obj)) fit_B_obj$params else NULL)
+rho_A <- if (length(A_vec)) spectral_radius_etas(A_vec, beta_gr_tbl) else NA_real_
+rho_B <- if (length(B_vec)) spectral_radius_etas(B_vec, beta_gr_tbl) else NA_real_
+
+if (length(A_vec) > 0 || length(B_vec) > 0) {
+  ab_tbl <- data.frame(
+    Parameter = ef_param_order,
+    `A: Naive Bivariate (no KDE)` = as.numeric(A_vec[ef_param_order]),
+    `B: SEM Bivariate (no KDE)` = as.numeric(B_vec[ef_param_order]),
+    check.names = FALSE
+  )
+  fmt_sigfig <- function(x, digits = 3L) {
+    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
+    if (!is.finite(x)) return("Inf")
+    v <- signif(as.numeric(x), digits)
+    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+    order <- floor(log10(abs(v)))
+    dp <- max(0L, as.integer(digits) - order - 1L)
+    sprintf(paste0("%.", dp, "f"), v)
+  }
+  fmt_explosive <- function(rho) {
+    if (!is.finite(rho)) return("yes (Inf)")
+    if (rho >= 1) "yes" else "no"
+  }
+  ab_tbl[[2]] <- vapply(ab_tbl[[2]], function(v) fmt_sigfig(v, 3L), character(1))
+  ab_tbl[[3]] <- vapply(ab_tbl[[3]], function(v) fmt_sigfig(v, 3L), character(1))
+  ab_tbl <- rbind(
+    ab_tbl,
+    data.frame(
+      Parameter = c("rho (spectral radius)", "explosive? (rho >= 1)"),
+      `A: Naive Bivariate (no KDE)` = c(fmt_sigfig(rho_A, 3L), fmt_explosive(rho_A)),
+      `B: SEM Bivariate (no KDE)` = c(fmt_sigfig(rho_B, 3L), fmt_explosive(rho_B)),
+      check.names = FALSE
+    )
+  )
+  kable(
+    ab_tbl,
+    caption = paste0(
+      "All fitted bivariate ETAS parameters for Models A and B ",
+      "(homogeneous background, no KDE; gamma fixed at 0), ",
+      "plus the Gutenberg–Richter branching spectral radius rho (beta=",
+      signif(beta_gr_tbl, 3), "). ",
+      "Channel mean offspring: eta_ij = A_ij * beta / (beta - alpha_ij) ",
+      "(Inf if alpha_ij >= beta). Explosive means rho(eta) >= 1 ",
+      "(expected cluster size diverges)."
+    ),
+    align = "lcc"
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
+} else {
+  cat("A/B parameter table unavailable in this results checkpoint.")
+}
+```
+
+### Full I/J Parameter Estimates (univariate)
+
+```{r tbl-ij-params-all}
+#| label: tbl-ij-params-all
+# Univariate analogue of the E/F parameter table: independent control/treated
+# margins (no cross-excitation). Branching is the per-margin GR ratio
+# eta = A * beta / (beta - alpha_m); explosive if either margin has eta >= 1.
+univ_eta <- function(par, beta_gr) {
+  if (is.null(par)) return(NA_real_)
+  pv <- to_named_num(par)
+  A <- suppressWarnings(as.numeric(pv[["A"]]))
+  alpha <- suppressWarnings(as.numeric(pv[["alpha_m"]]))
+  if (!length(A) || !length(alpha) || !is.finite(A[[1]]) || !is.finite(alpha[[1]]) ||
+      !is.finite(beta_gr) || beta_gr <= 0) {
+    return(NA_real_)
+  }
+  gap <- beta_gr - alpha[[1]]
+  if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+  A[[1]] * beta_gr / gap
+}
+
+extract_univ_margin <- function(fit_obj, margin) {
+  if (is.null(fit_obj) || is.null(fit_obj$params)) return(NULL)
+  p <- fit_obj$params
+  if (!is.null(p[[margin]])) return(p[[margin]])
+  NULL
+}
+
+ij_param_order <- c("mu", "A", "alpha_m", "c", "p", "D", "q")
+I_ctrl <- extract_univ_margin(fit_I_obj, "control")
+I_treat <- extract_univ_margin(fit_I_obj, "treated")
+J_ctrl <- extract_univ_margin(fit_J_obj, "control")
+J_treat <- extract_univ_margin(fit_J_obj, "treated")
+
+if (!is.null(I_ctrl) || !is.null(I_treat) || !is.null(J_ctrl) || !is.null(J_treat)) {
+  pull_par <- function(par, nm) {
+    if (is.null(par)) return(NA_real_)
+    v <- to_named_num(par)
+    suppressWarnings(as.numeric(v[[nm]]))
+  }
+  # Rows mirror bivariate E/F naming: subscript 0 = control, 1 = treated.
+  # Structural kernel params are margin-specific under independent univariate fits.
+  # gamma omitted (fixed at 0).
+  ij_rows <- c(
+    "mu_0", "A_0", "alpha_m_0", "c_0", "p_0", "D_0", "q_0",
+    "mu_1", "A_1", "alpha_m_1", "c_1", "p_1", "D_1", "q_1"
+  )
+  margin_of <- function(nm) if (grepl("_0$", nm)) "control" else "treated"
+  base_of <- function(nm) sub("_[01]$", "", nm)
+  get_fit_margin <- function(which_fit, margin) {
+    if (identical(which_fit, "I")) {
+      if (identical(margin, "control")) I_ctrl else I_treat
+    } else {
+      if (identical(margin, "control")) J_ctrl else J_treat
+    }
+  }
+  I_vals <- vapply(ij_rows, function(nm) {
+    pull_par(get_fit_margin("I", margin_of(nm)), base_of(nm))
+  }, numeric(1))
+  J_vals <- vapply(ij_rows, function(nm) {
+    pull_par(get_fit_margin("J", margin_of(nm)), base_of(nm))
+  }, numeric(1))
+
+  eta_I0 <- univ_eta(I_ctrl, beta_gr_tbl)
+  eta_I1 <- univ_eta(I_treat, beta_gr_tbl)
+  eta_J0 <- univ_eta(J_ctrl, beta_gr_tbl)
+  eta_J1 <- univ_eta(J_treat, beta_gr_tbl)
+  rho_I <- max(c(eta_I0, eta_I1), na.rm = TRUE)
+  rho_J <- max(c(eta_J0, eta_J1), na.rm = TRUE)
+  if (!is.finite(rho_I)) rho_I <- Inf
+  if (!is.finite(rho_J)) rho_J <- Inf
+
+  fmt_sigfig <- function(x, digits = 3L) {
+    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
+    if (!is.finite(x)) return("Inf")
+    v <- signif(as.numeric(x), digits)
+    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+    order <- floor(log10(abs(v)))
+    dp <- max(0L, as.integer(digits) - order - 1L)
+    sprintf(paste0("%.", dp, "f"), v)
+  }
+  fmt_explosive <- function(rho) {
+    if (!is.finite(rho)) return("yes (Inf)")
+    if (rho >= 1) "yes" else "no"
+  }
+
+  ij_tbl <- data.frame(
+    Parameter = ij_rows,
+    `I: Naive Univ+KDE` = vapply(I_vals, function(v) fmt_sigfig(v, 3L), character(1)),
+    `J: SEM Univ+KDE` = vapply(J_vals, function(v) fmt_sigfig(v, 3L), character(1)),
+    check.names = FALSE
+  )
+  ij_tbl <- rbind(
+    ij_tbl,
+    data.frame(
+      Parameter = c(
+        "eta_0 (control branching)",
+        "eta_1 (treated branching)",
+        "rho := max(eta_0, eta_1)",
+        "explosive? (rho >= 1)"
+      ),
+      `I: Naive Univ+KDE` = c(
+        fmt_sigfig(eta_I0, 3L), fmt_sigfig(eta_I1, 3L),
+        fmt_sigfig(rho_I, 3L), fmt_explosive(rho_I)
+      ),
+      `J: SEM Univ+KDE` = c(
+        fmt_sigfig(eta_J0, 3L), fmt_sigfig(eta_J1, 3L),
+        fmt_sigfig(rho_J, 3L), fmt_explosive(rho_J)
+      ),
+      check.names = FALSE
+    )
+  )
+  kable(
+    ij_tbl,
+    caption = paste0(
+      "All fitted univariate+KDE ETAS parameters for Models I and J (gamma fixed at 0), ",
+      "plus Gutenberg–Richter branching ratios (beta=", signif(beta_gr_tbl, 3), "). ",
+      "Subscript 0 = control margin, 1 = treated margin (independent laws; no cross-excitation). ",
+      "Channel mean offspring: eta = A * beta / (beta - alpha_m) ",
+      "(Inf if alpha_m >= beta). Here rho := max(eta_0, eta_1); ",
+      "explosive means rho >= 1 (expected cluster size diverges on that margin)."
+    ),
+    align = "lcc"
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
+} else {
+  cat("I/J parameter table unavailable in this results checkpoint.")
+}
+```
+
+### Full K/L Parameter Estimates (univariate, no KDE)
+
+```{r tbl-kl-params-all}
+#| label: tbl-kl-params-all
+K_ctrl <- extract_univ_margin(fit_K_obj, "control")
+K_treat <- extract_univ_margin(fit_K_obj, "treated")
+L_ctrl <- extract_univ_margin(fit_L_obj, "control")
+L_treat <- extract_univ_margin(fit_L_obj, "treated")
+
+if (!is.null(K_ctrl) || !is.null(K_treat) || !is.null(L_ctrl) || !is.null(L_treat)) {
+  pull_par <- function(par, nm) {
+    if (is.null(par)) return(NA_real_)
+    v <- to_named_num(par)
+    suppressWarnings(as.numeric(v[[nm]]))
+  }
+  kl_rows <- c(
+    "mu_0", "A_0", "alpha_m_0", "c_0", "p_0", "D_0", "q_0",
+    "mu_1", "A_1", "alpha_m_1", "c_1", "p_1", "D_1", "q_1"
+  )
+  margin_of <- function(nm) if (grepl("_0$", nm)) "control" else "treated"
+  base_of <- function(nm) sub("_[01]$", "", nm)
+  get_kl_margin <- function(which_fit, margin) {
+    if (identical(which_fit, "K")) {
+      if (identical(margin, "control")) K_ctrl else K_treat
+    } else {
+      if (identical(margin, "control")) L_ctrl else L_treat
+    }
+  }
+  K_vals <- vapply(kl_rows, function(nm) {
+    pull_par(get_kl_margin("K", margin_of(nm)), base_of(nm))
+  }, numeric(1))
+  L_vals <- vapply(kl_rows, function(nm) {
+    pull_par(get_kl_margin("L", margin_of(nm)), base_of(nm))
+  }, numeric(1))
+
+  eta_K0 <- univ_eta(K_ctrl, beta_gr_tbl)
+  eta_K1 <- univ_eta(K_treat, beta_gr_tbl)
+  eta_L0 <- univ_eta(L_ctrl, beta_gr_tbl)
+  eta_L1 <- univ_eta(L_treat, beta_gr_tbl)
+  rho_K <- max(c(eta_K0, eta_K1), na.rm = TRUE)
+  rho_L <- max(c(eta_L0, eta_L1), na.rm = TRUE)
+  if (!is.finite(rho_K)) rho_K <- Inf
+  if (!is.finite(rho_L)) rho_L <- Inf
+
+  fmt_sigfig <- function(x, digits = 3L) {
+    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
+    if (!is.finite(x)) return("Inf")
+    v <- signif(as.numeric(x), digits)
+    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+    order <- floor(log10(abs(v)))
+    dp <- max(0L, as.integer(digits) - order - 1L)
+    sprintf(paste0("%.", dp, "f"), v)
+  }
+  fmt_explosive <- function(rho) {
+    if (!is.finite(rho)) return("yes (Inf)")
+    if (rho >= 1) "yes" else "no"
+  }
+
+  kl_tbl <- data.frame(
+    Parameter = kl_rows,
+    `K: Naive Univ (no KDE)` = vapply(K_vals, function(v) fmt_sigfig(v, 3L), character(1)),
+    `L: SEM Univ (no KDE)` = vapply(L_vals, function(v) fmt_sigfig(v, 3L), character(1)),
+    check.names = FALSE
+  )
+  kl_tbl <- rbind(
+    kl_tbl,
+    data.frame(
+      Parameter = c(
+        "eta_0 (control branching)",
+        "eta_1 (treated branching)",
+        "rho := max(eta_0, eta_1)",
+        "explosive? (rho >= 1)"
+      ),
+      `K: Naive Univ (no KDE)` = c(
+        fmt_sigfig(eta_K0, 3L), fmt_sigfig(eta_K1, 3L),
+        fmt_sigfig(rho_K, 3L), fmt_explosive(rho_K)
+      ),
+      `L: SEM Univ (no KDE)` = c(
+        fmt_sigfig(eta_L0, 3L), fmt_sigfig(eta_L1, 3L),
+        fmt_sigfig(rho_L, 3L), fmt_explosive(rho_L)
+      ),
+      check.names = FALSE
+    )
+  )
+  kable(
+    kl_tbl,
+    caption = paste0(
+      "All fitted univariate homogeneous ETAS parameters for Models K and L ",
+      "(no KDE; gamma fixed at 0), plus Gutenberg–Richter branching ratios (beta=",
+      signif(beta_gr_tbl, 3), "). ",
+      "Subscript 0 = control margin, 1 = treated margin (independent laws). ",
+      "Channel mean offspring: eta = A * beta / (beta - alpha_m); ",
+      "rho := max(eta_0, eta_1); explosive means rho >= 1."
+    ),
+    align = "lcc"
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
+} else {
+  cat("K/L parameter table unavailable in this results checkpoint (requires a refit with the updated analysis script).\n")
+}
+```
+
+### Combined parameter comparison (all fits A–L)
+
+```{r tbl-params-all-fits}
+#| label: tbl-params-all-fits
+# Unified A–L comparison. Bivariate fits use shared structural (c,p,D,q);
+# univariate fits map A_k -> A_kk, leave cross channels blank, and keep
+# margin-specific structural terms as c_0/c_1 etc when they differ.
+fmt_sigfig_all <- function(x, digits = 3L) {
+  if (is.null(x) || length(x) < 1L || is.na(x)) return("—")
+  if (!is.finite(x)) return("Inf")
+  v <- signif(as.numeric(x), digits)
+  if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
+  order <- floor(log10(abs(v)))
+  dp <- max(0L, as.integer(digits) - order - 1L)
+  sprintf(paste0("%.", dp, "f"), v)
+}
+pull_num <- function(par, nm) {
+  if (is.null(par)) return(NA_real_)
+  v <- to_named_num(par)
+  suppressWarnings(as.numeric(v[[nm]]))
+}
+biv_col <- function(fit_obj) {
+  p <- to_named_num(if (!is.null(fit_obj)) fit_obj$params else NULL)
+  if (!length(p)) return(NULL)
+  list(
+    kind = "biv",
+    p = p,
+    rho = spectral_radius_etas(p, beta_gr_tbl)
+  )
+}
+univ_col <- function(fit_obj) {
+  ctrl <- extract_univ_margin(fit_obj, "control")
+  treat <- extract_univ_margin(fit_obj, "treated")
+  if (is.null(ctrl) && is.null(treat)) return(NULL)
+  eta0 <- univ_eta(ctrl, beta_gr_tbl)
+  eta1 <- univ_eta(treat, beta_gr_tbl)
+  rho <- max(c(eta0, eta1), na.rm = TRUE)
+  if (!is.finite(rho)) rho <- Inf
+  list(kind = "univ", ctrl = ctrl, treat = treat, rho = rho)
+}
+fit_cols <- list(
+  A = biv_col(fit_A_obj), B = biv_col(fit_B_obj),
+  C = biv_col(fit_C_obj), D = biv_col(fit_D_obj),
+  E = biv_col(fit_E_obj), F = biv_col(fit_F_obj),
+  G = biv_col(fit_G_obj), H = biv_col(fit_H_obj),
+  I = univ_col(fit_I_obj), J = univ_col(fit_J_obj),
+  K = univ_col(fit_K_obj), L = univ_col(fit_L_obj)
+)
+param_rows_all <- c(
+  "mu_0", "mu_1",
+  "A_00", "alpha_m_00", "A_11", "alpha_m_11",
+  "A_01", "alpha_m_01", "A_10", "alpha_m_10",
+  "c_0", "p_0", "D_0", "q_0",
+  "c_1", "p_1", "D_1", "q_1",
+  "rho", "explosive?"
+)
+val_for <- function(col, nm) {
+  if (is.null(col)) return(NA_real_)
+  if (identical(nm, "rho")) return(col$rho)
+  if (identical(nm, "explosive?")) {
+    return(if (!is.finite(col$rho)) Inf else if (col$rho >= 1) 1 else 0)
+  }
+  if (identical(col$kind, "biv")) {
+    base <- sub("_[01]$", "", nm)
+    if (grepl("^[cpDq]_", nm) || nm %in% c("c", "p", "D", "q")) {
+      # Shared structural under bivariate law.
+      return(pull_num(col$p, base))
+    }
+    return(pull_num(col$p, nm))
+  }
+  # univariate
+  if (grepl("_0$", nm)) {
+    return(pull_num(col$ctrl, sub("_0$", "", nm)))
+  }
+  if (grepl("_1$", nm)) {
+    return(pull_num(col$treat, sub("_1$", "", nm)))
+  }
+  if (grepl("_(00|11)$", nm)) {
+    margin <- if (grepl("_00$", nm)) col$ctrl else col$treat
+    return(pull_num(margin, sub("_[01]{2}$", "", nm)))
+  }
+  # Cross channels absent under independent margins.
+  if (grepl("_(01|10)$", nm)) return(NA_real_)
+  NA_real_
+}
+fmt_cell <- function(col, nm) {
+  if (identical(nm, "explosive?")) {
+    if (is.null(col)) return("—")
+    if (!is.finite(col$rho)) return("yes (Inf)")
+    if (col$rho >= 1) "yes" else "no"
+  } else {
+    fmt_sigfig_all(val_for(col, nm), 3L)
+  }
+}
+present_letters <- names(fit_cols)[vapply(fit_cols, function(z) !is.null(z), logical(1))]
+if (length(present_letters) > 0L) {
+  all_mat <- sapply(present_letters, function(let) {
+    vapply(param_rows_all, function(nm) fmt_cell(fit_cols[[let]], nm), character(1))
+  }, simplify = "matrix")
+  if (is.null(dim(all_mat))) {
+    all_mat <- matrix(all_mat, ncol = 1, dimnames = list(param_rows_all, present_letters))
+  }
+  all_tbl <- data.frame(Parameter = param_rows_all, all_mat, check.names = FALSE)
+  kable(
+    all_tbl,
+    caption = paste0(
+      "Combined ETAS parameter comparison across available fits A–L ",
+      "(gamma fixed at 0). Bivariate columns share structural (c,p,D,q) across margins; ",
+      "univariate columns leave cross-excitation (A_01/A_10) blank and report margin-specific ",
+      "structural terms. rho is the offspring spectral radius (bivariate) or max margin branching ",
+      "(univariate); explosive means rho >= 1 (beta=", signif(beta_gr_tbl, 3), ")."
+    ),
+    align = paste0("l", paste(rep("c", length(present_letters)), collapse = ""))
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE) |>
+    scroll_box(width = "100%", height = "640px")
+} else {
+  cat("Combined A–L parameter table unavailable in this results checkpoint.\n")
 }
 ```
 
@@ -2011,32 +2656,37 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
 
 ```{r ate-scenario-compare-note, results='asis'}
 #| echo: false
-cat("\n### Four-scenario ATE comparison\n\n")
-cat("The **2×2 panel below** overlays Naive (E) and SEM (F) bias-corrected bootstrap ")
-cat("histograms for univariate vs bivariate × all-or-nothing vs observed. ")
-cat("When present, **512-rep** scenario RDS (`*_boot512`) are preferred; otherwise the ")
-cat("largest available bootstrap *n* per scenario is used. ")
-cat("Detailed companion HTML: ")
-scen_html <- file.path(dirname(result_file), "oklahoma_ate_scenarios.html")
-scen_csv <- file.path(dirname(result_file), "ate_scenarios", "scenario_summary.csv")
-if (file.exists(scen_html)) {
-  cat(sprintf("[`oklahoma_ate_scenarios.html`](%s)", basename(scen_html)))
+if (using_pre_bootstrap || is.null(boot_obj)) {
+  cat("\n### Four-scenario ATE comparison\n\n")
+  cat("Bootstrap scenario panels are omitted for this pre-bootstrap / no-bootstrap render.\n\n")
 } else {
-  cat("`oklahoma_ate_scenarios.html` (render with `render_ate_scenario_compare.R`)")
-}
-cat(".\n\n")
-if (file.exists(scen_csv)) {
-  scen_sum <- utils::read.csv(scen_csv, stringsAsFactors = FALSE)
-  if (nrow(scen_sum) > 0) {
-    knitr::kable(
-      scen_sum[, intersect(c("label", "method", "point_E", "point_F",
-                             "boot_bc_mean_E", "boot_bc_sd_E",
-                             "boot_bc_mean_F", "boot_bc_sd_F"), names(scen_sum)),
-               drop = FALSE],
-      digits = 1,
-      caption = "ATE scenario summary (bias-corrected bootstrap)."
-    ) |>
-      kableExtra::kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+  cat("\n### Four-scenario ATE comparison\n\n")
+  cat("The **2×2 panel below** overlays Naive (E) and SEM (F) bias-corrected bootstrap ")
+  cat("histograms for univariate vs bivariate × all-or-nothing vs observed. ")
+  cat("When present, **512-rep** scenario RDS (`*_boot512`) are preferred; otherwise the ")
+  cat("largest available bootstrap *n* per scenario is used. ")
+  cat("Detailed companion HTML: ")
+  scen_html <- file.path(dirname(result_file), "oklahoma_ate_scenarios.html")
+  scen_csv <- file.path(dirname(result_file), "ate_scenarios", "scenario_summary.csv")
+  if (file.exists(scen_html)) {
+    cat(sprintf("[`oklahoma_ate_scenarios.html`](%s)", basename(scen_html)))
+  } else {
+    cat("`oklahoma_ate_scenarios.html` (render with `render_ate_scenario_compare.R`)")
+  }
+  cat(".\n\n")
+  if (file.exists(scen_csv)) {
+    scen_sum <- utils::read.csv(scen_csv, stringsAsFactors = FALSE)
+    if (nrow(scen_sum) > 0) {
+      knitr::kable(
+        scen_sum[, intersect(c("label", "method", "point_E", "point_F",
+                               "boot_bc_mean_E", "boot_bc_sd_E",
+                               "boot_bc_mean_F", "boot_bc_sd_F"), names(scen_sum)),
+                 drop = FALSE],
+        digits = 1,
+        caption = "ATE scenario summary (bias-corrected bootstrap)."
+      ) |>
+        kableExtra::kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+    }
   }
 }
 ```
@@ -2045,6 +2695,7 @@ if (file.exists(scen_csv)) {
 #| label: fig-ate-scenarios-4panel
 #| fig-cap: "Four-scenario bias-corrected bootstrap comparison (univariate vs bivariate × all-or-nothing vs observed). Each panel overlays Naive (E) and SEM (F), using all finite ATEs retained after failed or explosive refits are excluded. Prefers 512-attempt scenario RDS when available."
 #| fig-height: 7.2
+#| eval: !expr '!using_pre_bootstrap && !is.null(boot_obj)'
 scen_specs <- list(
   list(id = "univ_aon", law = "Univariate", contrast = "All-or-nothing",
        files = c("for_paper_univ_aon_boot512.rds", "for_paper_univ_aon.rds",
@@ -2178,8 +2829,9 @@ if (length(scen_boot_rows) > 0) {
 #| label: fig-ate-bootstrap-cd
 #| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the selected KDE bootstrap pair, using all finite ATEs retained after failed or explosive refits are excluded. Shape/spread preserved, recentered to the point ATE."
 #| fig-height: 4
+#| eval: !expr '!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df)'
 # Labels / centers follow results$config$ATE_METHOD for this RDS.
-if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
+if (!is.null(boot_naive_df) && !is.null(boot_sem_df) &&
     nrow(boot_naive_df) > 0 && nrow(boot_sem_df) > 0 &&
     "ate_total_mean" %in% names(boot_naive_df) && "ate_total_mean" %in% names(boot_sem_df)) {
   get_fit_obj_by_id <- function(id) {
@@ -2260,6 +2912,7 @@ if (!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 #| label: fig-ate-bootstrap-biv-obs
 #| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (E/F), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
 #| fig-height: 4
+#| eval: !expr '!using_pre_bootstrap'
 # Companion scenario RDS written by launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
 biv_obs_candidates <- unique(c(
   file.path(OUT_DIR, "for_paper_biv_obs.rds"),

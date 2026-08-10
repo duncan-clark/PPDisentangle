@@ -4,6 +4,9 @@ Prose for the manuscript lives on **Overleaf**. A context snapshot is in
 `docs/paper/paper.tex`. This folder holds the **R driver** only; regenerated
 publication outputs go under `../PPDisentangle-output/oklahoma/paper/generated/`.
 
+Canonical input: `PPDisentangle-output/oklahoma/for_paper.rds` — bivariate
+all-or-nothing bootstrap for fits E/F (alias: `for_paper_biv_aon.rds`).
+
 | Path | Role |
 |------|------|
 | `oklahoma_paper_assets.R` | Builds Oklahoma figures (PDFs) and `\input`-able table `.tex` fragments. |
@@ -23,6 +26,7 @@ Options:
 ```text
 --input       Path to results `.rds` (default: first existing of
               ../PPDisentangle-output/oklahoma/for_paper.rds,
+              ../PPDisentangle-output/oklahoma/for_paper_biv_aon.rds,
               inst/oklahoma/paper/for_paper.rds)
 --plots-dir   PDF output directory (default: PPDisentangle-output/.../figures)
 --tex-dir     Generated LaTeX directory (default: PPDisentangle-output/.../generated)

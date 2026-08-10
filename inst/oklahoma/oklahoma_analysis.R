@@ -128,12 +128,20 @@ BETA_GR    <- 2.3
 CRS_PROJ   <- 5070
 
 VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 1000
+# Spatial scale is magnitude-independent: d(m) = D (gamma fixed at 0 in all fits).
+GAMMA_FIXED <- 0
 VANILLA_STARTS <- list(
   list(mu = 1.0, A = 0.2, alpha_m = 0.8, c = 0.05, p = 1.2,
-       D = 5.0, gamma = 0.5, q = 1.5),
+       D = 5.0, gamma = GAMMA_FIXED, q = 1.5),
   list(mu = 2.0, A = 0.1, alpha_m = 0.5, c = 0.1,  p = 1.3,
-       D = 2.0, gamma = 0.3, q = 2.0)
+       D = 2.0, gamma = GAMMA_FIXED, q = 2.0)
 )
+# Merge gamma=0 into any fixed_params list (all models exclude gamma).
+with_gamma_fixed <- function(fixed_params = NULL) {
+  out <- if (is.null(fixed_params)) list() else as.list(fixed_params)
+  out[["gamma"]] <- GAMMA_FIXED
+  out
+}
 
 SEM_N_LABELLINGS  <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 env_sem_n_labellings <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_N_LABELLINGS", "")))
@@ -246,8 +254,9 @@ SEM_WORKER_LOGS <- tolower(Sys.getenv("OK_SEM_WORKER_LOGS", "true")) %in% c("1",
 SEM_WORKER_LOG_VERBOSE <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_VERBOSE", if (SEM_WORKER_LOGS) "true" else "false")) %in% c("1", "true", "yes", "y")
 SEM_WORKER_LOG_SPLIT <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_SPLIT", "false")) %in% c("1", "true", "yes", "y")
 
-STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = 0.5, q = 1.5)
+STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = GAMMA_FIXED, q = 1.5)
 # Structural terms are fixed downstream after first-half pre-treatment calibration.
+# gamma is always fixed at 0 (not estimated); other structural terms may be profile-specific.
 FIXED_STRUCTURAL <- NULL
 
 ATE_N_SIMS    <- if (QUICK_CHECK) 5 else if (TEST_MODE) 20 else 40
@@ -888,7 +897,7 @@ estimate_structural_init <- function() {
         beta_gr = BETA_GR,
         max_branching_ratio = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT,
-        fixed_params = NULL,
+        fixed_params = with_gamma_fixed(NULL),
         zero_background_region = treated_ss
       ),
       error = function(e) NULL
@@ -916,11 +925,14 @@ estimate_structural_init <- function() {
   out
 }
 STRUCT_INIT <- estimate_structural_init()
-FIXED_STRUCTURAL <- as.list(STRUCT_INIT[c("c", "p", "D", "gamma", "q")])
+STRUCT_INIT$gamma <- GAMMA_FIXED
+FIXED_STRUCTURAL <- with_gamma_fixed(as.list(STRUCT_INIT[c("c", "p", "D", "q")]))
 if (is.null(PRE_CTRL_BOOT_PARAMS)) {
   PRE_CTRL_BOOT_PARAMS <- list(mu = 1.0, A = 0.2, alpha_m = 0.8,
                                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
-                               D = STRUCT_INIT$D, gamma = STRUCT_INIT$gamma, q = STRUCT_INIT$q)
+                               D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q)
+} else {
+  PRE_CTRL_BOOT_PARAMS$gamma <- GAMMA_FIXED
 }
 compute_temporal_trunc_from_pre <- function(c_param, p_param, rel_level = SEM_T_TRUNC_REL) {
   c_param <- suppressWarnings(as.numeric(c_param))
@@ -960,6 +972,7 @@ cat(sprintf("  SEM t_trunc resolved from %s: %s days\n",
 apply_pre_init_etas <- function(start_par) {
   out <- start_par
   for (nm in etas_names) out[[nm]] <- PRE_CTRL_BOOT_PARAMS[[nm]]
+  out[["gamma"]] <- GAMMA_FIXED
   out
 }
 
@@ -989,6 +1002,7 @@ apply_pre_init_biv <- function(par_vec) {
     if (!is.finite(v) || is.na(v) || v <= 0) out[[nm]] <- cross_alpha_floor
   }
   out[c("c", "p", "D", "gamma", "q")] <- unlist(PRE_CTRL_BOOT_PARAMS[c("c", "p", "D", "gamma", "q")])
+  out[["gamma"]] <- GAMMA_FIXED
   out
 }
 
@@ -1051,7 +1065,7 @@ fit_control_snapshot <- function(df, label, window_end) {
         beta_gr = BETA_GR,
         max_branching_ratio = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT,
-        fixed_params = NULL
+        fixed_params = with_gamma_fixed(NULL)
       ),
       error = function(e) NULL
     )
@@ -1167,7 +1181,7 @@ fit_best_indep <- function(realiz, zbr, starts, maxit) {
     fit <- tryCatch(
       fit_etas(params_init = s, realiz = realiz, windowT = windowT_post,
                windowS = win_km, m0 = ETAS_M0, maxit = maxit,
-               fixed_params = NULL, zero_background_region = zbr,
+               fixed_params = with_gamma_fixed(NULL), zero_background_region = zbr,
                beta_gr = BETA_GR,
                max_branching_ratio = ETAS_BRANCHING_MAX),
       error = function(e) NULL)
@@ -1226,7 +1240,7 @@ fit_b <- function() {
       treated_background_zero_before = 0,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
-      maxit = VANILLA_MAXIT, fixed_params = FIXED_STRUCTURAL, trace = 0,
+      maxit = VANILLA_MAXIT, fixed_params = with_gamma_fixed(FIXED_STRUCTURAL), trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
@@ -1270,7 +1284,7 @@ run_sem_fit <- function(pp_data_in,
                         init_ctrl_params_in = A_ctrl,
                         init_treat_params_in = A_treat,
                         model_type_in = "etas_bivariate",
-                        fixed_params_in = biv_fixed,
+                        fixed_params_in = with_gamma_fixed(biv_fixed),
                         background_rate_var_in = NULL,
                         use_pre_history_for_biv_in = TRUE,
                         treated_background_zero_before_in = 0,
@@ -1284,6 +1298,7 @@ run_sem_fit <- function(pp_data_in,
                         verbose_in = DF_VERBOSE,
                         label = "SEM",
                         sem_rng_label_in = NULL) {
+  fixed_params_in <- with_gamma_fixed(fixed_params_in)
   t0 <- proc.time()[["elapsed"]]
   sem_rng_label <- if (!is.null(sem_rng_label_in)) {
     rl <- as.character(sem_rng_label_in)[1L]
@@ -1535,25 +1550,25 @@ tryCatch({
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
 # Parameter profiles for county KDE bivariate fits.
-# - all_free: no fixed parameters
+# - all_free: free except gamma=0 (magnitude-independent spatial scale)
 # - control_only_fixed: structural terms fixed from first-half control pre-treatment;
-#   productivity terms (including mu_0 and A_00) are free.
+#   productivity terms (including mu_0 and A_00) are free; gamma=0 always.
 # - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment
 kde_variant_specs <- list(
   all_free = list(
     id = "all_free",
-    label = "all parameters free",
-    fixed_params = NULL
+    label = "all free except gamma=0",
+    fixed_params = with_gamma_fixed(NULL)
   ),
   control_only_fixed = list(
     id = "control_only_fixed",
-    label = "structural fixed from first-half control pre-treatment",
-    fixed_params = FIXED_STRUCTURAL
+    label = "structural fixed from first-half control pre-treatment (gamma=0)",
+    fixed_params = with_gamma_fixed(FIXED_STRUCTURAL)
   ),
   productivity_free = list(
     id = "productivity_free",
-    label = "mu/A/alpha free, structural fixed",
-    fixed_params = FIXED_STRUCTURAL
+    label = "mu/A/alpha free, structural fixed (gamma=0)",
+    fixed_params = with_gamma_fixed(FIXED_STRUCTURAL)
   )
 )
 kde_primary_variant_id <- "control_only_fixed"
@@ -1589,7 +1604,7 @@ extract_marginals <- function(biv_par) {
   c_val <- biv_par[["c"]]; if (!is.finite(c_val)) c_val <- STRUCT_DEFAULTS$c
   p_val <- biv_par[["p"]]; if (!is.finite(p_val)) p_val <- STRUCT_DEFAULTS$p
   D_val <- biv_par[["D"]]; if (!is.finite(D_val)) D_val <- STRUCT_DEFAULTS$D
-  g_val <- biv_par[["gamma"]]; if (!is.finite(g_val)) g_val <- STRUCT_DEFAULTS$gamma
+  g_val <- GAMMA_FIXED
   q_val <- biv_par[["q"]]; if (!is.finite(q_val)) q_val <- STRUCT_DEFAULTS$q
   structural <- c(c = c_val, p = p_val, D = D_val, gamma = g_val, q = q_val)
   ctrl <- as.list(c(mu = biv_par[["mu_0"]], A = biv_par[["A_00"]],
@@ -1942,6 +1957,7 @@ biv_init_E <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat
 fit_e <- function(init_params = biv_init_E,
                   fixed_params = FIXED_STRUCTURAL,
                   fit_label = "Fit C") {
+  fixed_params <- with_gamma_fixed(fixed_params)
   tryCatch({
     cat(sprintf("  [%s] fixed params: %s\n",
                 fit_label,
@@ -1972,6 +1988,7 @@ biv_init_F <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat
 fit_f <- function(init_params = biv_init_F,
                   fixed_params = FIXED_STRUCTURAL,
                   fit_label = "Fit D") {
+  fixed_params <- with_gamma_fixed(fixed_params)
   tryCatch({
     init_params_use <- enforce_control_decay_start(init_params, A_ctrl)
     cat(sprintf(
@@ -2326,9 +2343,11 @@ H_params <- if (!is.null(kde_variant_fits$F$productivity_free) &&
 }
 
 # ============================================================================
-# 4I/4J. Univariate ETAS comparison (no cross-excitation)
+# 4I/4J/4K/4L. Univariate ETAS comparison (no cross-excitation)
+#   I/J: independent margins + KDE background
+#   K/L: independent margins, homogeneous background (no KDE)
 # ============================================================================
-cat("\n--- Step 4I/4J: Univariate ETAS (I/J) dispatch ---\n")
+cat("\n--- Step 4I/4J/4K/4L: Univariate ETAS dispatch ---\n")
 
 fit_indep_pair <- function(pp_data_in,
                            background_rate_var_in = NULL,
@@ -2336,6 +2355,7 @@ fit_indep_pair <- function(pp_data_in,
                            ctrl_init_in = A_ctrl,
                            treat_init_in = A_treat,
                            fit_label = "Fit I") {
+  fixed_params_in <- with_gamma_fixed(fixed_params_in)
   dat <- as.data.frame(pp_data_in)
   dat <- dat[dat$t >= 0, , drop = FALSE]
   if (nrow(dat) < 1L) return(NULL)
@@ -2397,15 +2417,14 @@ fit_i <- function() {
     fit_indep_pair(
       pp_data_in = pp_all_bg,
       background_rate_var_in = "W",
-      # Keep structural terms free so finite-moment constraints are enforced
-      # by the ETAS likelihood's soft-to-hard boundary penalties.
-      fixed_params_in = NULL,
+      # Structural free except gamma=0; finite-moment constraints via likelihood.
+      fixed_params_in = with_gamma_fixed(NULL),
       ctrl_init_in = A_ctrl,
       treat_init_in = A_treat,
       fit_label = "Fit I"
     ),
     error = function(e) {
-      cat("  Fit I (naive univariate) error:", e$message, "\n")
+      cat("  Fit I (naive univariate+KDE) error:", e$message, "\n")
       NULL
     }
   )
@@ -2422,28 +2441,69 @@ fit_j <- function() {
       init_ctrl_params_in = A_ctrl,
       init_treat_params_in = A_treat,
       model_type_in = "etas",
-      # Match other SEM fits: enforce finite moments via likelihood penalties,
-      # not by hard-fixing structural terms.
-      fixed_params_in = NULL,
+      fixed_params_in = with_gamma_fixed(NULL),
       background_rate_var_in = "W",
       sem_inner_iter_in = SEM_INNER_ITER,
       verbose_in = DF_VERBOSE,
       label = "Fit J"
     ),
     error = function(e) {
-      cat("  Fit J (SEM univariate) error:", e$message, "\n")
+      cat("  Fit J (SEM univariate+KDE) error:", e$message, "\n")
       NULL
     }
   )
 }
 
-univ_jobs <- c("I", "J")
+fit_k <- function() {
+  tryCatch(
+    fit_indep_pair(
+      pp_data_in = pp_all,
+      background_rate_var_in = NULL,
+      fixed_params_in = with_gamma_fixed(NULL),
+      ctrl_init_in = A_ctrl,
+      treat_init_in = A_treat,
+      fit_label = "Fit K"
+    ),
+    error = function(e) {
+      cat("  Fit K (naive univariate, no KDE) error:", e$message, "\n")
+      NULL
+    }
+  )
+}
+
+fit_l <- function() {
+  tryCatch(
+    run_sem_fit(
+      pp_data_in = pp_all,
+      partition_in = partition,
+      partition_processes_in = partition_processes,
+      state_spaces_in = state_spaces,
+      init_params_in = NULL,
+      init_ctrl_params_in = A_ctrl,
+      init_treat_params_in = A_treat,
+      model_type_in = "etas",
+      fixed_params_in = with_gamma_fixed(NULL),
+      background_rate_var_in = NULL,
+      sem_inner_iter_in = SEM_INNER_ITER,
+      verbose_in = DF_VERBOSE,
+      label = "Fit L"
+    ),
+    error = function(e) {
+      cat("  Fit L (SEM univariate, no KDE) error:", e$message, "\n")
+      NULL
+    }
+  )
+}
+
+univ_jobs <- c("I", "J", "K", "L")
 run_one_univ_job <- function(tag) {
   t0 <- proc.time()[["elapsed"]]
   out_obj <- NULL
   cat(sprintf("    [univ-job:%s] start pid=%d mem=%s\n", tag, Sys.getpid(), mem_snapshot()))
   if (tag == "I") out_obj <- fit_i()
   if (tag == "J") out_obj <- fit_j()
+  if (tag == "K") out_obj <- fit_k()
+  if (tag == "L") out_obj <- fit_l()
   elapsed <- proc.time()[["elapsed"]] - t0
   cat(sprintf("    [univ-job:%s] done in %.1fs status=%s mem=%s\n",
               tag, elapsed, ifelse(is.null(out_obj), "failed", "ok"), mem_snapshot()))
@@ -2466,10 +2526,16 @@ get_univ_job <- function(tag) {
 }
 row_i <- get_univ_job("I")
 row_j <- get_univ_job("J")
+row_k <- get_univ_job("K")
+row_l <- get_univ_job("L")
 fitI <- if (!is.null(row_i)) row_i$obj else NULL
 semJ <- if (!is.null(row_j)) row_j$obj else NULL
+fitK <- if (!is.null(row_k)) row_k$obj else NULL
+semL <- if (!is.null(row_l)) row_l$obj else NULL
 fit_I_elapsed <- if (!is.null(row_i)) row_i$elapsed else NA_real_
 fit_J_elapsed <- if (!is.null(row_j)) row_j$elapsed else NA_real_
+fit_K_elapsed <- if (!is.null(row_k)) row_k$elapsed else NA_real_
+fit_L_elapsed <- if (!is.null(row_l)) row_l$elapsed else NA_real_
 add_timing_row(
   stage = "fit_I_naive_univariate_kde",
   elapsed_sec = fit_I_elapsed,
@@ -2482,18 +2548,42 @@ add_timing_row(
   status = if (!is.null(semJ)) "ok" else "failed",
   detail = "elapsed from univariate dispatch"
 )
+add_timing_row(
+  stage = "fit_K_naive_univariate_homog",
+  elapsed_sec = fit_K_elapsed,
+  status = if (!is.null(fitK)) "ok" else "failed",
+  detail = "elapsed from univariate dispatch"
+)
+add_timing_row(
+  stage = "fit_L_sem_univariate_homog",
+  elapsed_sec = fit_L_elapsed,
+  status = if (!is.null(semL)) "ok" else "failed",
+  detail = "elapsed from univariate dispatch"
+)
 I_ctrl <- if (!is.null(fitI)) fitI$control else A_ctrl
 I_treat <- if (!is.null(fitI)) fitI$treated else A_treat
 J_ctrl <- if (!is.null(semJ)) semJ$hawkes_params_control else A_ctrl
 J_treat <- if (!is.null(semJ)) semJ$hawkes_params_treated else A_treat
+K_ctrl <- if (!is.null(fitK)) fitK$control else A_ctrl
+K_treat <- if (!is.null(fitK)) fitK$treated else A_treat
+L_ctrl <- if (!is.null(semL)) semL$hawkes_params_control else A_ctrl
+L_treat <- if (!is.null(semL)) semL$hawkes_params_treated else A_treat
 I_params <- list(control = I_ctrl, treated = I_treat)
 J_params <- list(control = J_ctrl, treated = J_treat)
+K_params <- list(control = K_ctrl, treated = K_treat)
+L_params <- list(control = L_ctrl, treated = L_treat)
 pp_post_sem_J <- if (!is.null(semJ) && !is.null(semJ$adaptive$adaptive_labelling)) {
   semJ$adaptive$adaptive_labelling
 } else {
   pp_post_bg
 }
 pp_post_sem_J <- pp_post_sem_J[pp_post_sem_J$t >= 0, , drop = FALSE]
+pp_post_sem_L <- if (!is.null(semL) && !is.null(semL$adaptive$adaptive_labelling)) {
+  semL$adaptive$adaptive_labelling
+} else {
+  pp_post
+}
+pp_post_sem_L <- pp_post_sem_L[pp_post_sem_L$t >= 0, , drop = FALSE]
 
 # ============================================================================
 # 4I. KDE bandwidth sensitivity (county partition, inhomogeneous E/F)
@@ -2973,6 +3063,8 @@ G_marginals <- extract_marginals(G_params)
 H_marginals <- extract_marginals(H_params)
 I_marginals <- extract_marginals_indep(I_params)
 J_marginals <- extract_marginals_indep(J_params)
+K_marginals <- extract_marginals_indep(K_params)
+L_marginals <- extract_marginals_indep(L_params)
 
 ensure_ate_psock_pool()
 ate_crn_base_seed <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
@@ -2982,32 +3074,67 @@ ate_crn_base_seed <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) 
 } else {
   100000L
 }
-ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
-  if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
-    ate_estim_bivariate(
-      biv_params = biv_params,
-      windowT = windowT_ate,
-      windowS = win_km,
-      state_spaces_obs = state_spaces,
-      label = label,
-      n_sims = ATE_N_SIMS,
-      m0 = ETAS_M0,
-      beta_gr = BETA_GR,
-      filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-      t_trunc = SEM_T_TRUNC_DAYS,
-      n_tiles = partition$n,
-      crn_base_seed = ate_crn_base_seed,
-      use_crn = OK_ATE_USE_CRN,
-      crn_pair = OK_ATE_CRN_PAIR,
-      quiet = FALSE,
-      contrast = OK_ATE_CONTRAST
-    )
-  } else {
-    ate_estim_fast(
-      marg$ctrl, marg$treat, observed_data, label,
-      contrast = OK_ATE_CONTRAST
+# Compute both AoN and observed contrasts; attach under $by_contrast.
+# Primary payload (backward-compatible fields) follows OK_ATE_CONTRAST.
+ate_with_both_contrasts <- function(compute_one) {
+  ate_aon <- tryCatch(
+    compute_one("all_or_nothing"),
+    error = function(e) {
+      cat("    ATE all_or_nothing error:", e$message, "\n")
+      NULL
+    }
+  )
+  ate_obs <- tryCatch(
+    compute_one("observed"),
+    error = function(e) {
+      cat("    ATE observed error:", e$message, "\n")
+      NULL
+    }
+  )
+  primary <- if (identical(OK_ATE_CONTRAST, "observed")) ate_obs else ate_aon
+  if (is.null(primary)) primary <- if (!is.null(ate_aon)) ate_aon else ate_obs
+  if (!is.null(primary)) {
+    primary$by_contrast <- list(
+      all_or_nothing = ate_aon,
+      observed = ate_obs
     )
   }
+  primary
+}
+ate_biv_or_marginal <- function(biv_params, marg, observed_data, label) {
+  ate_with_both_contrasts(function(contrast) {
+    if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
+      ate_estim_bivariate(
+        biv_params = biv_params,
+        windowT = windowT_ate,
+        windowS = win_km,
+        state_spaces_obs = state_spaces,
+        label = label,
+        n_sims = ATE_N_SIMS,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        t_trunc = SEM_T_TRUNC_DAYS,
+        n_tiles = partition$n,
+        crn_base_seed = ate_crn_base_seed,
+        use_crn = OK_ATE_USE_CRN,
+        crn_pair = OK_ATE_CRN_PAIR,
+        quiet = FALSE,
+        contrast = contrast
+      )
+    } else {
+      ate_estim_fast(
+        marg$ctrl, marg$treat, observed_data, label,
+        contrast = contrast
+      )
+    }
+  })
+}
+ate_univ_both <- function(marg, observed_data, label) {
+  if (is.null(marg)) return(NULL)
+  ate_with_both_contrasts(function(contrast) {
+    ate_estim_fast(marg$ctrl, marg$treat, observed_data, label, contrast = contrast)
+  })
 }
 t_ate_B <- proc.time()[["elapsed"]]
 ate_B <- ate_biv_or_marginal(B_params, B_marginals, pp_post,
@@ -3075,8 +3202,7 @@ for (vid in names(kde_variant_specs)) {
 }
 ate_I <- if (!is.null(I_marginals)) {
   t_ate_I <- proc.time()[["elapsed"]]
-  ate_estim_fast(I_marginals$ctrl, I_marginals$treat, pp_post_bg,
-                 "Fit I (Naive univariate ETAS)")
+  ate_univ_both(I_marginals, pp_post_bg, "Fit I (Naive univariate ETAS)")
 } else NULL
 if (exists("t_ate_I", inherits = FALSE)) {
   ate_I_elapsed <- proc.time()[["elapsed"]] - t_ate_I
@@ -3084,12 +3210,27 @@ if (exists("t_ate_I", inherits = FALSE)) {
 }
 ate_J <- if (!is.null(J_marginals)) {
   t_ate_J <- proc.time()[["elapsed"]]
-  ate_estim_fast(J_marginals$ctrl, J_marginals$treat, pp_post_sem_J,
-                 "Fit J (SEM univariate ETAS)")
+  ate_univ_both(J_marginals, pp_post_sem_J, "Fit J (SEM univariate ETAS + KDE)")
 } else NULL
 if (exists("t_ate_J", inherits = FALSE)) {
   ate_J_elapsed <- proc.time()[["elapsed"]] - t_ate_J
   add_timing_row("ate_J", ate_J_elapsed, if (!is.null(ate_J)) "ok" else "failed")
+}
+ate_K <- if (!is.null(K_marginals)) {
+  t_ate_K <- proc.time()[["elapsed"]]
+  ate_univ_both(K_marginals, pp_post, "Fit K (Naive univariate ETAS, no KDE)")
+} else NULL
+if (exists("t_ate_K", inherits = FALSE)) {
+  ate_K_elapsed <- proc.time()[["elapsed"]] - t_ate_K
+  add_timing_row("ate_K", ate_K_elapsed, if (!is.null(ate_K)) "ok" else "failed")
+}
+ate_L <- if (!is.null(L_marginals)) {
+  t_ate_L <- proc.time()[["elapsed"]]
+  ate_univ_both(L_marginals, pp_post_sem_L, "Fit L (SEM univariate ETAS, no KDE)")
+} else NULL
+if (exists("t_ate_L", inherits = FALSE)) {
+  ate_L_elapsed <- proc.time()[["elapsed"]] - t_ate_L
+  add_timing_row("ate_L", ate_L_elapsed, if (!is.null(ate_L)) "ok" else "failed")
 }
 
 } else {
@@ -3431,6 +3572,16 @@ fits_named_pre_sensitivity <- list(
     letter = "J", label = "SEM univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
+  ),
+  K = list(
+    letter = "K", label = "Naive univariate ETAS (county, no KDE)",
+    method = "county_univariate_homog", algorithm = "naive",
+    params = K_params, fit = fitK, ate = ate_K
+  ),
+  L = list(
+    letter = "L", label = "SEM univariate ETAS (county, no KDE)",
+    method = "county_univariate_homog", algorithm = "sem",
+    params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
 )
 results_pre_sensitivity <- list(
@@ -3440,6 +3591,8 @@ results_pre_sensitivity <- list(
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
   fitI = list(params = I_params, fit = fitI, ate = ate_I),
   fitJ = list(params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J),
+  fitK = list(params = K_params, fit = fitK, ate = ate_K),
+  fitL = list(params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L),
   fits_named = fits_named_pre_sensitivity,
   kde_variants = kde_variant_fits,
   fitG = NULL,
@@ -3481,10 +3634,13 @@ results_pre_sensitivity <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J"
+    J = "fits_named$J",
+    K = "fits_named$K",
+    L = "fits_named$L"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
@@ -3686,6 +3842,16 @@ fits_named <- list(
     letter = "J", label = "SEM univariate ETAS + KDE (county)",
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
+  ),
+  K = list(
+    letter = "K", label = "Naive univariate ETAS (county, no KDE)",
+    method = "county_univariate_homog", algorithm = "naive",
+    params = K_params, fit = fitK, ate = ate_K
+  ),
+  L = list(
+    letter = "L", label = "SEM univariate ETAS (county, no KDE)",
+    method = "county_univariate_homog", algorithm = "sem",
+    params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
 )
 
@@ -3696,6 +3862,8 @@ results_pre_bootstrap <- list(
   fitF = list(params = F_params, ctrl = F_ctrl, treat = F_treat, sem = semF, ate = ate_F),
   fitI = list(params = I_params, fit = fitI, ate = ate_I),
   fitJ = list(params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J),
+  fitK = list(params = K_params, fit = fitK, ate = ate_K),
+  fitL = list(params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L),
   fits_named = fits_named,
   kde_variants = kde_variant_fits,
   fitG = NULL,
@@ -3740,10 +3908,13 @@ results_pre_bootstrap <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J"
+    J = "fits_named$J",
+    K = "fits_named$K",
+    L = "fits_named$L"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
@@ -4932,10 +5103,13 @@ results <- list(
     G = "fits_named$G",
     H = "fits_named$H",
     I = "fits_named$I",
-    J = "fits_named$J"
+    J = "fits_named$J",
+    K = "fits_named$K",
+    L = "fits_named$L"
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
