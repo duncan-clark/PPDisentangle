@@ -625,8 +625,9 @@ export OK_MEMORY_SAFE=true
 export OK_PARALLEL_BACKEND=psock
 export OK_CORES="${JOB_CORES}"
 export OK_SENS_CORES="${JOB_CORES}"
-# Default ATE sims to single-core execution unless explicitly overridden.
-export OK_ATE_SIM_CORES="${OK_ATE_SIM_CORES:-${PP_ATE_SIM_CORES:-1}}"
+# ATE forward sims are independent (CRN seeds are per-replicate); use the
+# full job allocation unless the caller overrides OK_ATE_SIM_CORES / PP_ATE_SIM_CORES.
+export OK_ATE_SIM_CORES="${OK_ATE_SIM_CORES:-${PP_ATE_SIM_CORES:-$JOB_CORES}}"
 export OK_BOOT_OUTER_CAP_MEMSAFE="${JOB_CORES}"
 export OK_VERBOSE=false
 export OK_SEM_INNER_ITER="$PP_SEM_INNER"
@@ -720,7 +721,7 @@ export OK_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_GUARD_DEGENERATE=true
 export OK_REPORT_FORMATS=html
-echo "ATE settings: OK_ATE_BIVARIATE=$OK_ATE_BIVARIATE OK_ATE_CONTRAST=$OK_ATE_CONTRAST OK_ATE_SCENARIO=${OK_ATE_SCENARIO:-} OK_ATE_N_SIMS=$OK_ATE_N_SIMS"
+echo "ATE settings: OK_ATE_BIVARIATE=$OK_ATE_BIVARIATE OK_ATE_CONTRAST=$OK_ATE_CONTRAST OK_ATE_SCENARIO=${OK_ATE_SCENARIO:-} OK_ATE_N_SIMS=$OK_ATE_N_SIMS OK_ATE_SIM_CORES=$OK_ATE_SIM_CORES"
 
 if [ "${PP_BOOT_REPS:-0}" -le 0 ]; then
   export OK_RUN_BOOTSTRAP_ATE=false

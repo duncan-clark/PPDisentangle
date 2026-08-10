@@ -12,6 +12,7 @@ ate_estim_bivariate <- function(
     state_spaces_obs,
     label = "bivariate",
     n_sims = 500L,
+    n_cores = 1L,
     m0 = 2.5,
     beta_gr = 2.3,
     filtration_history = NULL,
@@ -148,10 +149,15 @@ ate_estim_bivariate <- function(
     )
   }
 
+  n_sims_i <- max(1L, as.integer(n_sims))
+  n_cores_use <- suppressWarnings(as.integer(n_cores))
+  if (!is.finite(n_cores_use) || is.na(n_cores_use) || n_cores_use < 1L) n_cores_use <- 1L
+  n_cores_use <- max(1L, min(n_cores_use, n_sims_i))
+
   if (!isTRUE(quiet)) {
     cat(sprintf(
-      "  [ATE:bivariate/%s] %s: sims=%d window=[%.1f,%.1f] t_trunc=%s\n",
-      contrast, label, as.integer(n_sims), windowT[1], windowT[2],
+      "  [ATE:bivariate/%s] %s: sims=%d cores=%d window=[%.1f,%.1f] t_trunc=%s\n",
+      contrast, label, n_sims_i, n_cores_use, windowT[1], windowT[2],
       if (is.null(t_trunc)) "NULL" else format(t_trunc, digits = 4)
     ))
   }
@@ -178,7 +184,22 @@ ate_estim_bivariate <- function(
     c(c_count = nrow(c_sim), t_count = nrow(t_sim))
   }
 
-  sim_results <- lapply(seq_len(as.integer(n_sims)), run_one)
+  sim_ids <- as.list(seq_len(n_sims_i))
+  ate_label_slug <- gsub("[^A-Za-z0-9]+", "_", label)
+  ate_label_slug <- gsub("^_+|_+$", "", ate_label_slug)
+  if (!nzchar(ate_label_slug)) ate_label_slug <- "model"
+  parallel_label <- sprintf(
+    "ate-biv-%s-%s", contrast, tolower(substr(ate_label_slug, 1L, 32L))
+  )
+  # Prefer the Oklahoma analysis runner when available (PSOCK/fork + progress).
+  # Fall back to mclapply, then sequential lapply.
+  sim_results <- if (n_cores_use > 1L && exists("run_parallel", mode = "function")) {
+    run_parallel(sim_ids, run_one, cores = n_cores_use, label = parallel_label)
+  } else if (n_cores_use > 1L && .Platform$OS.type != "windows") {
+    parallel::mclapply(sim_ids, run_one, mc.cores = n_cores_use)
+  } else {
+    lapply(sim_ids, run_one)
+  }
   c_counts <- vapply(sim_results, function(z) as.numeric(z[["c_count"]]), numeric(1))
   t_counts <- vapply(sim_results, function(z) as.numeric(z[["t_count"]]), numeric(1))
   total_saved <- c_counts - t_counts

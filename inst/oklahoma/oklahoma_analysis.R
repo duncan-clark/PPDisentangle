@@ -383,9 +383,11 @@ SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
 SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
 if (!is.finite(SENS_CORES) || is.na(SENS_CORES) || SENS_CORES < 1L) SENS_CORES <- 1L
 SENS_CORES <- max(1L, min(SENS_CORES, N_CORES))
-ATE_SIM_CORES_DEFAULT <- 1L
+# Use all allocated cores for ATE forward sims by default (sims are independent;
+# CRN seeds are per-replicate so parallel is safe). Override with OK_ATE_SIM_CORES.
+ATE_SIM_CORES_DEFAULT <- N_CORES
 ATE_SIM_CORES <- suppressWarnings(as.integer(ifelse(nzchar(ATE_SIM_CORES_RAW), ATE_SIM_CORES_RAW, as.character(ATE_SIM_CORES_DEFAULT))))
-if (!is.finite(ATE_SIM_CORES) || is.na(ATE_SIM_CORES) || ATE_SIM_CORES < 1L) ATE_SIM_CORES <- 1L
+if (!is.finite(ATE_SIM_CORES) || is.na(ATE_SIM_CORES) || ATE_SIM_CORES < 1L) ATE_SIM_CORES <- N_CORES
 ATE_SIM_CORES <- max(1L, min(ATE_SIM_CORES, N_CORES))
 FIT_VARIABILITY_CORES <- suppressWarnings(as.integer(ifelse(
   nzchar(FIT_VARIABILITY_CORES_RAW), FIT_VARIABILITY_CORES_RAW, as.character(N_CORES)
@@ -3287,6 +3289,7 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
         state_spaces_obs = state_spaces,
         label = label,
         n_sims = ATE_N_SIMS,
+        n_cores = ATE_SIM_CORES,
         m0 = ETAS_M0,
         beta_gr = BETA_GR,
         filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
@@ -4589,6 +4592,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             state_spaces_obs = state_spaces,
             label = sprintf("Boot C #%d", rep_id),
             n_sims = ATE_N_SIMS,
+            # Nested under bootstrap outer parallel: keep ATE sims sequential.
+            n_cores = 1L,
             m0 = ETAS_M0,
             beta_gr = BETA_GR,
             filtration_history = sim_C$pre_df,
@@ -4694,6 +4699,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
             state_spaces_obs = state_spaces,
             label = sprintf("Boot D #%d", rep_id),
             n_sims = ATE_N_SIMS,
+            # Nested under bootstrap outer parallel: keep ATE sims sequential.
+            n_cores = 1L,
             m0 = ETAS_M0,
             beta_gr = BETA_GR,
             filtration_history = sim_D$pre_df,
@@ -4941,6 +4948,7 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
         state_spaces_obs = state_spaces,
         label = label,
         n_sims = ATE_N_SIMS,
+        n_cores = ATE_SIM_CORES,
         m0 = ETAS_M0,
         beta_gr = BETA_GR,
         filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
