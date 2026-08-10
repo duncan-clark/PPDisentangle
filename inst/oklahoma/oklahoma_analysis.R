@@ -123,8 +123,14 @@ add_file_tag <- function(filename) {
 
 # ---- Configuration ----
 DATA_DIR   <- file.path(SCRIPT_DIR, "oklahoma_induced_seismicity_data_regional20150318")
-ETAS_M0    <- 2.5
-BETA_GR    <- 2.3
+# Magnitude cutoff (catalog + ETAS reference m0). Prefer matching metadata$min_mag.
+ETAS_M0    <- suppressWarnings(as.numeric(Sys.getenv("OK_ETAS_M0", "2.0")))
+if (!is.finite(ETAS_M0) || ETAS_M0 <= 0) ETAS_M0 <- 2.0
+# Gutenberg-Richter beta: estimated from pre-treatment magnitudes after data load
+# unless OK_BETA_GR is set explicitly.
+BETA_GR_ENV <- suppressWarnings(as.numeric(Sys.getenv("OK_BETA_GR", "")))
+BETA_GR    <- if (is.finite(BETA_GR_ENV) && BETA_GR_ENV > 0) BETA_GR_ENV else NA_real_
+BETA_GR_SOURCE <- if (is.finite(BETA_GR)) "env:OK_BETA_GR" else "pending_pre_treatment_estimate"
 CRS_PROJ   <- 5070
 
 VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 1000
@@ -725,10 +731,35 @@ if (SEM_WORKER_LOGS && !dir.exists(SEM_WORKER_LOG_DIR)) {
 # ============================================================================
 cat("\n--- Step 1: Data loading ---\n")
 
-if (!dir.exists(DATA_DIR)) {
-  cat("Data not found — running data preparation script...\n")
-  source(file.path(SCRIPT_DIR, "Oklahoma_data_and_viz.R"), local = TRUE)
+ensure_oklahoma_catalog <- function(data_dir, etas_m0) {
+  meta_path <- file.path(data_dir, "metadata.json")
+  events_path <- file.path(data_dir, "events_all.csv")
+  need_build <- !dir.exists(data_dir) || !file.exists(meta_path) || !file.exists(events_path)
+  meta_min <- NA_real_
+  if (!need_build) {
+    meta_try <- tryCatch(
+      jsonlite::fromJSON(readLines(meta_path)),
+      error = function(e) NULL
+    )
+    if (!is.null(meta_try) && !is.null(meta_try$design$min_mag)) {
+      meta_min <- suppressWarnings(as.numeric(meta_try$design$min_mag))
+    }
+    # Rebuild if catalog cutoff is coarser than the analysis m0 (e.g. old 2.5 vs new 2.0).
+    if (!is.finite(meta_min) || meta_min > etas_m0 + 1e-9) {
+      need_build <- TRUE
+    }
+  }
+  if (need_build) {
+    cat(sprintf(
+      "Catalog missing or min_mag (%.3f) > ETAS_M0 (%.3f) — rebuilding with OK_FORCE_DOWNLOAD...\n",
+      if (is.finite(meta_min)) meta_min else NA_real_, etas_m0
+    ))
+    Sys.setenv(OK_FORCE_DOWNLOAD = "true")
+    source(file.path(SCRIPT_DIR, "Oklahoma_data_and_viz.R"), local = TRUE)
+  }
+  invisible(TRUE)
 }
+ensure_oklahoma_catalog(DATA_DIR, ETAS_M0)
 
 ev_all <- fread(file.path(DATA_DIR, "events_all.csv"))
 meta   <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
@@ -740,6 +771,34 @@ ev_all[, x_km := x_m / 1000]
 ev_all[, y_km := y_m / 1000]
 if (!"mag" %in% names(ev_all)) stop("No 'mag' column in events data")
 ev_all <- ev_all[mag >= ETAS_M0]
+
+# Gutenberg-Richter beta from pre-treatment magnitudes: beta = 1 / mean(m - m0).
+if (!is.finite(BETA_GR) || BETA_GR <= 0) {
+  mag_pre <- ev_all[t_days < 0]$mag
+  mag_pre <- mag_pre[is.finite(mag_pre) & mag_pre >= ETAS_M0]
+  if (length(mag_pre) < 50L) {
+    stop("Too few pre-treatment events to estimate BETA_GR (n=", length(mag_pre), ").")
+  }
+  BETA_GR <- 1 / mean(mag_pre - ETAS_M0)
+  BETA_GR_SOURCE <- sprintf("pre_treatment_MLE(n=%d, m0=%.3f)", length(mag_pre), ETAS_M0)
+}
+if (!is.finite(BETA_GR) || BETA_GR <= 0) {
+  stop("BETA_GR must be finite and positive; got ", BETA_GR)
+}
+cat(sprintf(
+  "  Magnitude cutoff ETAS_M0=%.3f | BETA_GR=%.4f (b=%.3f) [%s]\n",
+  ETAS_M0, BETA_GR, BETA_GR / log(10), BETA_GR_SOURCE
+))
+# Keep default starts / inits inside the GR productivity domain alpha < beta.
+.alpha_cap <- max(0.05, BETA_GR - 0.05)
+if (length(VANILLA_STARTS)) {
+  VANILLA_STARTS <- lapply(VANILLA_STARTS, function(st) {
+    if (!is.null(st$alpha_m) && is.finite(st$alpha_m)) {
+      st$alpha_m <- min(as.numeric(st$alpha_m), .alpha_cap)
+    }
+    st
+  })
+}
 
 post_end_days <- as.numeric(difftime(
   as.POSIXct(meta$design$post_end_utc, tz = "UTC"), t_star_utc, units = "days"))
@@ -1240,7 +1299,8 @@ fit_b <- function() {
       treated_background_zero_before = 0,
       beta_gr = BETA_GR,
       max_branching_radius = ETAS_BRANCHING_MAX,
-      maxit = VANILLA_MAXIT, fixed_params = with_gamma_fixed(FIXED_STRUCTURAL), trace = 0,
+      # Homogeneous A: all free except gamma=0 (same freedom as E/F KDE all-free).
+      maxit = VANILLA_MAXIT, fixed_params = with_gamma_fixed(NULL), trace = 0,
       t_trunc = SEM_T_TRUNC_DAYS
     )
   }, error = function(e) { cat("  Bivariate fit error:", e$message, "\n"); NULL })
@@ -1259,7 +1319,8 @@ C_ctrl <- A_ctrl; C_treat <- A_treat
 cat("\n--- Fit B: SEM bivariate ETAS ---\n")
 
 biv_init_D <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
-biv_fixed <- FIXED_STRUCTURAL
+# Homogeneous B: all free except gamma=0.
+biv_fixed <- with_gamma_fixed(NULL)
 
 enforce_control_decay_start <- function(params_vec, control_params = A_ctrl) {
   if (is.null(params_vec)) return(params_vec)
@@ -1550,10 +1611,10 @@ tryCatch({
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
 # Parameter profiles for county KDE bivariate fits.
-# - all_free: free except gamma=0 (magnitude-independent spatial scale)
-# - control_only_fixed: structural terms fixed from first-half control pre-treatment;
-#   productivity terms (including mu_0 and A_00) are free; gamma=0 always.
-# - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment
+# - all_free: free except gamma=0 (magnitude-independent spatial scale); letters E/F
+# - control_only_fixed: legacy key for letters C/D; now also all-free except gamma=0
+#   (structural no longer pinned to first-half control pre-treatment)
+# - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment; G/H
 kde_variant_specs <- list(
   all_free = list(
     id = "all_free",
@@ -1562,8 +1623,8 @@ kde_variant_specs <- list(
   ),
   control_only_fixed = list(
     id = "control_only_fixed",
-    label = "structural fixed from first-half control pre-treatment (gamma=0)",
-    fixed_params = with_gamma_fixed(FIXED_STRUCTURAL)
+    label = "all free except gamma=0 (C/D slot; formerly structural-fixed)",
+    fixed_params = with_gamma_fixed(NULL)
   ),
   productivity_free = list(
     id = "productivity_free",
@@ -1955,7 +2016,7 @@ cat("\n--- Fit C: Naive bivariate ETAS with KDE background ---\n")
 
 biv_init_E <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 fit_e <- function(init_params = biv_init_E,
-                  fixed_params = FIXED_STRUCTURAL,
+                  fixed_params = NULL,
                   fit_label = "Fit C") {
   fixed_params <- with_gamma_fixed(fixed_params)
   tryCatch({
@@ -1986,7 +2047,7 @@ cat("\n--- Fit D: SEM bivariate ETAS with KDE background ---\n")
 
 biv_init_F <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 fit_f <- function(init_params = biv_init_F,
-                  fixed_params = FIXED_STRUCTURAL,
+                  fixed_params = NULL,
                   fit_label = "Fit D") {
   fixed_params <- with_gamma_fixed(fixed_params)
   tryCatch({
@@ -3545,11 +3606,11 @@ fits_named_pre_sensitivity <- list(
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
-  C = c(list(letter = "C", label = "Naive biv+KDE (control_only_fixed)",
-             method = "kde_control_only_fixed", algorithm = "naive"),
+  C = c(list(letter = "C", label = "Naive biv+KDE (all-free)",
+             method = "kde_all_free", algorithm = "naive"),
         kde_variant_fits$E$control_only_fixed),
-  D = c(list(letter = "D", label = "SEM biv+KDE (control_only_fixed)",
-             method = "kde_control_only_fixed", algorithm = "sem"),
+  D = c(list(letter = "D", label = "SEM biv+KDE (all-free)",
+             method = "kde_all_free", algorithm = "sem"),
         kde_variant_fits$F$control_only_fixed),
   E = c(list(letter = "E", label = "Naive biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "naive"),
@@ -3640,6 +3701,7 @@ results_pre_sensitivity <- list(
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    BETA_GR_SOURCE = BETA_GR_SOURCE,
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
@@ -3815,11 +3877,11 @@ fits_named <- list(
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
-  C = c(list(letter = "C", label = "Naive biv+KDE (control_only_fixed)",
-             method = "kde_control_only_fixed", algorithm = "naive"),
+  C = c(list(letter = "C", label = "Naive biv+KDE (all-free)",
+             method = "kde_all_free", algorithm = "naive"),
         kde_variant_fits$E$control_only_fixed),
-  D = c(list(letter = "D", label = "SEM biv+KDE (control_only_fixed)",
-             method = "kde_control_only_fixed", algorithm = "sem"),
+  D = c(list(letter = "D", label = "SEM biv+KDE (all-free)",
+             method = "kde_all_free", algorithm = "sem"),
         kde_variant_fits$F$control_only_fixed),
   E = c(list(letter = "E", label = "Naive biv+KDE (all_free)",
              method = "kde_all_free", algorithm = "naive"),
@@ -3914,6 +3976,7 @@ results_pre_bootstrap <- list(
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    BETA_GR_SOURCE = BETA_GR_SOURCE,
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
@@ -5109,6 +5172,7 @@ results <- list(
   ),
   config = list(
     ETAS_M0 = ETAS_M0, BETA_GR = BETA_GR,
+    BETA_GR_SOURCE = BETA_GR_SOURCE,
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,

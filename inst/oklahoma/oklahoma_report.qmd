@@ -201,12 +201,19 @@ if (is.null(cfg$ATE_WINDOW_DAYS) || (length(cfg$ATE_WINDOW_DAYS) == 1L && is.na(
   cfg$ATE_WINDOW_DAYS <- as.integer(ceiling(as.numeric(difftime(post_end, t_star, units = "days"))))
 }
 
+bootstrap_absent <- is.null(results$bootstrap_ate) ||
+  (is.list(results$bootstrap_ate) &&
+     is.null(results$bootstrap_ate$fit_E) &&
+     is.null(results$bootstrap_ate$fit_F) &&
+     is.null(results$bootstrap_ate$fit_C) &&
+     is.null(results$bootstrap_ate$fit_D))
 using_pre_bootstrap <- isTRUE(identical(results$metadata$stage, "pre_bootstrap")) ||
   isTRUE(identical(results$metadata$stage, "pre_sensitivity")) ||
   (!is.null(results$checkpoint) && isTRUE(identical(results$checkpoint$stage, "pre_bootstrap"))) ||
   (!is.null(results$checkpoint) && isTRUE(identical(results$checkpoint$stage, "pre_sensitivity"))) ||
   grepl("pre_sensitivity", basename(result_file), fixed = TRUE) ||
-  grepl("pre_bootstrap", basename(result_file), fixed = TRUE)
+  grepl("pre_bootstrap", basename(result_file), fixed = TRUE) ||
+  isTRUE(bootstrap_absent)
 
 path_rel_to <- function(path, start) {
   path <- normalizePath(path, winslash = "/", mustWork = FALSE)
@@ -342,9 +349,10 @@ Primary county-partition fits (publication pair):
 | **F** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
 All fits fix $\gamma\equiv 0$ (magnitude-independent spatial scale $d(m)=D$).
+**A/B** (homogeneous) and **C–F** (KDE) are all-free except $\gamma$;
+**G/H** keep structural $(c,p,D,q)$ fixed from first-half control pre-treatment.
 Partition-sensitivity refits use the same E/F specifications on
-alternative tessellations. Other labelled fits in the RDS when present:
-**A/B** bivariate homogeneous; **C–H** bivariate+KDE profiles; **I/J**
+alternative tessellations. Other labelled fits when present: **I/J**
 univariate+KDE; **K/L** univariate homogeneous (no KDE).
 
 # Study Design
@@ -1077,8 +1085,8 @@ etas_trigger_means <- function(par, beta_gr = NULL, t_trunc_days = NULL) {
 model_defs <- list(
   list(id = "A", fit = "fits_named$A", label = "A: Naive", long = "A: Naive Biv", par = A_par),
   list(id = "B", fit = "fits_named$B", label = "B: SEM", long = "B: SEM Biv", par = B_par),
-  list(id = "C", fit = "fits_named$C", label = "C: Naive+KDE (ctrl-fixed)", long = "C: Naive+KDE (ctrl-fixed)", par = C_par),
-  list(id = "D", fit = "fits_named$D", label = "D: SEM+KDE (ctrl-fixed)", long = "D: SEM+KDE (ctrl-fixed)", par = D_par),
+  list(id = "C", fit = "fits_named$C", label = "C: Naive+KDE (all-free)", long = "C: Naive+KDE (all-free)", par = C_par),
+  list(id = "D", fit = "fits_named$D", label = "D: SEM+KDE (all-free)", long = "D: SEM+KDE (all-free)", par = D_par),
   list(id = "E", fit = "fits_named$E", label = "E: Naive+KDE (all-free)", long = "E: Naive+KDE (all-free)", par = E_par),
   list(id = "F", fit = "fits_named$F", label = "F: SEM+KDE (all-free)", long = "F: SEM+KDE (all-free)", par = F_par),
   list(id = "G", fit = "fits_named$G", label = "G: Naive+KDE (struct-fixed)", long = "G: Naive+KDE (struct-fixed)", par = G_par),
@@ -1091,8 +1099,8 @@ param_models <- Filter(function(m) !is.null(m$par), model_defs)
 fit_fill_colors <- c(
   "A: Naive Bivariate" = "#fc8d62",
   "B: SEM Bivariate" = "#8da0cb",
-  "C: Naive Biv+KDE (ctrl-fixed)" = "#e78ac3",
-  "D: SEM Biv+KDE (ctrl-fixed)" = "#a6d854",
+  "C: Naive Biv+KDE (all-free)" = "#e78ac3",
+  "D: SEM Biv+KDE (all-free)" = "#a6d854",
   "E: Naive Biv+KDE (all-free)" = "#fdb462",
   "F: SEM Biv+KDE (all-free)" = "#80b1d3",
   "G: Naive Biv+KDE (struct-fixed)" = "#fb9a99",
@@ -1103,8 +1111,8 @@ fit_fill_colors <- c(
 fit_line_colors <- c(
   "A: Naive Bivariate" = "#d95f02",
   "B: SEM Bivariate" = "#7570b3",
-  "C: Naive Biv+KDE (ctrl-fixed)" = "#c51b7d",
-  "D: SEM Biv+KDE (ctrl-fixed)" = "#4d9221",
+  "C: Naive Biv+KDE (all-free)" = "#c51b7d",
+  "D: SEM Biv+KDE (all-free)" = "#4d9221",
   "E: Naive Biv+KDE (all-free)" = "#e6550d",
   "F: SEM Biv+KDE (all-free)" = "#3182bd",
   "G: Naive Biv+KDE (struct-fixed)" = "#e31a1c",
@@ -1296,7 +1304,7 @@ extract_selected_confusion_trace <- function(sem_obj, model_label) {
 trace_rows <- list()
 sem_fit_convergence <- list(
   list(obj = if (!is.null(fit_B_obj)) fit_B_obj$fit else NULL, lab = "B: SEM Biv"),
-  list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = if (!is.null(fit_D_obj)) fit_D_obj$fit else NULL, lab = "D: SEM Biv+KDE (all-free)"),
   list(obj = if (!is.null(fit_F_obj)) fit_F_obj$fit else NULL, lab = "F: SEM Biv+KDE (all-free)"),
   list(obj = if (!is.null(fit_H_obj)) fit_H_obj$fit else NULL, lab = "H: SEM Biv+KDE (struct-fixed)"),
   list(obj = if (!is.null(fit_J_obj)) fit_J_obj$fit else NULL, lab = "J: SEM Univ+KDE")
@@ -1350,7 +1358,7 @@ if (length(trace_rows) > 0) {
 sem_metric_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
-  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
   list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
   list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
@@ -1389,7 +1397,7 @@ if (length(sem_metric_rows) > 0) {
     ) +
     scale_colour_manual(values = c(
       "B: SEM Biv" = "#6a3d9a",
-      "D: SEM Biv+KDE (ctrl-fixed)" = "#e31a1c",
+      "D: SEM Biv+KDE (all-free)" = "#e31a1c",
       "F: SEM Biv+KDE (all-free)" = "#1f78b4",
       "H: SEM Biv+KDE (struct-fixed)" = "#ff7f00",
       "J: SEM Univ+KDE" = "#b8860b"
@@ -1411,7 +1419,7 @@ if (length(sem_metric_rows) > 0) {
 flip_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
-  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)"),
   list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)"),
   list(obj = fit_J_obj, lab = "J: SEM Univ+KDE")
@@ -1464,7 +1472,7 @@ final_ll_rows <- list()
 
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv", method = "SEM"),
-  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (ctrl-fixed)", method = "SEM"),
+  list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)", method = "SEM"),
   list(obj = fit_F_obj, lab = "F: SEM Biv+KDE (all-free)", method = "SEM"),
   list(obj = fit_H_obj, lab = "H: SEM Biv+KDE (struct-fixed)", method = "SEM"),
   list(obj = fit_J_obj, lab = "J: SEM Univ+KDE", method = "SEM")
@@ -1739,8 +1747,8 @@ if (length(univ_count_rows) > 0L) {
 biv_rows <- list(
   list(lab = "A: Naive Bivariate", ate = if (!is.null(fit_A_obj)) fit_A_obj$ate else NULL, louis = NULL),
   list(lab = "B: SEM Bivariate",   ate = if (!is.null(fit_B_obj)) fit_B_obj$ate else NULL, louis = if (!is.null(fit_B_obj)) fit_B_obj$louis else NULL),
-  list(lab = "C: Naive Biv+KDE (ctrl-fixed)",   ate = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL, louis = NULL),
-  list(lab = "D: SEM Biv+KDE (ctrl-fixed)",     ate = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL, louis = if (!is.null(fit_D_obj)) fit_D_obj$louis else NULL),
+  list(lab = "C: Naive Biv+KDE (all-free)",   ate = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL, louis = NULL),
+  list(lab = "D: SEM Biv+KDE (all-free)",     ate = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL, louis = if (!is.null(fit_D_obj)) fit_D_obj$louis else NULL),
   list(lab = "E: Naive Biv+KDE (all-free)",     ate = if (!is.null(fit_E_obj)) fit_E_obj$ate else NULL, louis = NULL),
   list(lab = "F: SEM Biv+KDE (all-free)",       ate = if (!is.null(fit_F_obj)) fit_F_obj$ate else NULL, louis = if (!is.null(fit_F_obj)) fit_F_obj$louis else NULL),
   list(lab = "G: Naive Biv+KDE (struct-fixed)", ate = if (!is.null(fit_G_obj)) fit_G_obj$ate else NULL, louis = NULL),
@@ -1771,8 +1779,8 @@ if (!is.null(boot_obj) && !is.null(boot_obj$config) && !is.null(boot_obj$config$
 model_label_by_id <- function(id) {
   switch(
     toupper(id),
-    "C" = "C: Naive Biv+KDE (ctrl-fixed)",
-    "D" = "D: SEM Biv+KDE (ctrl-fixed)",
+    "C" = "C: Naive Biv+KDE (all-free)",
+    "D" = "D: SEM Biv+KDE (all-free)",
     "E" = "E: Naive Biv+KDE (all-free)",
     "F" = "F: SEM Biv+KDE (all-free)",
     paste0(id, ": model")
@@ -1830,8 +1838,8 @@ get_boot_summary <- function(model_label) {
   if (model_label == boot_naive_label && !is.null(boot_naive_df)) vals <- boot_naive_df$ate_total_mean
   if (model_label == boot_sem_label && !is.null(boot_sem_df)) vals <- boot_sem_df$ate_total_mean
   # Compatibility fallback if table labels differ from selected pair labels.
-  if (is.null(vals) && model_label == "C: Naive Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("C"))) vals <- get_boot_df("C")$ate_total_mean
-  if (is.null(vals) && model_label == "D: SEM Biv+KDE (ctrl-fixed)" && !is.null(get_boot_df("D"))) vals <- get_boot_df("D")$ate_total_mean
+  if (is.null(vals) && model_label == "C: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("C"))) vals <- get_boot_df("C")$ate_total_mean
+  if (is.null(vals) && model_label == "D: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("D"))) vals <- get_boot_df("D")$ate_total_mean
   if (is.null(vals) && model_label == "E: Naive Biv+KDE (all-free)" && !is.null(get_boot_df("E"))) vals <- get_boot_df("E")$ate_total_mean
   if (is.null(vals) && model_label == "F: SEM Biv+KDE (all-free)" && !is.null(get_boot_df("F"))) vals <- get_boot_df("F")$ate_total_mean
   if (is.null(vals)) return(NULL)
@@ -2075,10 +2083,13 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
 }
 ```
 
-### Full E/F Parameter Estimates
+### Combined parameter comparison (all fits A–L)
 
-```{r tbl-ef-params-all}
-#| label: tbl-ef-params-all
+```{r tbl-params-all-fits}
+#| label: tbl-params-all-fits
+# Unified A–L comparison only (pair-wise E/F, A/B, I/J, K/L tables removed).
+# Bivariate fits use shared structural (c,p,D,q); univariate fits map A_k -> A_kk,
+# leave cross channels blank, and keep margin-specific structural terms.
 to_named_num <- function(x) {
   if (is.null(x)) return(setNames(numeric(0), character(0)))
   if (is.list(x)) x <- unlist(x, use.names = TRUE)
@@ -2088,11 +2099,6 @@ to_named_num <- function(x) {
   names(v) <- nms
   v
 }
-
-# GR channel branching ratios and spectral radius of the offspring matrix.
-# Channel eta_ij = A_ij * beta / (beta - alpha_ij); Inf if alpha >= beta.
-# Explosive (supercritical) iff rho = spectral radius of
-#   [[eta_00, eta_01], [eta_10, eta_11]]  is >= 1.
 beta_gr_tbl <- suppressWarnings(as.numeric(unlist(cfg$BETA_GR, use.names = FALSE)))
 beta_gr_tbl <- beta_gr_tbl[is.finite(beta_gr_tbl) & beta_gr_tbl > 0]
 beta_gr_tbl <- if (length(beta_gr_tbl)) beta_gr_tbl[[1]] else 2.3
@@ -2124,139 +2130,6 @@ spectral_radius_etas <- function(par, beta_gr) {
   if (!all(is.finite(M))) return(Inf)
   max(Re(eigen(M, only.values = TRUE)$values))
 }
-
-ef_param_order <- c(
-  "mu_0", "mu_1",
-  "A_00", "alpha_m_00",
-  "A_11", "alpha_m_11",
-  "A_01", "alpha_m_01",
-  "A_10", "alpha_m_10",
-  "c", "p", "D", "q"
-  # gamma omitted: fixed at 0 in all Oklahoma fits (d(m)=D)
-)
-E_vec <- to_named_num(if (!is.null(fit_E_obj)) fit_E_obj$params else NULL)
-F_vec <- to_named_num(if (!is.null(fit_F_obj)) fit_F_obj$params else NULL)
-rho_E <- if (length(E_vec)) spectral_radius_etas(E_vec, beta_gr_tbl) else NA_real_
-rho_F <- if (length(F_vec)) spectral_radius_etas(F_vec, beta_gr_tbl) else NA_real_
-
-if (length(E_vec) > 0 || length(F_vec) > 0) {
-  ef_tbl <- data.frame(
-    Parameter = ef_param_order,
-    `E: Naive Biv+KDE (all-free)` = as.numeric(E_vec[ef_param_order]),
-    `F: SEM Biv+KDE (all-free)` = as.numeric(F_vec[ef_param_order]),
-    check.names = FALSE
-  )
-  fmt_sigfig <- function(x, digits = 3L) {
-    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
-    if (!is.finite(x)) return("Inf")
-    v <- signif(as.numeric(x), digits)
-    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
-    order <- floor(log10(abs(v)))
-    dp <- max(0L, as.integer(digits) - order - 1L)
-    sprintf(paste0("%.", dp, "f"), v)
-  }
-  fmt_explosive <- function(rho) {
-    if (!is.finite(rho)) return("yes (Inf)")
-    if (rho >= 1) "yes" else "no"
-  }
-  ef_tbl[[2]] <- vapply(ef_tbl[[2]], function(v) fmt_sigfig(v, 3L), character(1))
-  ef_tbl[[3]] <- vapply(ef_tbl[[3]], function(v) fmt_sigfig(v, 3L), character(1))
-  # Append spectral radius + explosiveness flag (already formatted)
-  ef_tbl <- rbind(
-    ef_tbl,
-    data.frame(
-      Parameter = c("rho (spectral radius)", "explosive? (rho >= 1)"),
-      `E: Naive Biv+KDE (all-free)` = c(fmt_sigfig(rho_E, 3L), fmt_explosive(rho_E)),
-      `F: SEM Biv+KDE (all-free)` = c(fmt_sigfig(rho_F, 3L), fmt_explosive(rho_F)),
-      check.names = FALSE
-    )
-  )
-  kable(
-    ef_tbl,
-    caption = paste0(
-      "All fitted bivariate ETAS parameters for Models E and F (gamma fixed at 0), ",
-      "plus the Gutenberg–Richter branching spectral radius rho (beta=",
-      signif(beta_gr_tbl, 3), "). ",
-      "Channel mean offspring: eta_ij = A_ij * beta / (beta - alpha_ij) ",
-      "(Inf if alpha_ij >= beta). Explosive means rho(eta) >= 1 ",
-      "(expected cluster size diverges)."
-    ),
-    align = "lcc"
-  ) |>
-    kable_styling(bootstrap_options = c("striped","hover","bordered"), full_width = FALSE)
-} else {
-  cat("E/F parameter table unavailable in this results checkpoint.")
-}
-```
-
-### Full A/B Parameter Estimates (homogeneous, no KDE)
-
-```{r tbl-ab-params-all}
-#| label: tbl-ab-params-all
-# Same bivariate parameter layout as E/F, for the homogeneous-background fits
-# (A = naive, B = SEM) that do not use the KDE background.
-A_vec <- to_named_num(if (!is.null(fit_A_obj)) fit_A_obj$params else NULL)
-B_vec <- to_named_num(if (!is.null(fit_B_obj)) fit_B_obj$params else NULL)
-rho_A <- if (length(A_vec)) spectral_radius_etas(A_vec, beta_gr_tbl) else NA_real_
-rho_B <- if (length(B_vec)) spectral_radius_etas(B_vec, beta_gr_tbl) else NA_real_
-
-if (length(A_vec) > 0 || length(B_vec) > 0) {
-  ab_tbl <- data.frame(
-    Parameter = ef_param_order,
-    `A: Naive Bivariate (no KDE)` = as.numeric(A_vec[ef_param_order]),
-    `B: SEM Bivariate (no KDE)` = as.numeric(B_vec[ef_param_order]),
-    check.names = FALSE
-  )
-  fmt_sigfig <- function(x, digits = 3L) {
-    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
-    if (!is.finite(x)) return("Inf")
-    v <- signif(as.numeric(x), digits)
-    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
-    order <- floor(log10(abs(v)))
-    dp <- max(0L, as.integer(digits) - order - 1L)
-    sprintf(paste0("%.", dp, "f"), v)
-  }
-  fmt_explosive <- function(rho) {
-    if (!is.finite(rho)) return("yes (Inf)")
-    if (rho >= 1) "yes" else "no"
-  }
-  ab_tbl[[2]] <- vapply(ab_tbl[[2]], function(v) fmt_sigfig(v, 3L), character(1))
-  ab_tbl[[3]] <- vapply(ab_tbl[[3]], function(v) fmt_sigfig(v, 3L), character(1))
-  ab_tbl <- rbind(
-    ab_tbl,
-    data.frame(
-      Parameter = c("rho (spectral radius)", "explosive? (rho >= 1)"),
-      `A: Naive Bivariate (no KDE)` = c(fmt_sigfig(rho_A, 3L), fmt_explosive(rho_A)),
-      `B: SEM Bivariate (no KDE)` = c(fmt_sigfig(rho_B, 3L), fmt_explosive(rho_B)),
-      check.names = FALSE
-    )
-  )
-  kable(
-    ab_tbl,
-    caption = paste0(
-      "All fitted bivariate ETAS parameters for Models A and B ",
-      "(homogeneous background, no KDE; gamma fixed at 0), ",
-      "plus the Gutenberg–Richter branching spectral radius rho (beta=",
-      signif(beta_gr_tbl, 3), "). ",
-      "Channel mean offspring: eta_ij = A_ij * beta / (beta - alpha_ij) ",
-      "(Inf if alpha_ij >= beta). Explosive means rho(eta) >= 1 ",
-      "(expected cluster size diverges)."
-    ),
-    align = "lcc"
-  ) |>
-    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
-} else {
-  cat("A/B parameter table unavailable in this results checkpoint.")
-}
-```
-
-### Full I/J Parameter Estimates (univariate)
-
-```{r tbl-ij-params-all}
-#| label: tbl-ij-params-all
-# Univariate analogue of the E/F parameter table: independent control/treated
-# margins (no cross-excitation). Branching is the per-margin GR ratio
-# eta = A * beta / (beta - alpha_m); explosive if either margin has eta >= 1.
 univ_eta <- function(par, beta_gr) {
   if (is.null(par)) return(NA_real_)
   pv <- to_named_num(par)
@@ -2270,225 +2143,12 @@ univ_eta <- function(par, beta_gr) {
   if (!is.finite(gap) || gap <= 1e-8) return(Inf)
   A[[1]] * beta_gr / gap
 }
-
 extract_univ_margin <- function(fit_obj, margin) {
   if (is.null(fit_obj) || is.null(fit_obj$params)) return(NULL)
   p <- fit_obj$params
   if (!is.null(p[[margin]])) return(p[[margin]])
   NULL
 }
-
-ij_param_order <- c("mu", "A", "alpha_m", "c", "p", "D", "q")
-I_ctrl <- extract_univ_margin(fit_I_obj, "control")
-I_treat <- extract_univ_margin(fit_I_obj, "treated")
-J_ctrl <- extract_univ_margin(fit_J_obj, "control")
-J_treat <- extract_univ_margin(fit_J_obj, "treated")
-
-if (!is.null(I_ctrl) || !is.null(I_treat) || !is.null(J_ctrl) || !is.null(J_treat)) {
-  pull_par <- function(par, nm) {
-    if (is.null(par)) return(NA_real_)
-    v <- to_named_num(par)
-    suppressWarnings(as.numeric(v[[nm]]))
-  }
-  # Rows mirror bivariate E/F naming: subscript 0 = control, 1 = treated.
-  # Structural kernel params are margin-specific under independent univariate fits.
-  # gamma omitted (fixed at 0).
-  ij_rows <- c(
-    "mu_0", "A_0", "alpha_m_0", "c_0", "p_0", "D_0", "q_0",
-    "mu_1", "A_1", "alpha_m_1", "c_1", "p_1", "D_1", "q_1"
-  )
-  margin_of <- function(nm) if (grepl("_0$", nm)) "control" else "treated"
-  base_of <- function(nm) sub("_[01]$", "", nm)
-  get_fit_margin <- function(which_fit, margin) {
-    if (identical(which_fit, "I")) {
-      if (identical(margin, "control")) I_ctrl else I_treat
-    } else {
-      if (identical(margin, "control")) J_ctrl else J_treat
-    }
-  }
-  I_vals <- vapply(ij_rows, function(nm) {
-    pull_par(get_fit_margin("I", margin_of(nm)), base_of(nm))
-  }, numeric(1))
-  J_vals <- vapply(ij_rows, function(nm) {
-    pull_par(get_fit_margin("J", margin_of(nm)), base_of(nm))
-  }, numeric(1))
-
-  eta_I0 <- univ_eta(I_ctrl, beta_gr_tbl)
-  eta_I1 <- univ_eta(I_treat, beta_gr_tbl)
-  eta_J0 <- univ_eta(J_ctrl, beta_gr_tbl)
-  eta_J1 <- univ_eta(J_treat, beta_gr_tbl)
-  rho_I <- max(c(eta_I0, eta_I1), na.rm = TRUE)
-  rho_J <- max(c(eta_J0, eta_J1), na.rm = TRUE)
-  if (!is.finite(rho_I)) rho_I <- Inf
-  if (!is.finite(rho_J)) rho_J <- Inf
-
-  fmt_sigfig <- function(x, digits = 3L) {
-    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
-    if (!is.finite(x)) return("Inf")
-    v <- signif(as.numeric(x), digits)
-    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
-    order <- floor(log10(abs(v)))
-    dp <- max(0L, as.integer(digits) - order - 1L)
-    sprintf(paste0("%.", dp, "f"), v)
-  }
-  fmt_explosive <- function(rho) {
-    if (!is.finite(rho)) return("yes (Inf)")
-    if (rho >= 1) "yes" else "no"
-  }
-
-  ij_tbl <- data.frame(
-    Parameter = ij_rows,
-    `I: Naive Univ+KDE` = vapply(I_vals, function(v) fmt_sigfig(v, 3L), character(1)),
-    `J: SEM Univ+KDE` = vapply(J_vals, function(v) fmt_sigfig(v, 3L), character(1)),
-    check.names = FALSE
-  )
-  ij_tbl <- rbind(
-    ij_tbl,
-    data.frame(
-      Parameter = c(
-        "eta_0 (control branching)",
-        "eta_1 (treated branching)",
-        "rho := max(eta_0, eta_1)",
-        "explosive? (rho >= 1)"
-      ),
-      `I: Naive Univ+KDE` = c(
-        fmt_sigfig(eta_I0, 3L), fmt_sigfig(eta_I1, 3L),
-        fmt_sigfig(rho_I, 3L), fmt_explosive(rho_I)
-      ),
-      `J: SEM Univ+KDE` = c(
-        fmt_sigfig(eta_J0, 3L), fmt_sigfig(eta_J1, 3L),
-        fmt_sigfig(rho_J, 3L), fmt_explosive(rho_J)
-      ),
-      check.names = FALSE
-    )
-  )
-  kable(
-    ij_tbl,
-    caption = paste0(
-      "All fitted univariate+KDE ETAS parameters for Models I and J (gamma fixed at 0), ",
-      "plus Gutenberg–Richter branching ratios (beta=", signif(beta_gr_tbl, 3), "). ",
-      "Subscript 0 = control margin, 1 = treated margin (independent laws; no cross-excitation). ",
-      "Channel mean offspring: eta = A * beta / (beta - alpha_m) ",
-      "(Inf if alpha_m >= beta). Here rho := max(eta_0, eta_1); ",
-      "explosive means rho >= 1 (expected cluster size diverges on that margin)."
-    ),
-    align = "lcc"
-  ) |>
-    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
-} else {
-  cat("I/J parameter table unavailable in this results checkpoint.")
-}
-```
-
-### Full K/L Parameter Estimates (univariate, no KDE)
-
-```{r tbl-kl-params-all}
-#| label: tbl-kl-params-all
-K_ctrl <- extract_univ_margin(fit_K_obj, "control")
-K_treat <- extract_univ_margin(fit_K_obj, "treated")
-L_ctrl <- extract_univ_margin(fit_L_obj, "control")
-L_treat <- extract_univ_margin(fit_L_obj, "treated")
-
-if (!is.null(K_ctrl) || !is.null(K_treat) || !is.null(L_ctrl) || !is.null(L_treat)) {
-  pull_par <- function(par, nm) {
-    if (is.null(par)) return(NA_real_)
-    v <- to_named_num(par)
-    suppressWarnings(as.numeric(v[[nm]]))
-  }
-  kl_rows <- c(
-    "mu_0", "A_0", "alpha_m_0", "c_0", "p_0", "D_0", "q_0",
-    "mu_1", "A_1", "alpha_m_1", "c_1", "p_1", "D_1", "q_1"
-  )
-  margin_of <- function(nm) if (grepl("_0$", nm)) "control" else "treated"
-  base_of <- function(nm) sub("_[01]$", "", nm)
-  get_kl_margin <- function(which_fit, margin) {
-    if (identical(which_fit, "K")) {
-      if (identical(margin, "control")) K_ctrl else K_treat
-    } else {
-      if (identical(margin, "control")) L_ctrl else L_treat
-    }
-  }
-  K_vals <- vapply(kl_rows, function(nm) {
-    pull_par(get_kl_margin("K", margin_of(nm)), base_of(nm))
-  }, numeric(1))
-  L_vals <- vapply(kl_rows, function(nm) {
-    pull_par(get_kl_margin("L", margin_of(nm)), base_of(nm))
-  }, numeric(1))
-
-  eta_K0 <- univ_eta(K_ctrl, beta_gr_tbl)
-  eta_K1 <- univ_eta(K_treat, beta_gr_tbl)
-  eta_L0 <- univ_eta(L_ctrl, beta_gr_tbl)
-  eta_L1 <- univ_eta(L_treat, beta_gr_tbl)
-  rho_K <- max(c(eta_K0, eta_K1), na.rm = TRUE)
-  rho_L <- max(c(eta_L0, eta_L1), na.rm = TRUE)
-  if (!is.finite(rho_K)) rho_K <- Inf
-  if (!is.finite(rho_L)) rho_L <- Inf
-
-  fmt_sigfig <- function(x, digits = 3L) {
-    if (is.null(x) || length(x) < 1L || is.na(x)) return("N/A")
-    if (!is.finite(x)) return("Inf")
-    v <- signif(as.numeric(x), digits)
-    if (!is.finite(v) || v == 0) return(format(v, scientific = FALSE, trim = TRUE))
-    order <- floor(log10(abs(v)))
-    dp <- max(0L, as.integer(digits) - order - 1L)
-    sprintf(paste0("%.", dp, "f"), v)
-  }
-  fmt_explosive <- function(rho) {
-    if (!is.finite(rho)) return("yes (Inf)")
-    if (rho >= 1) "yes" else "no"
-  }
-
-  kl_tbl <- data.frame(
-    Parameter = kl_rows,
-    `K: Naive Univ (no KDE)` = vapply(K_vals, function(v) fmt_sigfig(v, 3L), character(1)),
-    `L: SEM Univ (no KDE)` = vapply(L_vals, function(v) fmt_sigfig(v, 3L), character(1)),
-    check.names = FALSE
-  )
-  kl_tbl <- rbind(
-    kl_tbl,
-    data.frame(
-      Parameter = c(
-        "eta_0 (control branching)",
-        "eta_1 (treated branching)",
-        "rho := max(eta_0, eta_1)",
-        "explosive? (rho >= 1)"
-      ),
-      `K: Naive Univ (no KDE)` = c(
-        fmt_sigfig(eta_K0, 3L), fmt_sigfig(eta_K1, 3L),
-        fmt_sigfig(rho_K, 3L), fmt_explosive(rho_K)
-      ),
-      `L: SEM Univ (no KDE)` = c(
-        fmt_sigfig(eta_L0, 3L), fmt_sigfig(eta_L1, 3L),
-        fmt_sigfig(rho_L, 3L), fmt_explosive(rho_L)
-      ),
-      check.names = FALSE
-    )
-  )
-  kable(
-    kl_tbl,
-    caption = paste0(
-      "All fitted univariate homogeneous ETAS parameters for Models K and L ",
-      "(no KDE; gamma fixed at 0), plus Gutenberg–Richter branching ratios (beta=",
-      signif(beta_gr_tbl, 3), "). ",
-      "Subscript 0 = control margin, 1 = treated margin (independent laws). ",
-      "Channel mean offspring: eta = A * beta / (beta - alpha_m); ",
-      "rho := max(eta_0, eta_1); explosive means rho >= 1."
-    ),
-    align = "lcc"
-  ) |>
-    kable_styling(bootstrap_options = c("striped", "hover", "bordered"), full_width = FALSE)
-} else {
-  cat("K/L parameter table unavailable in this results checkpoint (requires a refit with the updated analysis script).\n")
-}
-```
-
-### Combined parameter comparison (all fits A–L)
-
-```{r tbl-params-all-fits}
-#| label: tbl-params-all-fits
-# Unified A–L comparison. Bivariate fits use shared structural (c,p,D,q);
-# univariate fits map A_k -> A_kk, leave cross channels blank, and keep
-# margin-specific structural terms as c_0/c_1 etc when they differ.
 fmt_sigfig_all <- function(x, digits = 3L) {
   if (is.null(x) || length(x) < 1L || is.na(x)) return("—")
   if (!is.finite(x)) return("Inf")
@@ -2619,7 +2279,7 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
   }
   assign_pair <- function(model_label) {
     if (grepl("^A:|^B:", model_label)) return("Homogeneous (A/B)")
-    if (grepl("^C:|^D:", model_label)) return("KDE control-fixed (C/D)")
+    if (grepl("^C:|^D:", model_label)) return("KDE all-free (C/D)")
     if (grepl("^E:|^F:", model_label)) return("KDE all-free (E/F)")
     if (grepl("^G:|^H:", model_label)) return("KDE struct-fixed (G/H)")
     NA_character_
@@ -2634,7 +2294,7 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
   biv_sim$Role <- factor(biv_sim$Role, levels = c("Naive", "SEM"))
   biv_sim$Pair <- factor(
     biv_sim$Pair,
-    levels = c("Homogeneous (A/B)", "KDE control-fixed (C/D)", "KDE all-free (E/F)", "KDE struct-fixed (G/H)")
+    levels = c("Homogeneous (A/B)", "KDE all-free (C/D)", "KDE all-free (E/F)", "KDE struct-fixed (G/H)")
   )
   biv_means <- aggregate(TotalATE ~ Pair + Role, biv_sim, mean)
   ggplot(biv_sim, aes(x = TotalATE, fill = Role)) +
@@ -2912,7 +2572,7 @@ if (!is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 #| label: fig-ate-bootstrap-biv-obs
 #| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (E/F), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
 #| fig-height: 4
-#| eval: !expr '!using_pre_bootstrap'
+#| eval: !expr '!using_pre_bootstrap && !is.null(boot_obj)'
 # Companion scenario RDS written by launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
 biv_obs_candidates <- unique(c(
   file.path(OUT_DIR, "for_paper_biv_obs.rds"),
@@ -3294,8 +2954,8 @@ background ratio $\mu_1/\mu_0$ is:
 
 ```{r interp-effects, results='asis'}
 effect_lines <- c(
-  paste0("- **Fit C (naive+KDE, ctrl-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_C_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
-  paste0("- **Fit D (SEM+KDE, ctrl-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_D_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit C (naive+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_C_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
+  paste0("- **Fit D (SEM+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_D_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
   paste0("- **Fit E (naive+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_E_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
   paste0("- **Fit F (SEM+KDE, all-free):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_F_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),
   paste0("- **Fit G (naive+KDE, struct-fixed):** $\\hat\\Delta_{\\text{AoN}}=$ **", total_G_1yr, "** total earthquakes saved / ", ate_days_interp, " days"),

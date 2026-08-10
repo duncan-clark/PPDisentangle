@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-03-11T18:15:42Z",
+  "created_utc": "2026-08-10T13:04:27Z",
   "sources": {
     "usgs_event_api": "https://earthquake.usgs.gov/fdsnws/event/1/query",
     "occ_aoi_service": "https://gis.occ.ok.gov/server/rest/services/PUBLIC/DIRECTIVE_AOIs/MapServer"
@@ -9,7 +9,7 @@
     "pre_start_utc": "2014-01-01T00:00:00Z",
     "t_star_utc": "2015-03-18T00:00:00Z",
     "post_end_utc": "2015-06-24T00:00:00Z",
-    "min_mag": 2.5,
+    "min_mag": 2,
     "keep_reviewed_only": false,
     "buffer_km": 300,
     "crs_proj_epsg": 5070,
@@ -25,9 +25,9 @@
     "maxlat": 39.7163
   },
   "counts": {
-    "events_all": 3584,
-    "events_pre": 2713,
-    "events_post": 871,
+    "events_all": 4334,
+    "events_pre": 3263,
+    "events_post": 1071,
     "cells": 1631,
     "treated_cells": 34
   }

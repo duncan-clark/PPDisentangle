@@ -38,14 +38,27 @@ suppressPackageStartupMessages({
 
 sf::sf_use_s2(FALSE)
 
+# Resolve output next to this script (inst/oklahoma/...), independent of cwd.
+.ok_data_script_dir <- tryCatch({
+  cmd_args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", cmd_args, value = TRUE)
+  if (length(file_arg)) {
+    dirname(normalizePath(sub("^--file=", "", file_arg[[1]]), winslash = "/", mustWork = FALSE))
+  } else if (!is.null(sys.frames()[[1]]$ofile)) {
+    dirname(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE))
+  } else {
+    normalizePath("inst/oklahoma", winslash = "/", mustWork = FALSE)
+  }
+}, error = function(e) normalizePath("inst/oklahoma", winslash = "/", mustWork = FALSE))
+
 # Parameters for the 2015 regional directive
 params <- list(
-  out_dir = "oklahoma_induced_seismicity_data_regional20150318",
+  out_dir = file.path(.ok_data_script_dir, "oklahoma_induced_seismicity_data_regional20150318"),
   occ_aoi_layer_id = 2,             # AOI_20150318
   pre_start = "2014-01-01T00:00:00Z",
   t_star    = "2015-03-18T00:00:00Z",
   post_end  = "2015-06-24T00:00:00Z",
-  min_mag = 2.5,
+  min_mag = 2.0,
   keep_reviewed_only = FALSE,
   buffer_km = 300,                  # larger buffer for more controls
   crs_proj = 5070,
@@ -53,7 +66,7 @@ params <- list(
   grid_cellsize_km = 20,
   treat_rule = "centroid",         # treat cell if centroid inside AOI
   treat_intersect_threshold = 0.0,   # unused for centroid rule
-  force_download = FALSE
+  force_download = tolower(Sys.getenv("OK_FORCE_DOWNLOAD", "false")) %in% c("1", "true", "yes", "y")
 )
 
 # Helper functions
