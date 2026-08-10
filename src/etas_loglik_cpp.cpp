@@ -149,14 +149,17 @@ double etas_loglik_inhom_cpp(NumericVector t,
 
   // --- Compensator (integral of intensity over the observation domain) ---
   // Temporal CDF: G(h) = 1 - (1 + h/c)^{-(p-1)}
-  // Contribution from parent i: kappa(m_i) * G(horizon_i)
+  // Contribution from parent i: kappa(m_i) * G(horizon_i) / G(t_trunc).
+  // The division by temporal_norm matches the truncation-renormalized kernel
+  // used in the intensity (A = expected offspring within t_trunc); without it
+  // the compensator undercharges productivity by the factor G(t_trunc).
   double triggering_integral = 0.0;
   for (int i = 0; i < n; ++i) {
     double horizon = t_max - pt[i];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
     triggering_integral += comp_kappa[i] *
-      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0)));
+      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
   }
 
   loglik -= (mu * t_max + triggering_integral);

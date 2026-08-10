@@ -164,14 +164,18 @@ double etas_bivariate_loglik_cpp(
 
   // --- Compensator ---
   // Each parent j in process l contributes to both child process compensators:
-  //   child 0: A_{0l} * exp(alpha_{0l} * dm_j) * G(h_j)
-  //   child 1: A_{1l} * exp(alpha_{1l} * dm_j) * G(h_j)
+  //   child 0: A_{0l} * exp(alpha_{0l} * dm_j) * G(h_j) / G(t_trunc)
+  //   child 1: A_{1l} * exp(alpha_{1l} * dm_j) * G(h_j) / G(t_trunc)
+  // The division by temporal_norm matches the truncation-renormalized kernel
+  // used in the intensity (A = expected offspring within t_trunc); without it
+  // the compensator undercharges productivity by the factor G(t_trunc).
   double comp_trig = 0.0;
   for (int j = 0; j < n; ++j) {
     double horizon = t_max - pt[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
-    const double G_h = 1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0));
+    const double G_h =
+      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
     if (kap0[j] >= 1e-20) comp_trig += kap0[j] * G_h;
     if (kap1[j] >= 1e-20) comp_trig += kap1[j] * G_h;
   }

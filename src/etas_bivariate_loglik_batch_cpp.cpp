@@ -175,12 +175,16 @@ NumericVector etas_bivariate_loglik_batch_cpp(
     for (auto& th : pool) th.join();
   }
 
+  // Compensator temporal mass per parent: G(h) / G(t_trunc). The division by
+  // temporal_norm matches the truncation-renormalized kernel used in the
+  // intensity (A = expected offspring within t_trunc); without it the
+  // compensator undercharges productivity by the factor G(t_trunc).
   std::vector<double> G_h(n);
   for (int j = 0; j < n; ++j) {
     double horizon = t_max - vt[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     G_h[j] = (horizon <= 0.0) ? 0.0
-      : 1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0));
+      : (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
   }
 
   // Background compensator: charge each mu_k only over the time span its
