@@ -945,9 +945,11 @@ if (n_pre_ctrl_struct_init < 5) {
   stop("Insufficient first-half control pre-treatment events for structural parameter estimation.")
 }
 
-# Data-driven ETAS calibration from first-half control pre data.
-# These values are used as robust initializations for all downstream fits.
-PRE_CTRL_BOOT_PARAMS <- NULL
+# Structural decays from first-half *control-county* pre data (robust to the
+# later treated-region rate ramp). The full pre-treatment ETAS init used to
+# warm-start every downstream fit is estimated separately on *all*
+# pre-treatment events with whole-domain control background (pre-treatment
+# everywhere is control), matching the tstar diagnostic snapshot.
 estimate_structural_init <- function() {
   starts <- VANILLA_STARTS
   best <- NULL
@@ -978,14 +980,6 @@ estimate_structural_init <- function() {
     }
   }
   if (is.null(best) || is.null(best$par)) return(STRUCT_DEFAULTS)
-  pre_full <- as.list(best$par)
-  pre_needed <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
-  for (nm in pre_needed) {
-    if (is.null(pre_full[[nm]]) || !is.finite(pre_full[[nm]])) {
-      pre_full[[nm]] <- if (nm %in% names(STRUCT_DEFAULTS)) STRUCT_DEFAULTS[[nm]] else VANILLA_STARTS[[1]][[nm]]
-    }
-  }
-  PRE_CTRL_BOOT_PARAMS <<- pre_full[pre_needed]
   out <- as.list(best$par[c("c", "p", "D", "gamma", "q")])
   out <- out[!vapply(out, is.null, logical(1))]
   needed <- c("c", "p", "D", "gamma", "q")
@@ -997,13 +991,72 @@ estimate_structural_init <- function() {
 STRUCT_INIT <- estimate_structural_init()
 STRUCT_INIT$gamma <- GAMMA_FIXED
 FIXED_STRUCTURAL <- with_gamma_fixed(as.list(STRUCT_INIT[c("c", "p", "D", "q")]))
-if (is.null(PRE_CTRL_BOOT_PARAMS)) {
-  PRE_CTRL_BOOT_PARAMS <- list(mu = 1.0, A = 0.2, alpha_m = 0.8,
-                               c = STRUCT_INIT$c, p = STRUCT_INIT$p,
-                               D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q)
-} else {
-  PRE_CTRL_BOOT_PARAMS$gamma <- GAMMA_FIXED
+
+estimate_pre_full_etas_init <- function() {
+  df <- pp_pre_all[, c("x", "y", "t", "mag"), drop = FALSE]
+  finite_rows <- is.finite(df$x) & is.finite(df$y) & is.finite(df$t) & is.finite(df$mag)
+  df <- df[finite_rows, , drop = FALSE]
+  df <- df[order(df$t), , drop = FALSE]
+  if (nrow(df) < 5L) {
+    return(list(mu = 1.0, A = 0.2, alpha_m = 0.8,
+                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
+                D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q))
+  }
+  w_start <- suppressWarnings(min(df$t, na.rm = TRUE))
+  # End at treatment time (same window as the tstar control snapshot).
+  wT <- c(w_start, 0)
+  if (!all(is.finite(wT)) || diff(wT) <= 0) {
+    return(list(mu = 1.0, A = 0.2, alpha_m = 0.8,
+                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
+                D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q))
+  }
+  start_from_struct <- list(
+    mu = 1.0, A = 0.5, alpha_m = 0.5,
+    c = STRUCT_INIT$c, p = STRUCT_INIT$p,
+    D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q
+  )
+  starts <- c(list(start_from_struct), VANILLA_STARTS)
+  best <- NULL
+  best_val <- -Inf
+  for (s in starts) {
+    fit_try <- tryCatch(
+      fit_etas(
+        params_init = s,
+        realiz = df,
+        windowT = wT,
+        windowS = win_km,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        max_branching_ratio = ETAS_BRANCHING_MAX,
+        maxit = VANILLA_MAXIT,
+        # Pre-treatment everywhere is control: do not carve out the eventual
+        # treated counties from the background support.
+        fixed_params = with_gamma_fixed(NULL)
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(fit_try) && is.finite(fit_try$value) && fit_try$value > best_val) {
+      best <- fit_try
+      best_val <- fit_try$value
+    }
+  }
+  pre_needed <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
+  if (is.null(best) || is.null(best$par)) {
+    return(list(mu = 1.0, A = 0.2, alpha_m = 0.8,
+                c = STRUCT_INIT$c, p = STRUCT_INIT$p,
+                D = STRUCT_INIT$D, gamma = GAMMA_FIXED, q = STRUCT_INIT$q)[pre_needed])
+  }
+  pre_full <- as.list(best$par)
+  for (nm in pre_needed) {
+    if (is.null(pre_full[[nm]]) || !is.finite(pre_full[[nm]])) {
+      pre_full[[nm]] <- if (nm %in% names(STRUCT_DEFAULTS)) STRUCT_DEFAULTS[[nm]] else VANILLA_STARTS[[1]][[nm]]
+    }
+  }
+  pre_full$gamma <- GAMMA_FIXED
+  pre_full[pre_needed]
 }
+PRE_CTRL_BOOT_PARAMS <- estimate_pre_full_etas_init()
+
 compute_temporal_trunc_from_pre <- function(c_param, p_param, rel_level = SEM_T_TRUNC_REL) {
   c_param <- suppressWarnings(as.numeric(c_param))
   p_param <- suppressWarnings(as.numeric(p_param))
@@ -1022,7 +1075,7 @@ if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS 
   if (is.null(SEM_T_TRUNC_DAYS)) {
     SEM_T_TRUNC_SOURCE <- "none"
   } else {
-    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_pre50(rel=%.3f)", SEM_T_TRUNC_REL)
+    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_pre_full(rel=%.3f)", SEM_T_TRUNC_REL)
   }
 } else {
   SEM_T_TRUNC_SOURCE <- "env"
@@ -1031,7 +1084,7 @@ if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS 
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
             STRUCT_INIT$gamma, STRUCT_INIT$q))
-cat(sprintf("  Pre-treatment full ETAS init: mu=%.4f, A=%.4f, alpha_m=%.4f, c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
+cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=%.4f, A=%.4f, alpha_m=%.4f, c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
