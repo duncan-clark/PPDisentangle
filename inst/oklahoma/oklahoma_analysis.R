@@ -124,13 +124,13 @@ add_file_tag <- function(filename) {
 # ---- Configuration ----
 DATA_DIR   <- file.path(SCRIPT_DIR, "oklahoma_induced_seismicity_data_regional20150318")
 # Magnitude cutoff (catalog + ETAS reference m0). Prefer matching metadata$min_mag.
-ETAS_M0    <- suppressWarnings(as.numeric(Sys.getenv("OK_ETAS_M0", "2.0")))
-if (!is.finite(ETAS_M0) || ETAS_M0 <= 0) ETAS_M0 <- 2.0
-# Gutenberg-Richter beta: estimated from pre-treatment magnitudes after data load
-# unless OK_BETA_GR is set explicitly.
+ETAS_M0    <- suppressWarnings(as.numeric(Sys.getenv("OK_ETAS_M0", "2.5")))
+if (!is.finite(ETAS_M0) || ETAS_M0 <= 0) ETAS_M0 <- 2.5
+# Gutenberg-Richter beta: estimated from pre-treatment *control* magnitudes after
+# data load unless OK_BETA_GR is set explicitly.
 BETA_GR_ENV <- suppressWarnings(as.numeric(Sys.getenv("OK_BETA_GR", "")))
 BETA_GR    <- if (is.finite(BETA_GR_ENV) && BETA_GR_ENV > 0) BETA_GR_ENV else NA_real_
-BETA_GR_SOURCE <- if (is.finite(BETA_GR)) "env:OK_BETA_GR" else "pending_pre_treatment_estimate"
+BETA_GR_SOURCE <- if (is.finite(BETA_GR)) "env:OK_BETA_GR" else "pending_pre_control_estimate"
 CRS_PROJ   <- 5070
 
 VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 1000
@@ -772,15 +772,21 @@ ev_all[, y_km := y_m / 1000]
 if (!"mag" %in% names(ev_all)) stop("No 'mag' column in events data")
 ev_all <- ev_all[mag >= ETAS_M0]
 
-# Gutenberg-Richter beta from pre-treatment magnitudes: beta = 1 / mean(m - m0).
+# Gutenberg-Richter beta from pre-treatment control magnitudes: beta = 1 / mean(m - m0).
 if (!is.finite(BETA_GR) || BETA_GR <= 0) {
-  mag_pre <- ev_all[t_days < 0]$mag
-  mag_pre <- mag_pre[is.finite(mag_pre) & mag_pre >= ETAS_M0]
-  if (length(mag_pre) < 50L) {
-    stop("Too few pre-treatment events to estimate BETA_GR (n=", length(mag_pre), ").")
+  if (!"Z" %in% names(ev_all)) {
+    stop("No 'Z' column in events data; cannot estimate BETA_GR from pre-treatment controls.")
   }
-  BETA_GR <- 1 / mean(mag_pre - ETAS_M0)
-  BETA_GR_SOURCE <- sprintf("pre_treatment_MLE(n=%d, m0=%.3f)", length(mag_pre), ETAS_M0)
+  mag_pre_ctrl <- ev_all[t_days < 0 & Z == 0]$mag
+  mag_pre_ctrl <- mag_pre_ctrl[is.finite(mag_pre_ctrl) & mag_pre_ctrl >= ETAS_M0]
+  if (length(mag_pre_ctrl) < 50L) {
+    stop("Too few pre-treatment control events to estimate BETA_GR (n=",
+         length(mag_pre_ctrl), ").")
+  }
+  BETA_GR <- 1 / mean(mag_pre_ctrl - ETAS_M0)
+  BETA_GR_SOURCE <- sprintf(
+    "pre_treatment_control_MLE(n=%d, m0=%.3f)", length(mag_pre_ctrl), ETAS_M0
+  )
 }
 if (!is.finite(BETA_GR) || BETA_GR <= 0) {
   stop("BETA_GR must be finite and positive; got ", BETA_GR)

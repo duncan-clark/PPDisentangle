@@ -58,7 +58,7 @@ params <- list(
   pre_start = "2014-01-01T00:00:00Z",
   t_star    = "2015-03-18T00:00:00Z",
   post_end  = "2015-06-24T00:00:00Z",
-  min_mag = 2.0,
+  min_mag = 2.5,
   keep_reviewed_only = FALSE,
   buffer_km = 300,                  # larger buffer for more controls
   crs_proj = 5070,
