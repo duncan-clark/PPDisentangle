@@ -224,7 +224,7 @@ if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 
   SEM_T_TRUNC_REL <- 0.05
 }
 SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
-SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_pre50"
+SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_kde_holdout"
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
 SEM_OUTER_MAXIT_BIV   <- 1000
@@ -239,6 +239,15 @@ if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
 SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
+# Fit-D temporal-truncation sensitivity (independent of bandwidth/partition sens).
+T_TRUNC_SENS_DAYS_RAW <- trimws(Sys.getenv("OK_T_TRUNC_SENS_DAYS", "1,5,7,10,14,21"))
+T_TRUNC_SENS_DAYS <- suppressWarnings(as.numeric(unlist(strsplit(T_TRUNC_SENS_DAYS_RAW, "[,;|\\s]+"))))
+T_TRUNC_SENS_DAYS <- sort(unique(T_TRUNC_SENS_DAYS[is.finite(T_TRUNC_SENS_DAYS) & T_TRUNC_SENS_DAYS > 0]))
+RUN_T_TRUNC_SENSITIVITY <- tolower(Sys.getenv(
+  "OK_RUN_T_TRUNC_SENSITIVITY",
+  if (length(T_TRUNC_SENS_DAYS) > 0L) "true" else "false"
+)) %in% c("1", "true", "yes", "y")
+if (!RUN_T_TRUNC_SENSITIVITY) T_TRUNC_SENS_DAYS <- numeric(0)
 RUN_FIT_VARIABILITY <- tolower(Sys.getenv("OK_RUN_FIT_VARIABILITY", "false")) %in% c("1", "true", "yes", "y")
 FIT_VARIABILITY_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_FIT_VARIABILITY_REPS", "")))
 if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIABILITY_REPS < 1L) {
@@ -1072,15 +1081,14 @@ compute_temporal_trunc_from_pre <- function(c_param, p_param, rel_level = SEM_T_
   if (!is.finite(t_cut) || t_cut <= 0) return(NULL)
   as.numeric(t_cut)
 }
-if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
-  SEM_T_TRUNC_DAYS <- compute_temporal_trunc_from_pre(PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, SEM_T_TRUNC_REL)
-  if (is.null(SEM_T_TRUNC_DAYS)) {
-    SEM_T_TRUNC_SOURCE <- "none"
-  } else {
-    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_pre_full(rel=%.3f)", SEM_T_TRUNC_REL)
-  }
-} else {
+# Auto t_trunc is resolved after the KDE-holdout (pre50) control snapshot so
+# it uses the same first-50% pre sample as the KDE background fit.
+if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER) && SEM_T_TRUNC_DAYS_USER > 0) {
+  SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
   SEM_T_TRUNC_SOURCE <- "env"
+} else {
+  SEM_T_TRUNC_DAYS <- NA_real_
+  SEM_T_TRUNC_SOURCE <- "auto_from_kde_holdout_pending"
 }
 
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
@@ -1090,9 +1098,7 @@ cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=
             PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
-cat(sprintf("  SEM t_trunc resolved from %s: %s days\n",
-            SEM_T_TRUNC_SOURCE,
-            if (is.null(SEM_T_TRUNC_DAYS)) "none" else as.character(signif(SEM_T_TRUNC_DAYS, 5))))
+cat(sprintf("  SEM t_trunc pending resolution from %s\n", SEM_T_TRUNC_SOURCE))
 
 apply_pre_init_etas <- function(start_par) {
   out <- start_par
@@ -1240,6 +1246,37 @@ for (nm in names(control_snapshot_fits)) {
               if (!is.null(csp$mu)) as.character(signif(csp$mu, 4)) else "NA",
               if (!is.null(csp$A)) as.character(signif(csp$A, 4)) else "NA",
               if (!is.null(csp$alpha_m)) as.character(signif(csp$alpha_m, 4)) else "NA"))
+}
+
+# Resolve auto t_trunc from the same first-50% pre holdout used for KDE
+# (control_snapshot_fits$pre50), falling back to structural init if needed.
+if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
+  holdout_par <- control_snapshot_fits$pre50$params
+  if (is.null(holdout_par) ||
+      !is.finite(suppressWarnings(as.numeric(holdout_par$c))) ||
+      !is.finite(suppressWarnings(as.numeric(holdout_par$p)))) {
+    holdout_par <- STRUCT_INIT
+    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_struct_init_fallback(rel=%.3f)", SEM_T_TRUNC_REL)
+  } else {
+    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_kde_holdout_pre50(rel=%.3f)", SEM_T_TRUNC_REL)
+  }
+  SEM_T_TRUNC_DAYS <- compute_temporal_trunc_from_pre(
+    holdout_par$c, holdout_par$p, SEM_T_TRUNC_REL
+  )
+  if (is.null(SEM_T_TRUNC_DAYS)) {
+    SEM_T_TRUNC_SOURCE <- "none"
+  }
+}
+cat(sprintf("  SEM t_trunc resolved from %s: %s days\n",
+            SEM_T_TRUNC_SOURCE,
+            if (is.null(SEM_T_TRUNC_DAYS) || !is.finite(SEM_T_TRUNC_DAYS)) {
+              "none"
+            } else {
+              as.character(signif(SEM_T_TRUNC_DAYS, 5))
+            }))
+if (length(T_TRUNC_SENS_DAYS) > 0L) {
+  cat(sprintf("  Fit D t_trunc sensitivity grid (days): %s\n",
+              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
 }
 
 # ============================================================================
@@ -3723,6 +3760,7 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   ensure_ate_psock_pool()
   cat("\n--- BOOTSTRAP_ONLY: skipping Step 6b/7 sensitivity checkpoints; jumping to Step 8 bootstrap ---\n")
 }
+t_trunc_sensitivity <- NULL
 
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
 if (!isTRUE(BOOTSTRAP_ONLY)) {
@@ -3793,6 +3831,7 @@ results_pre_sensitivity <- list(
   partition_results = NULL,
   ate_partitions = NULL,
   kde_bandwidth_sensitivity = NULL,
+  t_trunc_sensitivity = NULL,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   kde_info = list(
     bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
@@ -3852,6 +3891,8 @@ results_pre_sensitivity <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
+    T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
+    RUN_T_TRUNC_SENSITIVITY = RUN_T_TRUNC_SENSITIVITY,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
@@ -3987,6 +4028,115 @@ ate_partitions <- lapply(partition_results, function(pr) {
   )
 })
 
+# ============================================================================
+# 7a2. Fit D temporal-truncation sensitivity (ATE vs t_trunc)
+# ============================================================================
+cat("\n--- Step 7a2: Fit D t_trunc sensitivity ---\n")
+t_trunc_sensitivity <- NULL
+if (length(T_TRUNC_SENS_DAYS) < 1L) {
+  cat("  Skipping Fit D t_trunc sensitivity (empty grid / disabled).\n")
+} else {
+  cat(sprintf("  Refitting SEM Fit D + AoN ATE at t_trunc days: %s\n",
+              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
+  biv_init_trunc <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+  run_t_trunc_sens_job <- function(t_trunc_val) {
+    t0 <- proc.time()[["elapsed"]]
+    label <- sprintf("t_trunc=%.4g", t_trunc_val)
+    cat(sprintf("    [t_trunc_sens:%s] start pid=%d mem=%s\n",
+                label, Sys.getpid(), mem_snapshot()))
+    sem_local <- tryCatch({
+      run_sem_fit(
+        pp_data_in = pp_all_bg,
+        partition_in = partition,
+        partition_processes_in = partition_processes,
+        state_spaces_in = state_spaces,
+        init_params_in = biv_init_trunc,
+        fixed_params_in = SENSITIVITY_FIXED_PARAMS,
+        background_rate_var_in = "W",
+        control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
+        sem_t_trunc_in = t_trunc_val,
+        sem_inner_iter_in = SEM_INNER_ITER,
+        verbose_in = FALSE,
+        label = sprintf("Fit D t_trunc %.4g", t_trunc_val)
+      )
+    }, error = function(e) {
+      cat(sprintf("    [t_trunc_sens:%s] SEM error: %s\n", label, e$message))
+      NULL
+    })
+    params_local <- if (!is.null(sem_local)) sem_local$etas_bivariate_params else NULL
+    ate_local <- NULL
+    if (!is.null(params_local)) {
+      ate_local <- tryCatch({
+        ate_estim_bivariate(
+          biv_params = params_local,
+          windowT = windowT_ate,
+          windowS = win_km,
+          state_spaces_obs = state_spaces,
+          label = sprintf("Fit D t_trunc %.4g", t_trunc_val),
+          n_sims = ATE_N_SIMS,
+          n_cores = 1L,
+          m0 = ETAS_M0,
+          beta_gr = BETA_GR,
+          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+          t_trunc = t_trunc_val,
+          n_tiles = partition$n,
+          crn_base_seed = ate_crn_base_seed,
+          use_crn = OK_ATE_USE_CRN,
+          crn_pair = OK_ATE_CRN_PAIR,
+          quiet = TRUE,
+          contrast = "all_or_nothing",
+          covariate_lookup = KDE_BG_LOOKUP
+        )
+      }, error = function(e) {
+        cat(sprintf("    [t_trunc_sens:%s] ATE error: %s\n", label, e$message))
+        NULL
+      })
+    }
+    sim_saved <- if (!is.null(ate_local) && !is.null(ate_local$all_nothing_sim$total_saved)) {
+      suppressWarnings(as.numeric(ate_local$all_nothing_sim$total_saved))
+    } else {
+      numeric(0)
+    }
+    elapsed <- proc.time()[["elapsed"]] - t0
+    cat(sprintf("    [t_trunc_sens:%s] done in %.1fs status=%s mem=%s\n",
+                label, elapsed,
+                if (!is.null(params_local) && length(sim_saved) > 0L) "ok" else "failed",
+                mem_snapshot()))
+    list(
+      t_trunc_days = as.numeric(t_trunc_val),
+      status = if (!is.null(params_local) && length(sim_saved) > 0L) "ok" else "failed",
+      elapsed_sec = as.numeric(elapsed),
+      params = params_local,
+      n_relabel = if (!is.null(sem_local) && !is.null(sem_local$adaptive$adaptive_labelling)) {
+        lp <- sem_local$adaptive$adaptive_labelling
+        lp <- lp[lp$t >= 0, , drop = FALSE]
+        sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+      } else {
+        NA_integer_
+      },
+      ate_mean_saved = if (length(sim_saved) > 0L) mean(sim_saved, na.rm = TRUE) else NA_real_,
+      ate_sd_saved = if (length(sim_saved) > 1L) stats::sd(sim_saved, na.rm = TRUE) else NA_real_,
+      ate_n_sims = length(sim_saved[!is.na(sim_saved)]),
+      ate = if (isTRUE(TRIM_SENS_OBJECTS)) NULL else ate_local,
+      sem = if (isTRUE(TRIM_SENS_OBJECTS)) NULL else sem_local
+    )
+  }
+  trunc_jobs <- as.list(T_TRUNC_SENS_DAYS)
+  t_trunc_sensitivity <- if (N_CORES > 1L && length(trunc_jobs) > 1L) {
+    run_parallel(
+      trunc_jobs, run_t_trunc_sens_job,
+      cores = min(length(trunc_jobs), max(1L, min(N_CORES, 6L))),
+      label = "t_trunc_sens"
+    )
+  } else {
+    lapply(trunc_jobs, run_t_trunc_sens_job)
+  }
+  names(t_trunc_sensitivity) <- sprintf("t_trunc_%.4g", T_TRUNC_SENS_DAYS)
+  sens_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "ok"), logical(1)))
+  cat(sprintf("  Fit D t_trunc sensitivity complete: %d/%d ok\n",
+              as.integer(sens_ok), length(t_trunc_sensitivity)))
+}
+
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
 # even if bootstrap gets interrupted or OOM-killed.
 cat("\n--- Step 7b checkpoint: saving pre-bootstrap results ---\n")
@@ -4059,6 +4209,7 @@ results_pre_bootstrap <- list(
   partition_results = partition_results,
   ate_partitions = ate_partitions,
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
+  t_trunc_sensitivity = t_trunc_sensitivity,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
   kde_info = list(
     bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
@@ -4121,6 +4272,8 @@ results_pre_bootstrap <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
+    T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
+    RUN_T_TRUNC_SENSITIVITY = RUN_T_TRUNC_SENSITIVITY,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
@@ -5282,6 +5435,7 @@ results <- list(
   partition_results = partition_results,
   ate_partitions = ate_partitions,
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
+  t_trunc_sensitivity = t_trunc_sensitivity,
   kde_info = list(bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
                   n_pre_ctrl_holdout = n_pre_holdout_ctrl,
                   n_pre_holdout = nrow(pp_pre_holdout),
@@ -5339,6 +5493,8 @@ results <- list(
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
+    T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
+    RUN_T_TRUNC_SENSITIVITY = RUN_T_TRUNC_SENSITIVITY,
     RUN_SENSITIVITY = RUN_SENSITIVITY,
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,

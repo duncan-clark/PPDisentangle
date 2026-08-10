@@ -750,6 +750,82 @@ kable(trunc_df, align = "lc",
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
+```{r tbl-t-trunc-sensitivity}
+#| label: tbl-t-trunc-sensitivity
+trunc_sens <- results$t_trunc_sensitivity
+if (is.null(trunc_sens) || length(trunc_sens) < 1L) {
+  cat("No Fit D t_trunc sensitivity grid was saved in this results file.\n")
+} else {
+  rows <- lapply(trunc_sens, function(x) {
+    if (is.null(x)) return(NULL)
+    data.frame(
+      t_trunc_days = suppressWarnings(as.numeric(x$t_trunc_days)),
+      status = as.character(x$status %||% NA_character_),
+      mean_saved = suppressWarnings(as.numeric(x$ate_mean_saved)),
+      sd_saved = suppressWarnings(as.numeric(x$ate_sd_saved)),
+      n_sims = suppressWarnings(as.integer(x$ate_n_sims)),
+      n_relabel = suppressWarnings(as.integer(x$n_relabel)),
+      elapsed_min = suppressWarnings(as.numeric(x$elapsed_sec)) / 60,
+      stringsAsFactors = FALSE
+    )
+  })
+  sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+  if (is.null(sens_df) || nrow(sens_df) < 1L) {
+    cat("Fit D truncation sensitivity payload was present but empty.\n")
+  } else {
+    sens_df <- sens_df[order(sens_df$t_trunc_days), , drop = FALSE]
+    main_ttr <- suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS))
+    cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
+    if (is.finite(main_ttr)) {
+      cap <- paste0(cap, sprintf(" Main-run $t_{\\\\mathrm{trunc}}=%.3f$ days.", main_ttr))
+    }
+    kable(
+      sens_df |>
+        transmute(
+          `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
+          Status = status,
+          `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
+          `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
+          `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
+          Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA"),
+          `Elapsed (min)` = ifelse(is.finite(elapsed_min), sprintf("%.1f", elapsed_min), "NA")
+        ),
+      align = "lcccccc",
+      caption = cap
+    ) |>
+      kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+    if (requireNamespace("ggplot2", quietly = TRUE) &&
+        sum(is.finite(sens_df$mean_saved)) >= 2L) {
+      p_trunc <- ggplot2::ggplot(
+        sens_df[is.finite(sens_df$mean_saved), , drop = FALSE],
+        ggplot2::aes(x = t_trunc_days, y = mean_saved)
+      ) +
+        ggplot2::geom_line(linewidth = 0.8, colour = "#1b9e77") +
+        ggplot2::geom_point(size = 2.4, colour = "#1b9e77") +
+        ggplot2::geom_errorbar(
+          ggplot2::aes(
+            ymin = mean_saved - sd_saved,
+            ymax = mean_saved + sd_saved
+          ),
+          width = 0.4, colour = "#1b9e77", alpha = 0.7,
+          na.rm = TRUE
+        ) +
+        ggplot2::labs(
+          title = "Fit D ATE vs temporal truncation",
+          x = expression(t[trunc]~"(days)"),
+          y = "Mean saved events (AoN)"
+        ) +
+        ggplot2::theme_minimal()
+      if (is.finite(main_ttr)) {
+        p_trunc <- p_trunc +
+          ggplot2::geom_vline(xintercept = main_ttr, linetype = "dashed", colour = "grey40")
+      }
+      print(p_trunc)
+    }
+  }
+}
+```
+
 ## Non-Parametric Background Rate
 
 ```{r tbl-kde}
