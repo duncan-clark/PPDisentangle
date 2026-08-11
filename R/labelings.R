@@ -1944,7 +1944,9 @@ em_style_labelling <- function(pp_data,
           biv_res$branching_radius <- .etas_biv_spectral_radius(
             biv_par, biv_beta_eff
           )
-          biv_etas_params <<- biv_par
+          # Local assignment: <<- would skip the function-local binding and
+          # leave proposals/scoring stuck on the initialization parameters.
+          biv_etas_params <- biv_par
           fits[[i]] <- biv_res
           # Extract marginal params
           treated_par[[length(treated_par) + 1]] <- as.list(c(

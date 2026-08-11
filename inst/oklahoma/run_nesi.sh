@@ -58,6 +58,8 @@ PP_FIT_VARIABILITY_PATCH_FILE="${PP_FIT_VARIABILITY_PATCH_FILE:-}"
 PP_FIT_VARIABILITY_ONLY="${PP_FIT_VARIABILITY_ONLY:-0}"
 PP_BOOTSTRAP_PATCH_FILE="${PP_BOOTSTRAP_PATCH_FILE:-}"
 PP_BOOTSTRAP_ONLY="${PP_BOOTSTRAP_ONLY:-0}"
+PP_T_TRUNC_SENS_PATCH_FILE="${PP_T_TRUNC_SENS_PATCH_FILE:-}"
+PP_T_TRUNC_SENS_ONLY="${PP_T_TRUNC_SENS_ONLY:-0}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
@@ -119,6 +121,8 @@ while [[ "$#" -gt 0 ]]; do
     --sem-t-trunc-rel) PP_SEM_T_TRUNC_REL="$2"; shift 2 ;;
     --t-trunc-sens-days) PP_T_TRUNC_SENS_DAYS="$2"; shift 2 ;;
     --run-t-trunc-sensitivity) PP_RUN_T_TRUNC_SENSITIVITY="$2"; shift 2 ;;
+    --t-trunc-sens-patch-file) PP_T_TRUNC_SENS_PATCH_FILE="$2"; shift 2 ;;
+    --t-trunc-sens-only) PP_T_TRUNC_SENS_ONLY=1; shift ;;
     --sem-temporal-weight) PP_SEM_TEMPORAL_WEIGHT="$2"; shift 2 ;;
     --sem-optim-method) PP_SEM_OPTIM_METHOD="$2"; SEM_OPTIM_METHOD_EXPLICIT=1; shift 2 ;;
     --sem-selection-temperature) PP_SEM_SELECTION_TEMPERATURE="$2"; SEM_SELECTION_TEMP_EXPLICIT=1; shift 2 ;;
@@ -222,7 +226,8 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
+      # One mostly-single-threaded bootstrap worker per allocated core.
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
@@ -261,13 +266,30 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
       if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=$(( PP_CORES < 6 ? PP_CORES : 6 )); fi
+      # One mostly-single-threaded bootstrap worker per allocated core.
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES="$PP_CORES"; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="24:00:00"; fi
       ;;
+    t-trunc-sens-only|trunc-sens-only|t_trunc_sens_only)
+      PP_T_TRUNC_SENS_ONLY=1
+      PP_RUN_T_TRUNC_SENSITIVITY=1
+      if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
+      if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=16; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
+      if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
+      if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=120G; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="06:00:00"; fi
+      ;;
     *)
-      echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only)"
+      echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only)"
       exit 1
       ;;
   esac
@@ -371,6 +393,12 @@ if [ "${PP_FIT_VARIABILITY_ONLY:-0}" = "1" ] || [ "${PP_FIT_VARIABILITY_ONLY:-0}
     exit 1
   fi
 fi
+if [ "${PP_T_TRUNC_SENS_ONLY:-0}" = "1" ] || [ "${PP_T_TRUNC_SENS_ONLY:-0}" = "true" ]; then
+  if [ -z "${PP_T_TRUNC_SENS_PATCH_FILE:-}" ]; then
+    echo "ERROR: --t-trunc-sens-only (or mode t-trunc-sens-only) requires --t-trunc-sens-patch-file"
+    exit 1
+  fi
+fi
 
 # ----------------------------
 # Paths
@@ -414,7 +442,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   export PP_SEM_WORKER_LOGS PP_SEM_WORKER_LOG_VERBOSE PP_SEM_WORKER_LOG_SPLIT PP_SEM_TIMING_VERBOSE PP_SEM_PROPOSAL_VERBOSE
   export PP_SIM_PROGRESS_EVERY PP_SENS_SEM_INNER PP_BOOT_SEM_INNER PP_BOOT_REFIT_SCOPE PP_BOOT_TARGETS PP_KDE_VARIANT_MODE
   export PP_BOOT_OUTER_CORES PP_ATE_N_SIMS PP_ATE_BIVARIATE PP_ATE_CONTRAST PP_ATE_SCENARIO
-  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
+  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
   export PP_SEM_CHANGE_FACTOR_MIN_MULT PP_SEM_CHANGE_FACTOR_MAX_MULT PP_SEM_MAX_RELABEL_STEP_FRAC PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC
   export PP_RUN_SEM_PILOT PP_SEM_PILOT_INNER PP_SEM_PILOT_CORES PP_SEM_PILOT_MAX_COMBOS PP_SEM_PILOT_CHANGE_FACTORS
   export PP_SEM_PILOT_MIN_MULTS PP_SEM_PILOT_MAX_MULTS PP_SEM_PILOT_TEMPS PP_SETUP_TEST
@@ -693,6 +721,17 @@ if [ "${PP_BOOTSTRAP_ONLY:-0}" = "1" ] || [ "${PP_BOOTSTRAP_ONLY:-0}" = "true" ]
   export OK_BOOTSTRAP_ONLY=true
 else
   export OK_BOOTSTRAP_ONLY=false
+fi
+if [ -n "${PP_T_TRUNC_SENS_PATCH_FILE:-}" ]; then
+  export OK_T_TRUNC_SENS_PATCH_FILE="$PP_T_TRUNC_SENS_PATCH_FILE"
+fi
+if [ "${PP_T_TRUNC_SENS_ONLY:-0}" = "1" ] || [ "${PP_T_TRUNC_SENS_ONLY:-0}" = "true" ]; then
+  export OK_T_TRUNC_SENS_ONLY=true
+  export OK_RUN_T_TRUNC_SENSITIVITY=true
+  export OK_RUN_BOOTSTRAP_ATE=false
+  export OK_BOOT_N_REPS=0
+else
+  export OK_T_TRUNC_SENS_ONLY=false
 fi
 if [ "$PP_RUN_SENSITIVITY" = "1" ] || [ "$PP_RUN_SENSITIVITY" = "true" ] || [ "$PP_RUN_SENSITIVITY" = "yes" ]; then
   export OK_RUN_SENSITIVITY=true

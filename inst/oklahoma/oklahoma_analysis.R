@@ -260,6 +260,9 @@ FIT_VARIABILITY_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_ONLY", "fa
 BOOTSTRAP_PATCH_FILE <- trimws(Sys.getenv("OK_BOOTSTRAP_PATCH_FILE", ""))
 BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+T_TRUNC_SENS_PATCH_FILE <- trimws(Sys.getenv("OK_T_TRUNC_SENS_PATCH_FILE", ""))
+T_TRUNC_SENS_ONLY <- tolower(trimws(Sys.getenv("OK_T_TRUNC_SENS_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
@@ -376,16 +379,25 @@ if (MEMORY_SAFE && !TEST_MODE && !QUICK_CHECK && !nzchar(OK_CORES_RAW)) {
 if (!is.na(SEM_PILOT_CORES)) {
   SEM_PILOT_CORES <- max(1L, min(SEM_PILOT_CORES, N_CORES))
 }
-BOOT_OUTER_DEFAULT <- if (MEMORY_SAFE) max(2L, min(8L, as.integer(floor(N_CORES / 4L)))) else N_CORES
+# Bootstrap replicates are mostly single-threaded (SEM + nested ATE at n_cores=1),
+# so default to one outer worker per allocated core. Override with OK_BOOT_OUTER_CORES
+# or OK_BOOT_OUTER_CAP_MEMSAFE if a host is memory-constrained.
+BOOT_OUTER_DEFAULT <- N_CORES
 BOOT_OUTER_CORES <- suppressWarnings(as.integer(ifelse(nzchar(BOOT_OUTER_CORES_RAW), BOOT_OUTER_CORES_RAW, as.character(BOOT_OUTER_DEFAULT))))
 if (!is.finite(BOOT_OUTER_CORES) || is.na(BOOT_OUTER_CORES) || BOOT_OUTER_CORES < 1L) BOOT_OUTER_CORES <- 1L
 BOOT_OUTER_CORES <- max(1L, min(BOOT_OUTER_CORES, N_CORES))
-if (MEMORY_SAFE && RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && BOOT_OUTER_CORES > 1L) {
-  boot_outer_cap <- suppressWarnings(as.integer(Sys.getenv("OK_BOOT_OUTER_CAP_MEMSAFE", as.character(max(2L, min(8L, as.integer(floor(N_CORES / 4L))))))))
-  if (!is.finite(boot_outer_cap) || is.na(boot_outer_cap) || boot_outer_cap < 1L) boot_outer_cap <- 2L
-  if (BOOT_OUTER_CORES > boot_outer_cap) {
-    cat(sprintf("Memory-safe bootstrap cap: reducing BOOT_OUTER_CORES from %d to %d\n", BOOT_OUTER_CORES, boot_outer_cap))
-    BOOT_OUTER_CORES <- boot_outer_cap
+if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && BOOT_OUTER_CORES > 1L) {
+  boot_outer_cap_raw <- trimws(Sys.getenv("OK_BOOT_OUTER_CAP_MEMSAFE", ""))
+  if (nzchar(boot_outer_cap_raw)) {
+    boot_outer_cap <- suppressWarnings(as.integer(boot_outer_cap_raw))
+    if (is.finite(boot_outer_cap) && !is.na(boot_outer_cap) && boot_outer_cap >= 1L &&
+        BOOT_OUTER_CORES > boot_outer_cap) {
+      cat(sprintf(
+        "Bootstrap outer-core cap: reducing BOOT_OUTER_CORES from %d to %d (OK_BOOT_OUTER_CAP_MEMSAFE)\n",
+        BOOT_OUTER_CORES, boot_outer_cap
+      ))
+      BOOT_OUTER_CORES <- boot_outer_cap
+    }
   }
 }
 SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
@@ -422,8 +434,38 @@ if (isTRUE(FIT_VARIABILITY_ONLY)) {
     stop("OK_FIT_VARIABILITY_ONLY: could not readRDS patch file: ", patch_check)
   }
 }
-if (isTRUE(BOOTSTRAP_ONLY) && isTRUE(FIT_VARIABILITY_ONLY)) {
-  stop("OK_BOOTSTRAP_ONLY and OK_FIT_VARIABILITY_ONLY cannot both be enabled.")
+exclusive_only_modes <- sum(c(
+  isTRUE(BOOTSTRAP_ONLY),
+  isTRUE(FIT_VARIABILITY_ONLY),
+  isTRUE(T_TRUNC_SENS_ONLY)
+))
+if (exclusive_only_modes > 1L) {
+  stop("OK_BOOTSTRAP_ONLY, OK_FIT_VARIABILITY_ONLY, and OK_T_TRUNC_SENS_ONLY are mutually exclusive.")
+}
+if (isTRUE(T_TRUNC_SENS_ONLY)) {
+  RUN_T_TRUNC_SENSITIVITY <- TRUE
+  if (length(T_TRUNC_SENS_DAYS) < 1L) {
+    T_TRUNC_SENS_DAYS <- c(1, 5, 7, 10, 14, 21)
+  }
+  RUN_SENSITIVITY <- FALSE
+  RUN_FIT_VARIABILITY <- FALSE
+  RUN_BOOTSTRAP_ATE <- FALSE
+  BOOT_N_REPS <- 0L
+  if (!nzchar(T_TRUNC_SENS_PATCH_FILE)) {
+    stop("OK_T_TRUNC_SENS_ONLY=1 requires OK_T_TRUNC_SENS_PATCH_FILE (path to existing oklahoma_results*.rds to patch).")
+  }
+  trunc_patch_check <- normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = FALSE)
+  if (!file.exists(trunc_patch_check)) {
+    stop("OK_T_TRUNC_SENS_ONLY: patch file does not exist: ", trunc_patch_check)
+  }
+  trunc_chk <- tryCatch(readRDS(trunc_patch_check), error = function(e) NULL)
+  if (is.null(trunc_chk)) {
+    stop("OK_T_TRUNC_SENS_ONLY: could not readRDS patch file: ", trunc_patch_check)
+  }
+  # Faster early KDE setup; only Fit D trunc re-fits are needed.
+  KDE_VARIANT_MODE <- "single"
+  RUN_KDE_PROFILE_SWEEP <- FALSE
+  rm(trunc_chk)
 }
 if (isTRUE(BOOTSTRAP_ONLY)) {
   RUN_BOOTSTRAP_ATE <- TRUE
@@ -683,6 +725,12 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   cat(sprintf(
     "Bootstrap ONLY mode: skip main county fits; hydrate C/D (all_free) from %s; bivariate=%s contrast=%s reps=%d scope=%s\n",
     BOOTSTRAP_PATCH_FILE, OK_ATE_BIVARIATE, OK_ATE_CONTRAST, BOOT_N_REPS, BOOT_REFIT_SCOPE
+  ))
+}
+if (isTRUE(T_TRUNC_SENS_ONLY)) {
+  cat(sprintf(
+    "t_trunc sensitivity ONLY mode: skip main county fits/ATEs/bootstrap; SEM inner=%d; grid=%s; patch into %s\n",
+    SEM_INNER_ITER, paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ","), T_TRUNC_SENS_PATCH_FILE
   ))
 }
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
@@ -1804,6 +1852,13 @@ cat(sprintf(
 
 # Shared ATE machinery (Step 6 main ATEs and Step 6a fit-variability).
 windowT_ate <- c(0, ATE_WINDOW_DAYS)
+ate_crn_base_seed <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
+  as.integer(OK_ATE_CRN_BASE)
+} else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
+  as.integer(100000L + 1000L * OK_GLOBAL_SEED)
+} else {
+  100000L
+}
 extract_marginals <- function(biv_par) {
   if (is.null(biv_par)) return(NULL)
   c_val <- biv_par[["c"]]; if (!is.finite(c_val)) c_val <- STRUCT_DEFAULTS$c
@@ -2358,7 +2413,7 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
   }
 }
 
-if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY)) {
+if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY) && !isTRUE(T_TRUNC_SENS_ONLY)) {
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
 fit_jobs_all <- list(
   list(kind = "A_hom_naive", variant_id = NA_character_),
@@ -3281,13 +3336,6 @@ K_marginals <- extract_marginals_indep(K_params)
 L_marginals <- extract_marginals_indep(L_params)
 
 ensure_ate_psock_pool()
-ate_crn_base_seed <- if (is.finite(OK_ATE_CRN_BASE) && !is.na(OK_ATE_CRN_BASE)) {
-  as.integer(OK_ATE_CRN_BASE)
-} else if (is.finite(OK_GLOBAL_SEED) && !is.na(OK_GLOBAL_SEED)) {
-  as.integer(100000L + 1000L * OK_GLOBAL_SEED)
-} else {
-  100000L
-}
 # Compute both AoN and observed contrasts; attach under $by_contrast.
 # Primary payload (backward-compatible fields) follows OK_ATE_CONTRAST.
 ate_with_both_contrasts <- function(compute_one) {
@@ -3501,6 +3549,17 @@ if (exists("t_ate_L", inherits = FALSE)) {
       if (!is.null(ate_F$ate_method)) ate_F$ate_method else "NA"
     ))
     rm(boot_patch)
+  } else if (isTRUE(T_TRUNC_SENS_ONLY)) {
+    cat("\n--- T_TRUNC_SENS_ONLY: skipped Steps 4-6 (county fits / main ATEs); will run Fit D t_trunc sensitivity only ---\n")
+    trunc_patch <- readRDS(normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = TRUE))
+    # Keep auto t_trunc source from live KDE holdout, but adopt patch CRN base if present.
+    crn_from_patch <- suppressWarnings(as.integer(trunc_patch$config$ATE_CRN_BASE))
+    if (length(crn_from_patch) == 1L && is.finite(crn_from_patch) && !is.na(crn_from_patch)) {
+      OK_ATE_CRN_BASE <- crn_from_patch
+      ate_crn_base_seed <- as.integer(OK_ATE_CRN_BASE)
+      cat(sprintf("  Using ATE_CRN_BASE=%d from patch config\n", OK_ATE_CRN_BASE))
+    }
+    rm(trunc_patch)
   } else {
     cat("\n--- FIT_VARIABILITY_ONLY: skipped Steps 4-6 (county fits, univ, partition sensitivities, main ATEs) ---\n")
   }
@@ -3764,6 +3823,7 @@ t_trunc_sensitivity <- NULL
 
 # Save checkpoint with all main-fit ATE payloads, but without sensitivity payloads.
 if (!isTRUE(BOOTSTRAP_ONLY)) {
+if (!isTRUE(T_TRUNC_SENS_ONLY)) {
 cat("\n--- Step 6b checkpoint: saving pre-sensitivity results ---\n")
 pre_sens_saved_at <- as.character(Sys.time())
 # Public A–J lettering. Legacy top-level fitE/fitF alias the primary all_free
@@ -4018,7 +4078,7 @@ ate_partitions <- lapply(partition_results, function(pr) {
                      n_tiles_used = pr$n_tiles,
                      treated_idx_used = part_info$treated_idx),
       error = function(e) NULL),
-    ate_F = tryCatch(
+      ate_F = tryCatch(
       ate_estim_fast(fm$ctrl, fm$treat, pp_post_sem_part,
                      sprintf("%s SEM biv+KDE", pr$label),
                      phase = "sensitivity",
@@ -4027,6 +4087,13 @@ ate_partitions <- lapply(partition_results, function(pr) {
       error = function(e) NULL)
   )
 })
+} else {
+  cat("\n--- T_TRUNC_SENS_ONLY: skipping Step 6b checkpoint and bandwidth/partition sensitivity ---\n")
+  kde_bandwidth_sensitivity <- NULL
+  partition_results <- NULL
+  ate_partitions <- NULL
+  ensure_ate_psock_pool()
+}
 
 # ============================================================================
 # 7a2. Fit D temporal-truncation sensitivity (ATE vs t_trunc)
@@ -4057,6 +4124,8 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
         sem_t_trunc_in = t_trunc_val,
         sem_inner_iter_in = SEM_INNER_ITER,
         verbose_in = FALSE,
+        # Hold SEM RNG fixed across the trunc grid; vary only t_trunc.
+        sem_rng_label_in = OK_BW_SEM_RNG_LABEL,
         label = sprintf("Fit D t_trunc %.4g", t_trunc_val)
       )
     }, error = function(e) {
@@ -4135,6 +4204,35 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   sens_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "ok"), logical(1)))
   cat(sprintf("  Fit D t_trunc sensitivity complete: %d/%d ok\n",
               as.integer(sens_ok), length(t_trunc_sensitivity)))
+}
+
+if (isTRUE(T_TRUNC_SENS_ONLY)) {
+  patch_file <- normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = TRUE)
+  patched <- readRDS(patch_file)
+  patched$t_trunc_sensitivity <- t_trunc_sensitivity
+  if (is.null(patched$config)) patched$config <- list()
+  patched$config$T_TRUNC_SENS_DAYS <- T_TRUNC_SENS_DAYS
+  patched$config$RUN_T_TRUNC_SENSITIVITY <- TRUE
+  patched$config$T_TRUNC_SENS_ONLY <- TRUE
+  patched$config$SEM_INNER_ITER <- SEM_INNER_ITER
+  patched$config$SEM_OUTER_MAXIT_BIV <- SEM_OUTER_MAXIT_BIV
+  patched$metadata <- list(
+    stage = "t_trunc_sensitivity_only",
+    saved_at = as.character(Sys.time()),
+    patched_from = patch_file,
+    sem_inner_iter = SEM_INNER_ITER
+  )
+  out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_results_t_trunc_sens.rds"))
+  saveRDS(patched, out_file)
+  # Also refresh the staging patch file when it lives under OUT_DIR.
+  if (dirname(patch_file) == normalizePath(OUT_DIR, winslash = "/", mustWork = FALSE)) {
+    saveRDS(patched, patch_file)
+  }
+  cat(sprintf(
+    "\n=== T_TRUNC_SENS_ONLY: wrote %s (patched from %s); exiting before bootstrap ===\n",
+    out_file, patch_file
+  ))
+  quit(save = "no", status = 0)
 }
 
 # Save a checkpoint before bootstrap so long runs retain core fit outputs
