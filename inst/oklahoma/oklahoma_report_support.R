@@ -1,11 +1,38 @@
 # Support routines for oklahoma_report.qmd when results RDS lacks pp_data / counties
 # (e.g. older pre-bootstrap checkpoints). Mirrors oklahoma_analysis.R Steps 1–2 + pre split.
 
+local({
+  # Source shared geometry helpers from the same directory when available.
+  this_file <- tryCatch(
+    normalizePath(sys.frame(1)$ofile, winslash = "/", mustWork = FALSE),
+    error = function(e) NA_character_
+  )
+  candidates <- c(
+    if (is.character(this_file) && nzchar(this_file)) {
+      file.path(dirname(this_file), "oklahoma_geometry.R")
+    } else {
+      character(0)
+    },
+    file.path(getwd(), "inst/oklahoma/oklahoma_geometry.R"),
+    file.path(getwd(), "oklahoma_geometry.R")
+  )
+  if (!exists("oklahoma_sf_to_owin_km", mode = "function", inherits = TRUE)) {
+    found <- candidates[file.exists(candidates)]
+    if (!length(found)) {
+      stop("Could not locate oklahoma_geometry.R; source it before oklahoma_report_support.R.")
+    }
+    source(found[[1]], local = FALSE)
+  }
+})
+
 oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj = 5070L) {
   if (!requireNamespace("data.table", quietly = TRUE)) stop("data.table required")
   if (!requireNamespace("sf", quietly = TRUE)) stop("sf required")
   if (!requireNamespace("tigris", quietly = TRUE)) stop("tigris required")
   if (!requireNamespace("spatstat.geom", quietly = TRUE)) stop("spatstat required")
+  if (!exists("oklahoma_sf_to_owin_km", mode = "function", inherits = TRUE)) {
+    stop("oklahoma_geometry.R helpers are not loaded.")
+  }
 
   meta <- jsonlite::fromJSON(readLines(file.path(data_dir, "metadata.json")))
   ev_all <- data.table::fread(file.path(data_dir, "events_all.csv"))
@@ -32,25 +59,10 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
     yrange = c(bb["ymin"], bb["ymax"]) / 1000
   )
 
-  county_owins <- lapply(seq_len(nrow(counties_sf)), function(i) {
-    geom <- sf::st_geometry(counties_sf[i, ])
-    coords_list <- sf::st_coordinates(geom)
-    x_km <- coords_list[, 1] / 1000
-    y_km <- coords_list[, 2] / 1000
-    tryCatch(
-      spatstat.geom::owin(poly = list(x = rev(x_km), y = rev(y_km))),
-      error = function(e) {
-        tryCatch(
-          spatstat.geom::owin(poly = list(x = x_km, y = y_km)),
-          error = function(e2) NULL
-        )
-      }
-    )
-  })
+  county_owins <- oklahoma_sf_features_to_owins_km(counties_sf, name_col = "NAME")
   valid_idx <- !vapply(county_owins, is.null, logical(1))
   county_owins_valid <- county_owins[valid_idx]
   counties_sf_valid <- counties_sf[valid_idx, ]
-  names(county_owins_valid) <- counties_sf_valid$NAME
   partition <- spatstat.geom::tess(tiles = county_owins_valid, window = win_km)
 
   aoi_sf <- sf::st_read(file.path(data_dir, "occ_aoi_layer_2.geojson"), quiet = TRUE)
@@ -63,11 +75,13 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
   names(partition_processes) <- counties_sf_valid$NAME
   treated_idx <- partition_processes == "treated"
   treated_names <- names(partition_processes)[treated_idx]
+  control_ss <- spatstat.geom::as.owin(partition[!treated_idx])
+  treated_ss <- spatstat.geom::as.owin(partition[treated_idx])
 
   assign_county <- function(df) {
-    ti <- as.integer(spatstat.geom::tileindex(df$x, df$y, partition))
-    df$location_process <- ifelse(is.na(ti), NA_character_,
-                                  partition_processes[pmin(pmax(ti, 1), partition$n)])
+    df$location_process <- oklahoma_assign_partition_process(
+      df$x, df$y, partition, partition_processes
+    )
     df$W <- 1.0
     df$n <- nrow(df)
     df$background <- TRUE
@@ -80,6 +94,8 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
     list(x = x_km, y = y_km, t = t_days, mag = mag)]))
   pp_pre <- pp_pre[!is.na(pp_pre$location_process), , drop = FALSE]
   pp_post <- pp_post[!is.na(pp_post$location_process), , drop = FALSE]
+  oklahoma_assert_label_support(pp_pre, control_ss, treated_ss, context = "pp_pre")
+  oklahoma_assert_label_support(pp_post, control_ss, treated_ss, context = "pp_post")
 
   pp_pre_all <- pp_pre[order(pp_pre$t), , drop = FALSE]
   n_pre_total <- nrow(pp_pre_all)

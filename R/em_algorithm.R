@@ -108,16 +108,54 @@ adaptive_SEM <- function(pp_data,
   if (length(etas_alpha_lo) != 1L || is.na(etas_alpha_lo)) {
     etas_alpha_lo <- 0
   }
+  etas_init_margin <- suppressWarnings(as.numeric(dots$init_branching_margin))
+  if (length(etas_init_margin) != 1L || !is.finite(etas_init_margin) ||
+      is.na(etas_init_margin) || etas_init_margin <= 0 || etas_init_margin > 1) {
+    etas_init_margin <- 0.9
+  }
+  etas_soft_barrier <- !isFALSE(dots$soft_branching_barrier)
+  etas_log_transform <- !isFALSE(dots$log_transform)
+  etas_near_cap_frac <- suppressWarnings(as.numeric(dots$near_cap_frac))
+  if (length(etas_near_cap_frac) != 1L || !is.finite(etas_near_cap_frac) ||
+      etas_near_cap_frac <= 0 || etas_near_cap_frac > 1) {
+    etas_near_cap_frac <- 0.99
+  }
+  univ_barrier_ctrl <- .etas_soft_barrier_controls(
+    etas_eta_max,
+    start = dots$stability_barrier_start,
+    weight = if (!is.null(dots$stability_barrier_weight) &&
+                 is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                 as.numeric(dots$stability_barrier_weight) > 0) {
+      dots$stability_barrier_weight
+    } else {
+      5000
+    },
+    power = dots$stability_barrier_power
+  )
+  biv_barrier_ctrl <- .etas_soft_barrier_controls(
+    etas_rho_max,
+    start = dots$stability_barrier_start,
+    weight = if (!is.null(dots$stability_barrier_weight) &&
+                 is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                 as.numeric(dots$stability_barrier_weight) > 0) {
+      dots$stability_barrier_weight
+    } else {
+      5000
+    },
+    power = dots$stability_barrier_power
+  )
   hard_subcritical <- !isFALSE(dots$hard_subcritical)
   if ((is_etas || is_biv_etas) && !is.finite(etas_beta_eff)) {
     stop("adaptive_SEM requires a finite positive beta_gr for stable ETAS fitting.")
   }
+  etas_init_eta_cap <- etas_eta_max * etas_init_margin
+  etas_init_rho_cap <- etas_rho_max * etas_init_margin
   if (is_biv_etas && !is.null(dots$etas_bivariate_params)) {
     dots$etas_bivariate_params <- .etas_project_subcritical_biv(
       dots$etas_bivariate_params,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      rho_max = etas_rho_max,
+      rho_max = etas_init_rho_cap,
       alpha_m_lower_bound = etas_alpha_lo
     )
   }
@@ -126,14 +164,14 @@ adaptive_SEM <- function(pp_data,
       hawkes_params_control,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      eta_max = etas_eta_max,
+      eta_max = etas_init_eta_cap,
       alpha_m_lower_bound = etas_alpha_lo
     ))
     hawkes_params_treated <- as.list(.etas_project_subcritical(
       hawkes_params_treated,
       beta_gr = etas_beta_eff,
       gap_min = etas_gap_min,
-      eta_max = etas_eta_max,
+      eta_max = etas_init_eta_cap,
       alpha_m_lower_bound = etas_alpha_lo
     ))
   }
@@ -143,6 +181,9 @@ adaptive_SEM <- function(pp_data,
   dots$max_branching_radius <- etas_rho_max
   dots$alpha_m_lower_bound <- etas_alpha_lo
   dots$hard_subcritical <- hard_subcritical
+  dots$init_branching_margin <- etas_init_margin
+  dots$soft_branching_barrier <- etas_soft_barrier
+  dots$log_transform <- etas_log_transform
   dots_no_trunc <- dots
   dots_no_trunc$t_trunc <- NULL
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
@@ -739,7 +780,7 @@ adaptive_SEM <- function(pp_data,
         biv_par,
         beta_gr = etas_beta_eff,
         gap_min = etas_gap_min,
-        rho_max = etas_rho_max
+        rho_max = etas_init_rho_cap
       )
       biv_free_names <- biv_names[biv_fr_idx]
       biv_alpha_free_pos <- if (hard_subcritical) {
@@ -747,8 +788,19 @@ adaptive_SEM <- function(pp_data,
       } else {
         integer(0)
       }
+      biv_log_names <- c("mu_0", "mu_1", .etas_biv_A_names, "c", "D")
+      biv_log_free_pos <- if (etas_log_transform) {
+        which(biv_free_names %in% biv_log_names)
+      } else {
+        integer(0)
+      }
       biv_to_optim <- function(natural_free) {
         optim_free <- natural_free
+        if (length(biv_log_free_pos)) {
+          optim_free[biv_log_free_pos] <- log(pmax(
+            as.numeric(natural_free[biv_log_free_pos]), 1e-12
+          ))
+        }
         if (length(biv_alpha_free_pos)) {
           slack <- pmax(
             etas_beta_eff - etas_gap_min - natural_free[biv_alpha_free_pos],
@@ -760,6 +812,9 @@ adaptive_SEM <- function(pp_data,
       }
       biv_from_optim <- function(optim_free) {
         natural_free <- optim_free
+        if (length(biv_log_free_pos)) {
+          natural_free[biv_log_free_pos] <- exp(optim_free[biv_log_free_pos])
+        }
         if (length(biv_alpha_free_pos)) {
           natural_free[biv_alpha_free_pos] <-
             etas_beta_eff - etas_gap_min - exp(optim_free[biv_alpha_free_pos])
@@ -847,6 +902,12 @@ adaptive_SEM <- function(pp_data,
         )
       )
       biv_ll_extra <- dots[biv_ll_extra_names]
+      if (etas_soft_barrier) {
+        biv_ll_extra$max_branching_radius <- Inf
+        biv_ll_extra$stability_barrier_start <- biv_barrier_ctrl$stability_barrier_start
+        biv_ll_extra$stability_barrier_weight <- biv_barrier_ctrl$stability_barrier_weight
+        biv_ll_extra$stability_barrier_power <- biv_barrier_ctrl$stability_barrier_power
+      }
       biv_n_threads <- if (!is.null(adaptive_control$biv_n_threads)) {
         as.integer(adaptive_control$biv_n_threads)
       } else {
@@ -884,14 +945,22 @@ adaptive_SEM <- function(pp_data,
       }
 
       t0 <- proc.time()[3]
-      if (length(biv_fr_idx) > 0) {
+      run_biv_nm <- function(start_par) {
+        par_local <- start_par
+        names(par_local) <- biv_names
+        if (length(biv_fr_idx) == 0) {
+          return(list(
+            res = list(par = numeric(0), convergence = 0),
+            par = par_local
+          ))
+        }
         biv_wrap <- function(optim_free) {
-          p15 <- biv_par
+          p15 <- par_local
           p15[biv_fr_idx] <- biv_from_optim(optim_free)
           biv_obj(p15)
         }
-        biv_opt_start <- biv_to_optim(biv_par[biv_fr_idx])
-        biv_res <- tryCatch(
+        biv_opt_start <- biv_to_optim(par_local[biv_fr_idx])
+        res_local <- tryCatch(
           optim(par = biv_opt_start, fn = biv_wrap, method = "Nelder-Mead",
                 control = list(
                   fnscale = -1,
@@ -904,10 +973,12 @@ adaptive_SEM <- function(pp_data,
             list(par = biv_opt_start, convergence = -99)
           }
         )
-        biv_par[biv_fr_idx] <- biv_from_optim(biv_res$par)
-      } else {
-        biv_res <- list(par = numeric(0), convergence = 0)
+        par_local[biv_fr_idx] <- biv_from_optim(res_local$par)
+        list(res = res_local, par = par_local)
       }
+      nm_biv <- run_biv_nm(biv_par)
+      biv_res <- nm_biv$res
+      biv_par <- nm_biv$par
       names(biv_par) <- biv_names
       if (hard_subcritical) {
         biv_par <- .etas_project_subcritical_biv(
@@ -916,6 +987,63 @@ adaptive_SEM <- function(pp_data,
           gap_min = etas_gap_min,
           rho_max = etas_rho_max
         )
+      }
+      rho1 <- .etas_biv_spectral_radius(biv_par, etas_beta_eff)
+      near_cap_biv <- is.finite(rho1) && rho1 >= (etas_rho_max * etas_near_cap_frac)
+      distrust_biv <- !is.null(biv_res$convergence) &&
+        (biv_res$convergence != 0L || near_cap_biv)
+      if (near_cap_biv || distrust_biv) {
+        restart_rho <- min(0.70, etas_init_rho_cap)
+        restart_start <- .etas_scale_to_target_rho(
+          biv_par, etas_beta_eff, restart_rho
+        )
+        restart_start <- .etas_project_subcritical_biv(
+          restart_start,
+          beta_gr = etas_beta_eff,
+          gap_min = etas_gap_min,
+          rho_max = etas_init_rho_cap
+        )
+        nm_biv2 <- run_biv_nm(restart_start)
+        out2 <- nm_biv2$par
+        if (hard_subcritical) {
+          out2 <- .etas_project_subcritical_biv(
+            out2,
+            beta_gr = etas_beta_eff,
+            gap_min = etas_gap_min,
+            rho_max = etas_rho_max
+          )
+        }
+        if (is.finite(biv_obj(out2)) && biv_obj(out2) > biv_obj(biv_par) + 1e-8) {
+          biv_res <- nm_biv2$res
+          biv_par <- out2
+          if (verbose) {
+            cat(sprintf(
+              "  [bivariate] interior restart improved objective (rho %.3f -> %.3f)\n",
+              rho1, .etas_biv_spectral_radius(biv_par, etas_beta_eff)
+            ))
+          }
+        }
+      }
+      polish_hi <- etas_rho_max * (1 - 1e-6)
+      polish_obj <- function(rho) {
+        q <- .etas_scale_to_target_rho(biv_par, etas_beta_eff, rho)
+        biv_obj(q)
+      }
+      polish <- tryCatch(
+        stats::optimize(polish_obj, interval = c(0.05, polish_hi), maximum = TRUE),
+        error = function(e) NULL
+      )
+      if (!is.null(polish) && is.finite(polish$objective) &&
+          polish$objective > biv_obj(biv_par) + 1e-8) {
+        biv_par <- .etas_scale_to_target_rho(biv_par, etas_beta_eff, polish$maximum)
+        if (hard_subcritical) {
+          biv_par <- .etas_project_subcritical_biv(
+            biv_par,
+            beta_gr = etas_beta_eff,
+            gap_min = etas_gap_min,
+            rho_max = etas_rho_max
+          )
+        }
       }
       biv_res$par <- biv_par
       biv_res$branching_radius <- .etas_biv_spectral_radius(
@@ -1020,6 +1148,12 @@ adaptive_SEM <- function(pp_data,
         character(0)
       }
       etas_ll_extra <- dots[etas_ll_extra_names]
+      if (is_etas && etas_soft_barrier) {
+        etas_ll_extra$max_branching_ratio <- Inf
+        etas_ll_extra$stability_barrier_start <- univ_barrier_ctrl$stability_barrier_start
+        etas_ll_extra$stability_barrier_weight <- univ_barrier_ctrl$stability_barrier_weight
+        etas_ll_extra$stability_barrier_power <- univ_barrier_ctrl$stability_barrier_power
+      }
       obj_fn <- function(params) {
         if (!is_etas) {
           liks <- loglik_hawk_filtration_batch(
@@ -1074,7 +1208,7 @@ adaptive_SEM <- function(pp_data,
           full_vec,
           beta_gr = etas_beta_eff,
           gap_min = etas_gap_min,
-          eta_max = etas_eta_max
+          eta_max = etas_init_eta_cap
         )
       }
       free_names <- all_names[fr_idx]
@@ -1083,8 +1217,18 @@ adaptive_SEM <- function(pp_data,
       } else {
         integer(0)
       }
+      log_free_pos <- if (is_etas && etas_log_transform) {
+        which(free_names %in% c("mu", "A", "c", "D"))
+      } else {
+        integer(0)
+      }
       to_optim <- function(natural_free) {
         optim_free <- natural_free
+        if (length(log_free_pos)) {
+          optim_free[log_free_pos] <- log(pmax(
+            as.numeric(natural_free[log_free_pos]), 1e-12
+          ))
+        }
         if (length(alpha_free_pos)) {
           slack <- pmax(
             etas_beta_eff - etas_gap_min - natural_free[alpha_free_pos],
@@ -1096,6 +1240,9 @@ adaptive_SEM <- function(pp_data,
       }
       from_optim <- function(optim_free) {
         natural_free <- optim_free
+        if (length(log_free_pos)) {
+          natural_free[log_free_pos] <- exp(optim_free[log_free_pos])
+        }
         if (length(alpha_free_pos)) {
           natural_free[alpha_free_pos] <-
             etas_beta_eff - etas_gap_min - exp(optim_free[alpha_free_pos])
@@ -1111,14 +1258,20 @@ adaptive_SEM <- function(pp_data,
       }
 
       t0 <- proc.time()[3]
-      if (length(fr_idx) > 0) {
-        opt_start <- to_optim(full_vec[fr_idx])
+      run_outer_nm <- function(start_natural) {
+        if (length(fr_idx) == 0) {
+          return(list(
+            res = list(par = numeric(0), convergence = 0),
+            out_par = start_natural
+          ))
+        }
+        opt_start <- to_optim(start_natural[fr_idx])
         wrap_fn <- function(optim_free) {
-          p4 <- full_vec
+          p4 <- start_natural
           p4[fr_idx] <- from_optim(optim_free)
           obj_fn(p4)
         }
-        res <- tryCatch(
+        res_local <- tryCatch(
           optim(par = opt_start, fn = wrap_fn, method = "Nelder-Mead",
                 control = list(
                   fnscale = -1,
@@ -1131,12 +1284,13 @@ adaptive_SEM <- function(pp_data,
             list(par = opt_start, convergence = -99)
           }
         )
-        out_par <- full_vec
-        out_par[fr_idx] <- from_optim(res$par)
-      } else {
-        res <- list(par = numeric(0), convergence = 0)
-        out_par <- full_vec
+        out_local <- start_natural
+        out_local[fr_idx] <- from_optim(res_local$par)
+        list(res = res_local, out_par = out_local)
       }
+      nm1 <- run_outer_nm(full_vec)
+      res <- nm1$res
+      out_par <- nm1$out_par
       if (is_etas && hard_subcritical) {
         out_par <- .etas_project_subcritical(
           out_par,
@@ -1144,6 +1298,67 @@ adaptive_SEM <- function(pp_data,
           gap_min = etas_gap_min,
           eta_max = etas_eta_max
         )
+      }
+      if (is_etas && "A" %in% free_names) {
+        br1 <- .etas_univ_branching_ratio(out_par, etas_beta_eff)
+        near_cap <- is.finite(br1) && br1 >= (etas_eta_max * etas_near_cap_frac)
+        distrust <- !is.null(res$convergence) &&
+          (res$convergence != 0L || near_cap)
+        if (near_cap || distrust) {
+          restart_eta <- min(0.70, etas_init_eta_cap)
+          restart_start <- .etas_scale_to_target_eta(
+            out_par, etas_beta_eff, restart_eta
+          )
+          restart_start <- .etas_project_subcritical(
+            restart_start,
+            beta_gr = etas_beta_eff,
+            gap_min = etas_gap_min,
+            eta_max = etas_init_eta_cap
+          )
+          nm2 <- run_outer_nm(restart_start)
+          out2 <- nm2$out_par
+          if (hard_subcritical) {
+            out2 <- .etas_project_subcritical(
+              out2,
+              beta_gr = etas_beta_eff,
+              gap_min = etas_gap_min,
+              eta_max = etas_eta_max
+            )
+          }
+          if (is.finite(obj_fn(out2)) && obj_fn(out2) > obj_fn(out_par) + 1e-8) {
+            res <- nm2$res
+            out_par <- out2
+            if (verbose) {
+              cat(sprintf(
+                "  [%s] interior restart improved outer objective (eta %.3f -> %.3f)\n",
+                process_label, br1,
+                .etas_univ_branching_ratio(out_par, etas_beta_eff)
+              ))
+            }
+          }
+        }
+        # 1D productivity polish on the weighted SEM objective.
+        polish_hi <- etas_eta_max * (1 - 1e-6)
+        polish_obj <- function(eta) {
+          q <- .etas_scale_to_target_eta(out_par, etas_beta_eff, eta)
+          obj_fn(q)
+        }
+        polish <- tryCatch(
+          stats::optimize(polish_obj, interval = c(0.05, polish_hi), maximum = TRUE),
+          error = function(e) NULL
+        )
+        if (!is.null(polish) && is.finite(polish$objective) &&
+            polish$objective > obj_fn(out_par) + 1e-8) {
+          out_par <- .etas_scale_to_target_eta(out_par, etas_beta_eff, polish$maximum)
+          if (hard_subcritical) {
+            out_par <- .etas_project_subcritical(
+              out_par,
+              beta_gr = etas_beta_eff,
+              gap_min = etas_gap_min,
+              eta_max = etas_eta_max
+            )
+          }
+        }
       }
       res$par <- out_par
       if (is_etas) {

@@ -48,6 +48,39 @@ test_that("fit_etas projects its result inside the configured GR margin", {
   expect_equal(fit$branching_ratio, eta)
 })
 
+test_that("fit_etas soft barrier keeps NM starts interior and can polish A", {
+  win <- spatstat.geom::owin(c(0, 10), c(0, 10))
+  dat <- data.frame(
+    x = c(2, 4, 6, 8),
+    y = c(2, 4, 6, 8),
+    t = c(1, 2, 3, 4),
+    mag = c(2.6, 2.8, 3.0, 3.2),
+    W = 1
+  )
+  init <- c(
+    mu = 2, A = 0.9, alpha_m = 0.5,
+    c = 0.1, p = 2.1, D = 1, gamma = 0.5, q = 1.6
+  )
+  eta0 <- PPDisentangle:::.etas_univ_branching_ratio(init, 2.3)
+  expect_gt(eta0, 0.98)
+
+  fit <- fit_etas(
+    init, dat, c(0, 5), win, m0 = 2.5,
+    beta_gr = 2.3, max_branching_ratio = 0.98,
+    maxit = 20, log_transform = TRUE,
+    soft_branching_barrier = TRUE,
+    polish_productivity = TRUE,
+    interior_restart = TRUE,
+    init_branching_margin = 0.9
+  )
+
+  expect_true(isTRUE(fit$soft_branching_barrier))
+  expect_true(isTRUE(fit$log_transform))
+  expect_lt(fit$branching_ratio, 0.98)
+  expect_true(is.finite(fit$value))
+  expect_gt(fit$value, -1e10)
+})
+
 test_that("bivariate likelihood and fit enforce the supplied GR radius", {
   win <- spatstat.geom::owin(c(0, 10), c(0, 10))
   ctrl <- spatstat.geom::owin(c(0, 5), c(0, 10))

@@ -94,6 +94,63 @@
   pv
 }
 
+.etas_scale_to_target_rho <- function(params, beta_gr, target_rho) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_bivariate_par_names
+  target_rho <- suppressWarnings(as.numeric(target_rho))
+  if (length(target_rho) != 1L || !is.finite(target_rho) || target_rho <= 0) {
+    return(pv)
+  }
+  rho <- .etas_biv_spectral_radius(pv, beta_gr)
+  if (!is.finite(rho) || rho <= 0) return(pv)
+  scale <- target_rho / rho
+  for (nm in .etas_biv_A_names) {
+    if (is.finite(pv[[nm]]) && pv[[nm]] > 0) pv[[nm]] <- pv[[nm]] * scale
+  }
+  pv
+}
+
+.etas_raw_loglik_biv <- function(params, ll_args) {
+  args <- ll_args
+  args$params <- params
+  args$max_branching_radius <- Inf
+  args$stability_barrier_weight <- 0
+  tryCatch(
+    as.numeric(do.call(loglik_etas_bivariate, args)),
+    error = function(e) -1e15
+  )
+}
+
+.etas_polish_productivity_biv <- function(params,
+                                          ll_args,
+                                          beta_gr,
+                                          rho_max = 0.98,
+                                          rho_lo = 0.05) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_bivariate_par_names
+  rho_max <- suppressWarnings(as.numeric(rho_max))
+  if (!is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
+  rho_lo <- suppressWarnings(as.numeric(rho_lo))
+  if (!is.finite(rho_lo) || rho_lo <= 0) rho_lo <- 0.05
+  hi <- rho_max * (1 - 1e-6)
+  if (!(hi > rho_lo)) {
+    return(list(par = pv, value = .etas_raw_loglik_biv(pv, ll_args), polished = FALSE))
+  }
+  obj <- function(rho) {
+    q <- .etas_scale_to_target_rho(pv, beta_gr, rho)
+    .etas_raw_loglik_biv(q, ll_args)
+  }
+  opt <- tryCatch(
+    stats::optimize(obj, interval = c(rho_lo, hi), maximum = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(opt) || !is.finite(opt$objective)) {
+    return(list(par = pv, value = .etas_raw_loglik_biv(pv, ll_args), polished = FALSE))
+  }
+  best <- .etas_scale_to_target_rho(pv, beta_gr, opt$maximum)
+  list(par = best, value = as.numeric(opt$objective), polished = TRUE)
+}
+
 #' Background time exposure under an activation cutoff
 #'
 #' Length of the part of \code{windowT} on which a background component is
@@ -787,6 +844,10 @@ fit_etas_bivariate <- function(params_init,
                                trace = 0,
                                t_trunc = NULL,
                                hard_subcritical = TRUE,
+                               log_transform = TRUE,
+                               soft_branching_barrier = TRUE,
+                               polish_productivity = TRUE,
+                               interior_restart = TRUE,
                                ...) {
   dots <- list(...)
   all_names <- .etas_bivariate_par_names
@@ -818,22 +879,50 @@ fit_etas_bivariate <- function(params_init,
   if (length(rho_max) != 1L || !is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
   alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
   if (length(alpha_lo) != 1L || is.na(alpha_lo)) alpha_lo <- 0
+  init_margin <- suppressWarnings(as.numeric(dots$init_branching_margin))
+  if (length(init_margin) != 1L || !is.finite(init_margin) ||
+      init_margin <= 0 || init_margin > 1) {
+    init_margin <- 0.9
+  }
+  near_cap_frac <- suppressWarnings(as.numeric(dots$near_cap_frac))
+  if (length(near_cap_frac) != 1L || !is.finite(near_cap_frac) ||
+      near_cap_frac <= 0 || near_cap_frac > 1) {
+    near_cap_frac <- 0.99
+  }
+  restart_rho <- suppressWarnings(as.numeric(dots$interior_restart_rho))
+  if (length(restart_rho) != 1L || !is.finite(restart_rho) || restart_rho <= 0) {
+    restart_rho <- min(0.70, rho_max * init_margin)
+  }
   dots$alpha_beta_gap_min <- gap_min
-  dots$max_branching_radius <- rho_max
   dots$alpha_m_lower_bound <- alpha_lo
   beta_eff <- .etas_resolve_beta_gr(dots$beta_gr, realiz = realiz, m0 = m0)
   alpha_bounds <- .etas_alpha_bounds(
     beta_eff, gap_min = gap_min, alpha_m_lower_bound = alpha_lo
   )
+  init_rho_cap <- rho_max * init_margin
   if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical) ||
       is.finite(alpha_lo)) {
     if (is.finite(beta_eff)) {
       full_init <- .etas_project_subcritical_biv(
-        full_init, beta_eff, gap_min = gap_min, rho_max = rho_max,
+        full_init, beta_eff, gap_min = gap_min, rho_max = init_rho_cap,
         alpha_m_lower_bound = alpha_lo
       )
     }
   }
+
+  use_soft_barrier <- isTRUE(soft_branching_barrier) && is.finite(rho_max)
+  barrier_ctrl <- .etas_soft_barrier_controls(
+    rho_max,
+    start = dots$stability_barrier_start,
+    weight = if (!is.null(dots$stability_barrier_weight) &&
+                 is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                 as.numeric(dots$stability_barrier_weight) > 0) {
+      dots$stability_barrier_weight
+    } else {
+      5000
+    },
+    power = dots$stability_barrier_power
+  )
 
   # Handle symmetric constraint: fix A_10 = A_01 and alpha_m_10 = alpha_m_01
   sym_fixed <- NULL
@@ -851,6 +940,7 @@ fit_etas_bivariate <- function(params_init,
   }
   free_idx <- setdiff(seq_along(all_names), fixed_idx)
   free_names <- all_names[free_idx]
+  A_free <- intersect(.etas_biv_A_names, free_names)
   # Hard alpha constraint via reparameterization onto (alpha_lo, alpha_hi):
   #   alpha = alpha_lo + (alpha_hi - alpha_lo) * plogis(u)
   # with alpha_hi = beta - gap_min (default alpha_lo = 0).
@@ -861,8 +951,17 @@ fit_etas_bivariate <- function(params_init,
   } else {
     integer(0)
   }
+  log_names <- c("mu_0", "mu_1", .etas_biv_A_names, "c", "D")
+  log_free_pos <- if (isTRUE(log_transform)) {
+    which(free_names %in% log_names)
+  } else {
+    integer(0)
+  }
   free_to_natural <- function(free_par) {
     nat <- free_par
+    if (length(log_free_pos)) {
+      nat[log_free_pos] <- exp(free_par[log_free_pos])
+    }
     if (length(alpha_free_pos)) {
       nat[alpha_free_pos] <- .etas_opt_to_alpha(
         free_par[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
@@ -872,6 +971,10 @@ fit_etas_bivariate <- function(params_init,
   }
   natural_to_free <- function(nat_par) {
     free_par <- nat_par
+    if (length(log_free_pos)) {
+      pos <- pmax(as.numeric(nat_par[log_free_pos]), 1e-12)
+      free_par[log_free_pos] <- log(pos)
+    }
     if (length(alpha_free_pos)) {
       free_par[alpha_free_pos] <- .etas_alpha_to_opt(
         nat_par[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
@@ -879,7 +982,6 @@ fit_etas_bivariate <- function(params_init,
     }
     free_par
   }
-  free_init <- natural_to_free(full_init[free_idx])
 
   finite_rows <- is.finite(realiz$t) & is.finite(realiz$x) & is.finite(realiz$y) & is.finite(realiz$mag)
   if (!all(finite_rows)) realiz <- realiz[finite_rows, , drop = FALSE]
@@ -927,15 +1029,7 @@ fit_etas_bivariate <- function(params_init,
   }
   precomp <- list(W_0 = W_0, W_1 = W_1, areaS_0 = areaS_0, areaS_1 = areaS_1)
 
-  profile_fn <- function(free_par) {
-    par15 <- full_init
-    par15[free_idx] <- free_to_natural(free_par)
-
-    if (symmetric) {
-      par15["A_10"] <- par15["A_01"]
-      par15["alpha_m_10"] <- par15["alpha_m_01"]
-    }
-
+  build_ll_args <- function(par15, for_optim = TRUE) {
     ll_args <- list(
       params = par15, realiz = realiz,
       windowT = windowT, windowS = windowS,
@@ -949,11 +1043,9 @@ fit_etas_bivariate <- function(params_init,
       t_trunc = t_trunc,
       precomp = precomp
     )
-    # Forward constraint / barrier controls; prefer explicit beta_gr.
     if (!is.null(dots$beta_gr) || is.finite(beta_eff)) {
       ll_args$beta_gr <- if (!is.null(dots$beta_gr)) dots$beta_gr else beta_eff
     }
-    ll_args$max_branching_radius <- rho_max
     ll_args$alpha_beta_gap_min <- gap_min
     ll_args$alpha_m_lower_bound <- alpha_lo
     if (!is.null(dots$enforce_finite_trigger_moments)) ll_args$enforce_finite_trigger_moments <- dots$enforce_finite_trigger_moments
@@ -966,41 +1058,127 @@ fit_etas_bivariate <- function(params_init,
     if (!is.null(dots$alpha_beta_soft_gap)) ll_args$alpha_beta_soft_gap <- dots$alpha_beta_soft_gap
     if (!is.null(dots$alpha_beta_soft_weight)) ll_args$alpha_beta_soft_weight <- dots$alpha_beta_soft_weight
     if (!is.null(dots$alpha_beta_soft_power)) ll_args$alpha_beta_soft_power <- dots$alpha_beta_soft_power
-    if (!is.null(dots$stability_barrier_start)) ll_args$stability_barrier_start <- dots$stability_barrier_start
-    if (!is.null(dots$stability_barrier_weight)) ll_args$stability_barrier_weight <- dots$stability_barrier_weight
-    if (!is.null(dots$stability_barrier_power)) ll_args$stability_barrier_power <- dots$stability_barrier_power
+    if (isTRUE(for_optim) && use_soft_barrier) {
+      ll_args$max_branching_radius <- Inf
+      ll_args$stability_barrier_start <- barrier_ctrl$stability_barrier_start
+      ll_args$stability_barrier_weight <- barrier_ctrl$stability_barrier_weight
+      ll_args$stability_barrier_power <- barrier_ctrl$stability_barrier_power
+    } else if (isTRUE(for_optim)) {
+      ll_args$max_branching_radius <- rho_max
+      if (!is.null(dots$stability_barrier_start)) ll_args$stability_barrier_start <- dots$stability_barrier_start
+      if (!is.null(dots$stability_barrier_weight)) ll_args$stability_barrier_weight <- dots$stability_barrier_weight
+      if (!is.null(dots$stability_barrier_power)) ll_args$stability_barrier_power <- dots$stability_barrier_power
+    } else {
+      ll_args$max_branching_radius <- Inf
+      ll_args$stability_barrier_weight <- 0
+    }
+    ll_args
+  }
+
+  profile_fn <- function(free_par) {
+    par15 <- full_init
+    par15[free_idx] <- free_to_natural(free_par)
+
+    if (symmetric) {
+      par15["A_10"] <- par15["A_01"]
+      par15["alpha_m_10"] <- par15["alpha_m_01"]
+    }
+
     ll_val <- tryCatch(
-      do.call(loglik_etas_bivariate, ll_args),
+      do.call(loglik_etas_bivariate, build_ll_args(par15, for_optim = TRUE)),
       error = function(e) -1e15
     )
     if (!is.finite(ll_val) || is.na(ll_val)) return(-1e15)
     as.numeric(ll_val)
   }
 
-  fit <- stats::optim(
-    par     = free_init,
-    fn      = profile_fn,
-    method  = "Nelder-Mead",
-    control = list(fnscale = -1, trace = trace, maxit = maxit)
-  )
-
-  par15 <- full_init
-  par15[free_idx] <- free_to_natural(fit$par)
-  if (symmetric) {
-    par15["A_10"] <- par15["A_01"]
-    par15["alpha_m_10"] <- par15["alpha_m_01"]
+  run_nm <- function(start_natural) {
+    fit_local <- stats::optim(
+      par     = natural_to_free(start_natural[free_idx]),
+      fn      = profile_fn,
+      method  = "Nelder-Mead",
+      control = list(fnscale = -1, trace = trace, maxit = maxit)
+    )
+    par_local <- full_init
+    par_local[free_idx] <- free_to_natural(fit_local$par)
+    if (symmetric) {
+      par_local["A_10"] <- par_local["A_01"]
+      par_local["alpha_m_10"] <- par_local["alpha_m_01"]
+    }
+    if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
+      par_local <- .etas_project_subcritical_biv(
+        par_local, beta_eff, gap_min = gap_min, rho_max = rho_max,
+        alpha_m_lower_bound = alpha_lo
+      )
+    }
+    list(fit = fit_local, par = par_local)
   }
-  if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
-    par15 <- .etas_project_subcritical_biv(
-      par15, beta_eff, gap_min = gap_min, rho_max = rho_max,
+
+  finalize_candidate <- function(par15, fit_meta = NULL) {
+    if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
+      par15 <- .etas_project_subcritical_biv(
+        par15, beta_eff, gap_min = gap_min, rho_max = rho_max,
+        alpha_m_lower_bound = alpha_lo
+      )
+    }
+    if (symmetric) {
+      par15["A_10"] <- par15["A_01"]
+      par15["alpha_m_10"] <- par15["alpha_m_01"]
+    }
+    raw_ll <- .etas_raw_loglik_biv(par15, build_ll_args(par15, for_optim = FALSE))
+    rho <- if (is.finite(beta_eff)) .etas_biv_spectral_radius(par15, beta_eff) else NA_real_
+    list(par = par15, value = raw_ll, branching_radius = rho, fit = fit_meta)
+  }
+
+  primary <- run_nm(full_init)
+  best <- finalize_candidate(primary$par, primary$fit)
+  near_cap <- is.finite(best$branching_radius) &&
+    best$branching_radius >= (rho_max * near_cap_frac)
+  distrust_conv <- !is.null(best$fit$convergence) &&
+    (best$fit$convergence != 0L || near_cap)
+
+  if (isTRUE(interior_restart) && length(A_free) > 0L && is.finite(beta_eff) &&
+      (near_cap || distrust_conv ||
+       !is.finite(best$value) || best$value <= -1e10)) {
+    restart_start <- .etas_scale_to_target_rho(best$par, beta_eff, restart_rho)
+    restart_start <- .etas_project_subcritical_biv(
+      restart_start, beta_eff, gap_min = gap_min, rho_max = init_rho_cap,
       alpha_m_lower_bound = alpha_lo
     )
+    restarted <- run_nm(restart_start)
+    cand <- finalize_candidate(restarted$par, restarted$fit)
+    if (is.finite(cand$value) &&
+        (!is.finite(best$value) || cand$value > best$value + 1e-8)) {
+      best <- cand
+      best$interior_restarted <- TRUE
+    }
   }
-  fit$par <- par15
+
+  if (isTRUE(polish_productivity) && length(A_free) > 0L && is.finite(beta_eff)) {
+    polished <- .etas_polish_productivity_biv(
+      best$par, build_ll_args(best$par, for_optim = FALSE),
+      beta_eff, rho_max = rho_max
+    )
+    if (isTRUE(polished$polished) && is.finite(polished$value) &&
+        (!is.finite(best$value) || polished$value > best$value + 1e-8)) {
+      best <- finalize_candidate(polished$par, best$fit)
+      best$polished_productivity <- TRUE
+    }
+  }
+
+  fit <- if (!is.null(best$fit)) best$fit else list(convergence = 0L, counts = NA, message = NULL)
+  fit$par <- best$par
+  fit$value <- best$value
   fit$m0 <- m0
   fit$hard_subcritical <- isTRUE(hard_subcritical)
   fit$alpha_m_lower_bound <- alpha_lo
-  fit$branching_radius <- if (is.finite(beta_eff)) .etas_biv_spectral_radius(par15, beta_eff) else NA_real_
+  fit$branching_radius <- best$branching_radius
+  fit$soft_branching_barrier <- use_soft_barrier
+  fit$log_transform <- isTRUE(log_transform)
+  fit$polished_productivity <- isTRUE(best$polished_productivity)
+  fit$interior_restarted <- isTRUE(best$interior_restarted)
+  fit$near_cap <- is.finite(best$branching_radius) &&
+    best$branching_radius >= (rho_max * near_cap_frac)
   return(fit)
 }
 

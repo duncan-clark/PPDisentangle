@@ -257,6 +257,18 @@ oklahoma_build_state_spaces <- function(data_dir, crs_proj = 5070L) {
   if (!requireNamespace("sf", quietly = TRUE)) stop("sf required")
   if (!requireNamespace("tigris", quietly = TRUE)) stop("tigris required")
   if (!requireNamespace("spatstat.geom", quietly = TRUE)) stop("spatstat required")
+  if (!exists("oklahoma_sf_features_to_owins_km", mode = "function", inherits = TRUE)) {
+    # When sourced from oklahoma_analysis.R, oklahoma_geometry.R is already loaded.
+    # Standalone use: try adjacent helper file.
+    geom_path <- file.path(dirname(data_dir), "oklahoma_geometry.R")
+    if (!file.exists(geom_path)) {
+      geom_path <- file.path(getwd(), "inst/oklahoma/oklahoma_geometry.R")
+    }
+    if (!file.exists(geom_path)) {
+      stop("oklahoma_geometry.R helpers are not loaded.")
+    }
+    source(geom_path, local = FALSE)
+  }
 
   options(tigris_use_cache = TRUE)
   counties_sf <- tigris::counties(state = "OK", cb = TRUE, year = 2022)
@@ -269,25 +281,10 @@ oklahoma_build_state_spaces <- function(data_dir, crs_proj = 5070L) {
     yrange = c(bb["ymin"], bb["ymax"]) / 1000
   )
 
-  county_owins <- lapply(seq_len(nrow(counties_sf)), function(i) {
-    geom <- sf::st_geometry(counties_sf[i, ])
-    coords_list <- sf::st_coordinates(geom)
-    x_km <- coords_list[, 1] / 1000
-    y_km <- coords_list[, 2] / 1000
-    tryCatch(
-      spatstat.geom::owin(poly = list(x = rev(x_km), y = rev(y_km))),
-      error = function(e) {
-        tryCatch(
-          spatstat.geom::owin(poly = list(x = x_km, y = y_km)),
-          error = function(e2) NULL
-        )
-      }
-    )
-  })
+  county_owins <- oklahoma_sf_features_to_owins_km(counties_sf, name_col = "NAME")
   valid_idx <- !vapply(county_owins, is.null, logical(1))
   county_owins_valid <- county_owins[valid_idx]
   counties_sf_valid <- counties_sf[valid_idx, ]
-  names(county_owins_valid) <- counties_sf_valid$NAME
   partition <- spatstat.geom::tess(tiles = county_owins_valid, window = win_km)
 
   aoi_sf <- sf::st_read(file.path(data_dir, "occ_aoi_layer_2.geojson"), quiet = TRUE)

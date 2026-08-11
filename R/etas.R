@@ -169,6 +169,81 @@
   pv
 }
 
+.etas_scale_to_target_eta <- function(params, beta_gr, target_eta) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_par_names
+  target_eta <- suppressWarnings(as.numeric(target_eta))
+  if (length(target_eta) != 1L || !is.finite(target_eta) || target_eta <= 0) {
+    return(pv)
+  }
+  eta <- .etas_univ_branching_ratio(pv, beta_gr)
+  if (!is.finite(eta) || eta <= 0 || !is.finite(pv[["A"]])) return(pv)
+  pv[["A"]] <- as.numeric(pv[["A"]]) * (target_eta / eta)
+  pv
+}
+
+.etas_soft_barrier_controls <- function(cap,
+                                        start = NULL,
+                                        weight = 5000,
+                                        power = 4) {
+  cap <- suppressWarnings(as.numeric(cap))
+  if (length(cap) != 1L || !is.finite(cap) || cap <= 0) cap <- 0.98
+  start <- suppressWarnings(as.numeric(start))
+  if (length(start) != 1L || !is.finite(start)) {
+    start <- min(0.90, max(0.5, cap * 0.92))
+  }
+  weight <- suppressWarnings(as.numeric(weight))
+  if (length(weight) != 1L || !is.finite(weight) || weight <= 0) weight <- 5000
+  power <- suppressWarnings(as.numeric(power))
+  if (length(power) != 1L || !is.finite(power) || power <= 0) power <- 4
+  list(
+    stability_barrier_start = start,
+    stability_barrier_weight = weight,
+    stability_barrier_power = power
+  )
+}
+
+.etas_raw_loglik <- function(params, ll_args) {
+  args <- ll_args
+  args$params <- params
+  # Evaluate the statistical objective without the hard branching cliff or
+  # soft barrier used only to guide Nelder-Mead.
+  args$max_branching_ratio <- Inf
+  args$stability_barrier_weight <- 0
+  tryCatch(
+    as.numeric(do.call(loglik_etas, args)),
+    error = function(e) -1e15
+  )
+}
+
+.etas_polish_productivity_A <- function(params,
+                                        ll_args,
+                                        beta_gr,
+                                        eta_max = 0.98,
+                                        eta_lo = 0.05) {
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv))) names(pv) <- .etas_par_names
+  eta_max <- suppressWarnings(as.numeric(eta_max))
+  if (!is.finite(eta_max) || eta_max <= 0) eta_max <- 0.98
+  eta_lo <- suppressWarnings(as.numeric(eta_lo))
+  if (!is.finite(eta_lo) || eta_lo <= 0) eta_lo <- 0.05
+  hi <- eta_max * (1 - 1e-6)
+  if (!(hi > eta_lo)) return(list(par = pv, value = .etas_raw_loglik(pv, ll_args), polished = FALSE))
+  obj <- function(eta) {
+    q <- .etas_scale_to_target_eta(pv, beta_gr, eta)
+    .etas_raw_loglik(q, ll_args)
+  }
+  opt <- tryCatch(
+    stats::optimize(obj, interval = c(eta_lo, hi), maximum = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(opt) || !is.finite(opt$objective)) {
+    return(list(par = pv, value = .etas_raw_loglik(pv, ll_args), polished = FALSE))
+  }
+  best <- .etas_scale_to_target_eta(pv, beta_gr, opt$maximum)
+  list(par = best, value = as.numeric(opt$objective), polished = TRUE)
+}
+
 #' Log-likelihood for a spatio-temporal ETAS process (C++ accelerated)
 #'
 #' Evaluates the log-likelihood of the ETAS conditional intensity model
@@ -532,9 +607,12 @@ fit_etas <- function(params_init,
                      upper = NULL,
                      fixed_params = NULL,
                      t_trunc = NULL,
-                     log_transform = FALSE,
+                     log_transform = TRUE,
                      init_decluster = FALSE,
                      hard_subcritical = TRUE,
+                     soft_branching_barrier = TRUE,
+                     polish_productivity = TRUE,
+                     interior_restart = TRUE,
                      ...) {
   dots <- list(...)
   dots$precomp <- NULL
@@ -590,26 +668,65 @@ fit_etas <- function(params_init,
   if (length(eta_max) != 1L || !is.finite(eta_max) || eta_max <= 0) eta_max <- 0.98
   alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
   if (length(alpha_lo) != 1L || is.na(alpha_lo)) alpha_lo <- 0
-  dots$max_branching_ratio <- eta_max
+  init_margin <- suppressWarnings(as.numeric(dots$init_branching_margin))
+  if (length(init_margin) != 1L || !is.finite(init_margin) ||
+      init_margin <= 0 || init_margin > 1) {
+    init_margin <- 0.9
+  }
+  near_cap_frac <- suppressWarnings(as.numeric(dots$near_cap_frac))
+  if (length(near_cap_frac) != 1L || !is.finite(near_cap_frac) ||
+      near_cap_frac <= 0 || near_cap_frac > 1) {
+    near_cap_frac <- 0.99
+  }
+  restart_eta <- suppressWarnings(as.numeric(dots$interior_restart_eta))
+  if (length(restart_eta) != 1L || !is.finite(restart_eta) || restart_eta <= 0) {
+    restart_eta <- min(0.70, eta_max * init_margin)
+  }
   dots$alpha_beta_gap_min <- gap_min
   dots$alpha_m_lower_bound <- alpha_lo
   alpha_bounds <- .etas_alpha_bounds(
     beta_eff, gap_min = gap_min, alpha_m_lower_bound = alpha_lo
   )
+  # Start strictly inside the hard cap so Nelder-Mead is not born on the cliff.
+  init_eta_cap <- eta_max * init_margin
   if (isTRUE(hard_subcritical) || !isFALSE(dots$enforce_alpha_subcritical) ||
       is.finite(alpha_lo)) {
     if (is.finite(beta_eff)) {
       full_init <- .etas_project_subcritical(
-        full_init, beta_eff, gap_min = gap_min, eta_max = eta_max,
+        full_init, beta_eff, gap_min = gap_min, eta_max = init_eta_cap,
         alpha_m_lower_bound = alpha_lo
       )
     }
   }
 
+  # Soft barrier during NM; project back to eta_max after optim.
+  use_soft_barrier <- isTRUE(soft_branching_barrier) && is.finite(eta_max)
+  barrier_ctrl <- .etas_soft_barrier_controls(
+    eta_max,
+    start = dots$stability_barrier_start,
+    weight = if (!is.null(dots$stability_barrier_weight) &&
+                 is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                 as.numeric(dots$stability_barrier_weight) > 0) {
+      dots$stability_barrier_weight
+    } else {
+      5000
+    },
+    power = dots$stability_barrier_power
+  )
+  dots_opt <- dots
+  if (use_soft_barrier) {
+    dots_opt$max_branching_ratio <- Inf
+    dots_opt$stability_barrier_start <- barrier_ctrl$stability_barrier_start
+    dots_opt$stability_barrier_weight <- barrier_ctrl$stability_barrier_weight
+    dots_opt$stability_barrier_power <- barrier_ctrl$stability_barrier_power
+  } else {
+    dots_opt$max_branching_ratio <- eta_max
+  }
+
   fixed_idx <- if (!is.null(fixed_params)) match(names(fixed_params), all_names) else integer(0)
   free_idx  <- setdiff(seq_along(all_names), fixed_idx)
-  free_init <- full_init[free_idx]
   free_names <- all_names[free_idx]
+  A_is_free <- "A" %in% free_names
 
   # Indices (within the free vector) of params that must be positive
   log_idx <- if (log_transform) which(free_names %in% c("mu", "A", "c", "D")) else integer(0)
@@ -628,15 +745,24 @@ fit_etas <- function(params_init,
     windowS,
     if ("zero_background_region" %in% names(dots)) dots$zero_background_region else NULL
   )
-
-  # Transform initial values to optimisation scale
-  opt_init <- free_init
-  if (length(log_idx) > 0) opt_init[log_idx] <- log(free_init[log_idx])
-  if (length(alpha_free_pos) > 0) {
-    opt_init[alpha_free_pos] <- .etas_alpha_to_opt(
-      free_init[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
-    )
-  }
+  precomp_list <- list(
+    active_area = etas_precomp$active_area,
+    in_zero_bg = etas_precomp$in_zero_bg_all
+  )
+  ll_base_args <- c(
+    list(
+      realiz = realiz,
+      windowT = windowT,
+      windowS = windowS,
+      m0 = m0,
+      precomp = precomp_list,
+      t_trunc = t_trunc
+    ),
+    dots
+  )
+  # Raw LL for selection/polish ignores the NM soft barrier and hard cliff.
+  ll_base_args$max_branching_ratio <- Inf
+  ll_base_args$stability_barrier_weight <- 0
 
   opt_to_natural <- function(opt_par) {
     free_par <- opt_par
@@ -647,6 +773,19 @@ fit_etas <- function(params_init,
       )
     }
     free_par
+  }
+  natural_to_opt <- function(free_par) {
+    opt_par <- free_par
+    if (length(log_idx) > 0) {
+      pos <- pmax(as.numeric(free_par[log_idx]), 1e-12)
+      opt_par[log_idx] <- log(pos)
+    }
+    if (length(alpha_free_pos) > 0) {
+      opt_par[alpha_free_pos] <- .etas_alpha_to_opt(
+        free_par[alpha_free_pos], alpha_bounds$lo, alpha_bounds$hi
+      )
+    }
+    opt_par
   }
 
   profile_fn <- function(opt_par, ...) {
@@ -661,51 +800,102 @@ fit_etas <- function(params_init,
     as.numeric(ll_val)
   }
 
-  opt_args <- c(
-    list(
-      par     = opt_init,
-      fn      = profile_fn,
-      method  = method,
-      control = list(fnscale = -1, trace = trace, maxit = maxit),
-      realiz  = realiz,
-      windowT = windowT,
-      windowS = windowS,
-      m0      = m0,
-      precomp = list(
-        active_area = etas_precomp$active_area,
-        in_zero_bg = etas_precomp$in_zero_bg_all
+  run_nm <- function(start_natural) {
+    opt_args <- c(
+      list(
+        par     = natural_to_opt(start_natural[free_idx]),
+        fn      = profile_fn,
+        method  = method,
+        control = list(fnscale = -1, trace = trace, maxit = maxit),
+        realiz  = realiz,
+        windowT = windowT,
+        windowS = windowS,
+        m0      = m0,
+        precomp = precomp_list,
+        t_trunc = t_trunc
       ),
-      t_trunc = t_trunc
-    ),
-    dots
-  )
-  if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
-    opt_args$lower <- lower[free_idx]
-    opt_args$upper <- upper[free_idx]
+      dots_opt
+    )
+    if (method == "L-BFGS-B" && !is.null(lower) && !is.null(upper)) {
+      opt_args$lower <- lower[free_idx]
+      opt_args$upper <- upper[free_idx]
+    }
+    fit_local <- do.call(stats::optim, opt_args)
+    par_local <- full_init
+    par_local[free_idx] <- opt_to_natural(fit_local$par)
+    if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
+      par_local <- .etas_project_subcritical(
+        par_local, beta_eff, gap_min = gap_min, eta_max = eta_max,
+        alpha_m_lower_bound = alpha_lo
+      )
+    }
+    list(fit = fit_local, par = par_local)
   }
 
-  fit <- do.call(stats::optim, opt_args)
+  finalize_candidate <- function(par8, fit_meta = NULL) {
+    if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
+      par8 <- .etas_project_subcritical(
+        par8, beta_eff, gap_min = gap_min, eta_max = eta_max,
+        alpha_m_lower_bound = alpha_lo
+      )
+    }
+    raw_ll <- .etas_raw_loglik(par8, ll_base_args)
+    eta <- if (is.finite(beta_eff)) {
+      .etas_univ_branching_ratio(par8, beta_eff)
+    } else {
+      NA_real_
+    }
+    list(par = par8, value = raw_ll, branching_ratio = eta, fit = fit_meta)
+  }
 
-  # Back-transform to original scale
-  free_result <- opt_to_natural(fit$par)
+  primary <- run_nm(full_init)
+  best <- finalize_candidate(primary$par, primary$fit)
+  near_cap <- is.finite(best$branching_ratio) &&
+    best$branching_ratio >= (eta_max * near_cap_frac)
+  distrust_conv <- !is.null(best$fit$convergence) &&
+    (best$fit$convergence != 0L || near_cap)
 
-  par8 <- full_init
-  par8[free_idx] <- free_result
-  if ((isTRUE(hard_subcritical) || is.finite(alpha_lo)) && is.finite(beta_eff)) {
-    par8 <- .etas_project_subcritical(
-      par8, beta_eff, gap_min = gap_min, eta_max = eta_max,
+  if (isTRUE(interior_restart) && A_is_free && is.finite(beta_eff) &&
+      (near_cap || distrust_conv ||
+       !is.finite(best$value) || best$value <= -1e10)) {
+    restart_start <- .etas_scale_to_target_eta(best$par, beta_eff, restart_eta)
+    restart_start <- .etas_project_subcritical(
+      restart_start, beta_eff, gap_min = gap_min, eta_max = init_eta_cap,
       alpha_m_lower_bound = alpha_lo
     )
+    restarted <- run_nm(restart_start)
+    cand <- finalize_candidate(restarted$par, restarted$fit)
+    if (is.finite(cand$value) &&
+        (!is.finite(best$value) || cand$value > best$value + 1e-8)) {
+      best <- cand
+      best$interior_restarted <- TRUE
+    }
   }
-  fit$par <- par8
+
+  if (isTRUE(polish_productivity) && A_is_free && is.finite(beta_eff)) {
+    polished <- .etas_polish_productivity_A(
+      best$par, ll_base_args, beta_eff, eta_max = eta_max
+    )
+    if (isTRUE(polished$polished) && is.finite(polished$value) &&
+        (!is.finite(best$value) || polished$value > best$value + 1e-8)) {
+      best <- finalize_candidate(polished$par, best$fit)
+      best$polished_productivity <- TRUE
+    }
+  }
+
+  fit <- if (!is.null(best$fit)) best$fit else list(convergence = 0L, counts = NA, message = NULL)
+  fit$par <- best$par
+  fit$value <- best$value
   fit$m0 <- m0
   fit$hard_subcritical <- isTRUE(hard_subcritical)
   fit$alpha_m_lower_bound <- alpha_lo
-  fit$branching_ratio <- if (is.finite(beta_eff)) {
-    .etas_univ_branching_ratio(par8, beta_eff)
-  } else {
-    NA_real_
-  }
+  fit$branching_ratio <- best$branching_ratio
+  fit$soft_branching_barrier <- use_soft_barrier
+  fit$log_transform <- isTRUE(log_transform)
+  fit$polished_productivity <- isTRUE(best$polished_productivity)
+  fit$interior_restarted <- isTRUE(best$interior_restarted)
+  fit$near_cap <- is.finite(best$branching_ratio) &&
+    best$branching_ratio >= (eta_max * near_cap_frac)
   return(fit)
 }
 

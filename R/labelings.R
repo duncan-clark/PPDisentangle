@@ -1182,15 +1182,49 @@ em_style_labelling <- function(pp_data,
     biv_ll_extra$alpha_beta_gap_min <- biv_gap_min
     biv_ll_extra$max_branching_radius <- biv_rho_max
     biv_ll_extra$alpha_m_lower_bound <- biv_alpha_lo
+    biv_init_margin <- suppressWarnings(as.numeric(dots$init_branching_margin))
+    if (length(biv_init_margin) != 1L || !is.finite(biv_init_margin) ||
+        biv_init_margin <= 0 || biv_init_margin > 1) {
+      biv_init_margin <- 0.9
+    }
+    biv_init_rho_cap <- biv_rho_max * biv_init_margin
+    biv_soft_barrier <- !isFALSE(dots$soft_branching_barrier)
+    biv_log_transform <- !isFALSE(dots$log_transform)
+    biv_barrier_ctrl <- .etas_soft_barrier_controls(
+      biv_rho_max,
+      start = dots$stability_barrier_start,
+      weight = if (!is.null(dots$stability_barrier_weight) &&
+                   is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                   as.numeric(dots$stability_barrier_weight) > 0) {
+        dots$stability_barrier_weight
+      } else {
+        5000
+      },
+      power = dots$stability_barrier_power
+    )
+    # Soft barrier only for Nelder-Mead param updates; keep hard cap for
+    # labelling proposal scores so acceptance metrics stay comparable.
+    biv_ll_extra_opt <- biv_ll_extra
+    if (biv_soft_barrier) {
+      biv_ll_extra_opt$max_branching_radius <- Inf
+      biv_ll_extra_opt$stability_barrier_start <- biv_barrier_ctrl$stability_barrier_start
+      biv_ll_extra_opt$stability_barrier_weight <- biv_barrier_ctrl$stability_barrier_weight
+      biv_ll_extra_opt$stability_barrier_power <- biv_barrier_ctrl$stability_barrier_power
+    }
     if (!is.null(biv_etas_params) && biv_hard_subcritical) {
       biv_etas_params <- .etas_project_subcritical_biv(
         biv_etas_params,
         beta_gr = biv_beta_eff,
         gap_min = biv_gap_min,
-        rho_max = biv_rho_max,
+        rho_max = biv_init_rho_cap,
         alpha_m_lower_bound = biv_alpha_lo
       )
     }
+  } else {
+    biv_init_rho_cap <- biv_rho_max * 0.9
+    biv_soft_barrier <- TRUE
+    biv_log_transform <- TRUE
+    biv_ll_extra_opt <- biv_ll_extra
   }
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
   hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
@@ -1916,7 +1950,7 @@ em_style_labelling <- function(pp_data,
               biv_par,
               beta_gr = biv_beta_eff,
               gap_min = biv_gap_min,
-              rho_max = biv_rho_max
+              rho_max = biv_init_rho_cap
             )
           }
           # Parameter updates should also account for pre-treatment control history.
@@ -1981,7 +2015,7 @@ em_style_labelling <- function(pp_data,
                   t_trunc = t_trunc,
                   precomp = biv_precomp
                 ),
-                biv_ll_extra
+                biv_ll_extra_opt
               )
             )
           }
@@ -1991,8 +2025,19 @@ em_style_labelling <- function(pp_data,
           } else {
             integer(0)
           }
+          biv_log_names <- c("mu_0", "mu_1", .etas_biv_A_names, "c", "D")
+          biv_log_free_pos <- if (biv_log_transform) {
+            which(biv_free_names %in% biv_log_names)
+          } else {
+            integer(0)
+          }
           biv_to_optim <- function(natural_free) {
             optim_free <- natural_free
+            if (length(biv_log_free_pos)) {
+              optim_free[biv_log_free_pos] <- log(pmax(
+                as.numeric(natural_free[biv_log_free_pos]), 1e-12
+              ))
+            }
             if (length(biv_alpha_free_pos)) {
               slack <- pmax(
                 biv_beta_eff - biv_gap_min - natural_free[biv_alpha_free_pos],
@@ -2004,6 +2049,9 @@ em_style_labelling <- function(pp_data,
           }
           biv_from_optim <- function(optim_free) {
             natural_free <- optim_free
+            if (length(biv_log_free_pos)) {
+              natural_free[biv_log_free_pos] <- exp(optim_free[biv_log_free_pos])
+            }
             if (length(biv_alpha_free_pos)) {
               natural_free[biv_alpha_free_pos] <-
                 biv_beta_eff - biv_gap_min - exp(optim_free[biv_alpha_free_pos])

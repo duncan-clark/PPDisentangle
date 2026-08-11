@@ -136,11 +136,17 @@ CRS_PROJ   <- 5070
 VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 5000
 # Spatial scale is magnitude-independent: d(m) = D (gamma fixed at 0 in all fits).
 GAMMA_FIXED <- 0
+# Interior branching-ratio starts (~0.5-0.85 after GR scaling) to avoid
+# Nelder-Mead beginning on the hard eta=0.98 cliff.
 VANILLA_STARTS <- list(
-  list(mu = 1.0, A = 0.2, alpha_m = 0.8, c = 0.05, p = 1.2,
-       D = 5.0, gamma = GAMMA_FIXED, q = 1.5),
-  list(mu = 2.0, A = 0.1, alpha_m = 0.5, c = 0.1,  p = 1.3,
-       D = 2.0, gamma = GAMMA_FIXED, q = 2.0)
+  list(mu = 1.0, A = 0.20, alpha_m = 0.8, c = 0.05, p = 2.2,
+       D = 5.0, gamma = GAMMA_FIXED, q = 1.6),
+  list(mu = 2.0, A = 0.10, alpha_m = 0.5, c = 0.1,  p = 2.2,
+       D = 2.0, gamma = GAMMA_FIXED, q = 2.0),
+  list(mu = 1.5, A = 0.35, alpha_m = 0.8, c = 0.05, p = 2.2,
+       D = 5.0, gamma = GAMMA_FIXED, q = 1.6),
+  list(mu = 1.0, A = 0.55, alpha_m = 0.5, c = 0.08, p = 2.2,
+       D = 3.0, gamma = GAMMA_FIXED, q = 1.8)
 )
 # Merge gamma=0 into any fixed_params list (all models exclude gamma).
 with_gamma_fixed <- function(fixed_params = NULL) {
@@ -347,6 +353,7 @@ OK_ATE_METHOD_LABEL <- paste0(
   if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
   "_", OK_ATE_CONTRAST
 )
+source(file.path(SCRIPT_DIR, "oklahoma_geometry.R"), local = FALSE)
 source(file.path(SCRIPT_DIR, "ate_bivariate.R"), local = FALSE)
 cat(sprintf("ATE evaluation: bivariate=%s contrast=%s\n",
             OK_ATE_BIVARIATE, OK_ATE_CONTRAST))
@@ -909,32 +916,15 @@ bb <- st_bbox(ok_boundary)
 win_km <- owin(xrange = c(bb["xmin"], bb["xmax"]) / 1000,
                yrange = c(bb["ymin"], bb["ymax"]) / 1000)
 
-# Convert county polygons to spatstat owin tiles
-county_owins <- lapply(seq_len(nrow(counties_sf)), function(i) {
-  geom <- st_geometry(counties_sf[i, ])
-  coords_list <- st_coordinates(geom)
-  x_km <- coords_list[, 1] / 1000
-  y_km <- coords_list[, 2] / 1000
-  tryCatch(
-    owin(poly = list(x = rev(x_km), y = rev(y_km))),
-    error = function(e) {
-      tryCatch(
-        owin(poly = list(x = x_km, y = y_km)),
-        error = function(e2) NULL
-      )
-    }
-  )
-})
-
-valid_idx <- !sapply(county_owins, is.null)
+# Convert county polygons to spatstat owin tiles (preserve rings/multipart).
+county_owins <- oklahoma_sf_features_to_owins_km(counties_sf, name_col = "NAME")
+valid_idx <- !vapply(county_owins, is.null, logical(1))
 if (sum(valid_idx) < 50) {
   cat("  Warning: only", sum(valid_idx), "of", nrow(counties_sf), "counties converted.\n")
 }
 
 county_owins_valid <- county_owins[valid_idx]
 counties_sf_valid  <- counties_sf[valid_idx, ]
-
-names(county_owins_valid) <- counties_sf_valid$NAME
 partition <- tess(tiles = county_owins_valid, window = win_km)
 
 cat(sprintf("  Counties in tessellation: %d / %d\n",
@@ -966,9 +956,9 @@ cat(sprintf("  Control counties: %d\n", sum(!treated_idx)))
 
 # ---- Assign events to counties ----
 assign_county <- function(df) {
-  ti <- as.integer(tileindex(df$x, df$y, partition))
-  df$location_process <- ifelse(is.na(ti), NA_character_,
-                                partition_processes[pmin(pmax(ti, 1), partition$n)])
+  df$location_process <- oklahoma_assign_partition_process(
+    df$x, df$y, partition, partition_processes
+  )
   df$W <- 1.0
   df$n <- nrow(df)
   df$background <- TRUE
@@ -983,6 +973,12 @@ pp_post <- assign_county(as.data.frame(ev_all[t_days >= 0 & t_days <= post_end_d
 # Drop events outside Oklahoma
 pp_pre  <- pp_pre[!is.na(pp_pre$location_process), ]
 pp_post <- pp_post[!is.na(pp_post$location_process), ]
+oklahoma_assert_label_support(pp_pre, control_ss, treated_ss, context = "pp_pre")
+oklahoma_assert_label_support(pp_post, control_ss, treated_ss, context = "pp_post")
+cat(sprintf(
+  "  Label/support check: pre=%d post=%d events consistent with county masks\n",
+  nrow(pp_pre), nrow(pp_post)
+))
 
 # Pre-treatment split:
 # - hold out first 50% (earliest events) for KDE background estimation
@@ -1167,9 +1163,21 @@ cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
 cat(sprintf("  SEM t_trunc pending resolution from %s\n", SEM_T_TRUNC_SOURCE))
 
-apply_pre_init_etas <- function(start_par) {
+apply_pre_init_etas <- function(start_par, preserve = c("A", "mu")) {
+  # Keep caller-provided productivity/background starts for multistart diversity;
+  # pin remaining structural params to the pre-control bootstrap estimates.
   out <- start_par
-  for (nm in etas_names) out[[nm]] <- PRE_CTRL_BOOT_PARAMS[[nm]]
+  preserve <- intersect(preserve, etas_names)
+  for (nm in etas_names) {
+    if (nm %in% preserve) {
+      v <- suppressWarnings(as.numeric(start_par[[nm]]))
+      if (is.finite(v)) {
+        out[[nm]] <- v
+        next
+      }
+    }
+    out[[nm]] <- PRE_CTRL_BOOT_PARAMS[[nm]]
+  }
   out[["gamma"]] <- GAMMA_FIXED
   out
 }
@@ -1412,7 +1420,11 @@ fit_best_indep <- function(realiz, zbr, starts, maxit) {
                windowS = win_km, m0 = ETAS_M0, maxit = maxit,
                fixed_params = with_gamma_fixed(NULL), zero_background_region = zbr,
                beta_gr = BETA_GR,
-               max_branching_ratio = ETAS_BRANCHING_MAX),
+               max_branching_ratio = ETAS_BRANCHING_MAX,
+               log_transform = TRUE,
+               soft_branching_barrier = TRUE,
+               polish_productivity = TRUE,
+               interior_restart = TRUE),
       error = function(e) NULL)
     if (!is.null(fit) && is.finite(fit$value) && fit$value > best_val) {
       best_fit <- fit; best_val <- fit$value
@@ -2652,42 +2664,54 @@ fit_indep_pair <- function(pp_data_in,
   ctrl_dat <- dat[dat$location_process == "control", , drop = FALSE]
   treat_dat <- dat[dat$location_process == "treated", , drop = FALSE]
   if (nrow(ctrl_dat) < 1L || nrow(treat_dat) < 1L) return(NULL)
+  # Multistart over interior productivity values; seed from caller init + VANILLA_STARTS.
+  start_pool <- c(list(ctrl_init_in), VANILLA_STARTS)
+  starts_use <- lapply(start_pool, apply_pre_init_etas)
+  fit_one_margin <- function(realiz_m, zbr_m, history_m, starts_m, side_label) {
+    best_fit <- NULL
+    best_val <- -Inf
+    for (s in starts_m) {
+      fit <- tryCatch(
+        fit_etas(
+          params_init = s, realiz = realiz_m,
+          windowT = windowT_post, windowS = win_km, m0 = ETAS_M0,
+          maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
+          zero_background_region = zbr_m,
+          background_rate_var = background_rate_var_in,
+          beta_gr = BETA_GR,
+          max_branching_ratio = ETAS_BRANCHING_MAX,
+          t_trunc = SEM_T_TRUNC_DAYS,
+          history = history_m,
+          log_transform = TRUE,
+          soft_branching_barrier = TRUE,
+          polish_productivity = TRUE,
+          interior_restart = TRUE
+        ),
+        error = function(e) {
+          cat(sprintf(
+            "  [%s] %s independent fit error: %s\n",
+            fit_label, side_label, e$message
+          ))
+          NULL
+        }
+      )
+      if (!is.null(fit) && is.finite(fit$value) && fit$value > best_val) {
+        best_fit <- fit
+        best_val <- fit$value
+      }
+    }
+    best_fit
+  }
+  treat_start_pool <- c(list(treat_init_in), VANILLA_STARTS)
+  treat_starts_use <- lapply(treat_start_pool, apply_pre_init_etas)
+  fit_ctrl <- fit_one_margin(
+    ctrl_dat, treated_ss, pre_history, starts_use, "control"
+  )
+  fit_treat <- fit_one_margin(
+    treat_dat, control_ss, treated_history, treat_starts_use, "treated"
+  )
   ctrl_init <- apply_pre_init_etas(ctrl_init_in)
   treat_init <- apply_pre_init_etas(treat_init_in)
-  fit_ctrl <- tryCatch(
-    fit_etas(
-      params_init = ctrl_init, realiz = ctrl_dat,
-      windowT = windowT_post, windowS = win_km, m0 = ETAS_M0,
-      maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
-      zero_background_region = treated_ss,
-      background_rate_var = background_rate_var_in,
-      beta_gr = BETA_GR,
-      max_branching_ratio = ETAS_BRANCHING_MAX,
-      t_trunc = SEM_T_TRUNC_DAYS,
-      history = pre_history
-    ),
-    error = function(e) {
-      cat(sprintf("  [%s] control independent fit error: %s\n", fit_label, e$message))
-      NULL
-    }
-  )
-  fit_treat <- tryCatch(
-    fit_etas(
-      params_init = treat_init, realiz = treat_dat,
-      windowT = windowT_post, windowS = win_km, m0 = ETAS_M0,
-      maxit = VANILLA_MAXIT, fixed_params = fixed_params_in,
-      zero_background_region = control_ss,
-      background_rate_var = background_rate_var_in,
-      beta_gr = BETA_GR,
-      max_branching_ratio = ETAS_BRANCHING_MAX,
-      t_trunc = SEM_T_TRUNC_DAYS,
-      history = treated_history
-    ),
-    error = function(e) {
-      cat(sprintf("  [%s] treated independent fit error: %s\n", fit_label, e$message))
-      NULL
-    }
-  )
   ctrl_par <- if (!is.null(fit_ctrl) && !is.null(fit_ctrl$par)) as.list(fit_ctrl$par) else ctrl_init
   treat_par <- if (!is.null(fit_treat) && !is.null(fit_treat$par)) as.list(fit_treat$par) else treat_init
   names(ctrl_par) <- etas_names
@@ -3052,14 +3076,7 @@ build_grid_partition <- function(diameter, win, aoi_owin, label, max_tiles = NUL
 }
 
 aoi_owin <- tryCatch({
-  # Use the precomputed AOI union and avoid an additional costly st_union call.
-  aoi_coords <- st_coordinates(aoi_union)
-  x_km <- aoi_coords[, 1] / 1000
-  y_km <- aoi_coords[, 2] / 1000
-  tryCatch(
-    owin(poly = list(x = rev(x_km), y = rev(y_km))),
-    error = function(e) owin(poly = list(x = x_km, y = y_km))
-  )
+  oklahoma_sf_to_owin_km(aoi_union)
 }, error = function(e) {
   cat("  AOI owin construction failed, using treated_ss as fallback\n")
   treated_ss
@@ -3110,15 +3127,21 @@ cat("  Partition map files are disabled; render partition map panels from result
 cat("\n--- Step 5b: Joint sensitivity dispatch (bandwidth + partition) ---\n")
 
 assign_to_partition <- function(df, part_info) {
-  ti <- as.integer(tileindex(df$x, df$y, part_info$partition))
-  df$location_process <- ifelse(is.na(ti), NA_character_,
-                                part_info$processes[pmin(pmax(ti, 1),
-                                  part_info$partition$n)])
+  df$location_process <- oklahoma_assign_partition_process(
+    df$x, df$y, part_info$partition, part_info$processes
+  )
   df$process <- df$location_process
   df$inferred_process <- df$location_process
   df$W <- 1.0
   df$background <- TRUE
-  df[!is.na(df$location_process), ]
+  out <- df[!is.na(df$location_process), ]
+  oklahoma_assert_label_support(
+    out,
+    part_info$state_spaces$control,
+    part_info$state_spaces$treated,
+    context = paste0("partition:", part_info$label)
+  )
+  out
 }
 
 run_biv_for_partition <- function(part_info) {
