@@ -282,7 +282,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
-      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=1000; fi
       if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
       if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=120G; fi

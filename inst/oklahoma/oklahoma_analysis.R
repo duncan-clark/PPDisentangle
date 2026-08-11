@@ -4133,8 +4133,24 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
       NULL
     })
     params_local <- if (!is.null(sem_local)) sem_local$etas_bivariate_params else NULL
+    rho_local <- if (!is.null(params_local)) {
+      tryCatch(
+        PPDisentangle:::.etas_biv_spectral_radius(params_local, BETA_GR),
+        error = function(e) NA_real_
+      )
+    } else {
+      NA_real_
+    }
+    # Match bootstrap/INSTRUCTIONS explosive filter (rho >= 1), and also discard
+    # hard-cap landings (projected just below ETAS_BRANCHING_MAX) as unstable.
+    cap_tol <- 1e-4
+    is_explosive <- !is.null(params_local) && (
+      !is.finite(rho_local) ||
+        rho_local >= 1 ||
+        rho_local >= (ETAS_BRANCHING_MAX - cap_tol)
+    )
     ate_local <- NULL
-    if (!is.null(params_local)) {
+    if (!is.null(params_local) && !isTRUE(is_explosive)) {
       ate_local <- tryCatch({
         ate_estim_bivariate(
           biv_params = params_local,
@@ -4160,22 +4176,35 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
         cat(sprintf("    [t_trunc_sens:%s] ATE error: %s\n", label, e$message))
         NULL
       })
+    } else if (isTRUE(is_explosive)) {
+      cat(sprintf(
+        "    [t_trunc_sens:%s] discarding explosive/near-critical fit (rho=%s, margin=%.3f)\n",
+        label, format(rho_local, digits = 6), ETAS_BRANCHING_MAX
+      ))
     }
     sim_saved <- if (!is.null(ate_local) && !is.null(ate_local$all_nothing_sim$total_saved)) {
       suppressWarnings(as.numeric(ate_local$all_nothing_sim$total_saved))
     } else {
       numeric(0)
     }
+    status_local <- if (isTRUE(is_explosive)) {
+      "explosive"
+    } else if (!is.null(params_local) && length(sim_saved) > 0L) {
+      "ok"
+    } else {
+      "failed"
+    }
     elapsed <- proc.time()[["elapsed"]] - t0
-    cat(sprintf("    [t_trunc_sens:%s] done in %.1fs status=%s mem=%s\n",
-                label, elapsed,
-                if (!is.null(params_local) && length(sim_saved) > 0L) "ok" else "failed",
-                mem_snapshot()))
+    cat(sprintf("    [t_trunc_sens:%s] done in %.1fs status=%s rho=%s mem=%s\n",
+                label, elapsed, status_local,
+                format(rho_local, digits = 6), mem_snapshot()))
     list(
       t_trunc_days = as.numeric(t_trunc_val),
-      status = if (!is.null(params_local) && length(sim_saved) > 0L) "ok" else "failed",
+      status = status_local,
       elapsed_sec = as.numeric(elapsed),
-      params = params_local,
+      params = if (identical(status_local, "ok")) params_local else NULL,
+      rho = as.numeric(rho_local),
+      branching_metric = as.numeric(rho_local),
       n_relabel = if (!is.null(sem_local) && !is.null(sem_local$adaptive$adaptive_labelling)) {
         lp <- sem_local$adaptive$adaptive_labelling
         lp <- lp[lp$t >= 0, , drop = FALSE]
@@ -4202,8 +4231,9 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   }
   names(t_trunc_sensitivity) <- sprintf("t_trunc_%.4g", T_TRUNC_SENS_DAYS)
   sens_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "ok"), logical(1)))
-  cat(sprintf("  Fit D t_trunc sensitivity complete: %d/%d ok\n",
-              as.integer(sens_ok), length(t_trunc_sensitivity)))
+  sens_explosive <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "explosive"), logical(1)))
+  cat(sprintf("  Fit D t_trunc sensitivity complete: %d/%d ok, %d explosive/near-critical discarded\n",
+              as.integer(sens_ok), length(t_trunc_sensitivity), as.integer(sens_explosive)))
 }
 
 if (isTRUE(T_TRUNC_SENS_ONLY)) {
