@@ -15,6 +15,7 @@ sim_etas_bivariate(
   filtration = NULL,
   covariate_lookup = NULL,
   bg_ref_areas = NULL,
+  bg_lmax = NULL,
   t_trunc = NULL,
   ...
 )
@@ -49,6 +50,9 @@ larger) simulation support. Defaults to each state space's own area,
 which reproduces the total-rate behaviour. Use this to extend a fitted
 background density onto a larger support (e.g. a control-everywhere
 counterfactual with \code{ref_area = area(fitted control region)}).}
+
+\item{bg_lmax}{Optional named list of precomputed Poisson rejection bounds
+for the control and treated background lookup functions.}
 
 \item{t_trunc}{Temporal truncation.}
 

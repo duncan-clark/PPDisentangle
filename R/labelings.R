@@ -1256,7 +1256,8 @@ em_style_labelling <- function(pp_data,
     names(l) <- paste0(rep(rownames(tab), times = 2), "_as_", rep(colnames(tab), each = 2))
     l
   }
-  class_results <- list()
+  class_results <- NULL
+  class_results_n <- 0L
 
   if (!inherits(statespace, "owin")) statespace <- as.owin(statespace)
   treated_idx <- (partition_processes == "treated")
@@ -1284,6 +1285,15 @@ em_style_labelling <- function(pp_data,
   post_data <- starting_data[!is_pre, , drop = FALSE]
   post_data <- post_data[order(post_data$t), , drop = FALSE]
   n_post_total <- nrow(post_data)
+  max_proposals_per_iter <- if (identical(proposal_method, "single_flip")) {
+    n_post_total + 1L
+  } else {
+    as.integer(n_props) + 1L
+  }
+  class_results <- vector(
+    "list",
+    max(1L, as.integer(iter) * max(1L, max_proposals_per_iter))
+  )
   max_flips_per_step <- max(1L, as.integer(ceiling(max_relabel_step_frac * max(1L, n_post_total))))
   force_param_update_flip_n <- max(1L, as.integer(ceiling(force_param_update_flip_frac * max(1L, n_post_total))))
   accepted_flips_cum <- 0L
@@ -1571,9 +1581,16 @@ em_style_labelling <- function(pp_data,
     proposal_ctrl_idx <- lapply(labelling_proposals, function(y) which(y$inferred_process == "control"))
     proposal_treat_idx <- lapply(labelling_proposals, function(y) which(y$inferred_process == "treated"))
 
-    class_results <- c(class_results, lapply(labelling_proposals, function(d) {
+    class_results_new <- lapply(labelling_proposals, function(d) {
       class_func(d)
-    }))
+    })
+    class_results_idx <- class_results_n + seq_along(class_results_new)
+    if (length(class_results_idx) > 0L &&
+        max(class_results_idx) > length(class_results)) {
+      length(class_results) <- max(class_results_idx)
+    }
+    class_results[class_results_idx] <- class_results_new
+    class_results_n <- class_results_n + length(class_results_new)
     t_samp <- proc.time()[3] - t_samp
     total_sampling <- total_sampling + t_samp
     if (verbose && sem_timing_verbose) {
@@ -1953,45 +1970,32 @@ em_style_labelling <- function(pp_data,
               rho_max = biv_init_rho_cap
             )
           }
-          # Parameter updates should also account for pre-treatment control history.
-          mml_full <- rbind(pre_data, mml_post)
-          mml_full <- mml_full[order(mml_full$t), , drop = FALSE]
-          process_id_full <- if ("inferred_process" %in% names(mml_full)) {
-            as.integer(mml_full$inferred_process == "treated")
-          } else if ("process" %in% names(mml_full)) {
-            as.integer(mml_full$process == "treated")
-          } else if ("location_process" %in% names(mml_full)) {
-            as.integer(mml_full$location_process == "treated")
+          # Parameter updates share the metric's immutable event geometry,
+          # state-space membership, and background masks. Only process labels
+          # change, so update those slots instead of rebuilding/sorting the
+          # full data and repeating inside.owin calls at every refit.
+          mml_full <- biv_geom_full
+          process_id_full <- biv_pid_base
+          if (nrow(mml_post) == biv_n_post && !is.unsorted(mml_post$t)) {
+            proc_col <- if ("inferred_process" %in% names(mml_post)) {
+              mml_post$inferred_process
+            } else if ("process" %in% names(mml_post)) {
+              mml_post$process
+            } else {
+              mml_post$location_process
+            }
+            process_id_full[biv_post_slot] <- if (is.character(proc_col)) {
+              as.integer(proc_col == "treated")
+            } else {
+              as.integer(proc_col)
+            }
           } else {
-            rep(0L, nrow(mml_full))
+            process_id_full <- biv_label_slow_path(mml_post)
           }
-          areaS_0 <- spatstat.geom::area(control_state_space)
-          areaS_1 <- spatstat.geom::area(treated_state_space)
-          if (!is.finite(areaS_0) || areaS_0 <= 0) areaS_0 <- 1
-          if (!is.finite(areaS_1) || areaS_1 <= 0) areaS_1 <- 1
-          W_0 <- rep(1.0, nrow(mml_full))
-          W_1 <- rep(1.0, nrow(mml_full))
-          in_treated_mml <- inside.owin(mml_full$x, mml_full$y, treated_state_space)
-          if (is.null(control_background_everywhere_before)) {
-            W_0[in_treated_mml] <- 0
-          } else {
-            # Control background covers the whole domain before the policy cutoff.
-            W_0[in_treated_mml &
-                  mml_full$t >= control_background_everywhere_before] <- 0
-          }
-          W_1[inside.owin(mml_full$x, mml_full$y, control_state_space)] <- 0
-          if (!is.null(background_rate_var) && background_rate_var %in% names(mml_full)) {
-            W_cov <- as.numeric(mml_full[[background_rate_var]])
-            W_cov[!is.finite(W_cov)] <- 0
-            min_pos <- suppressWarnings(min(W_cov[W_cov > 0], na.rm = TRUE))
-            if (!is.finite(min_pos)) min_pos <- 1e-12
-            W_cov[W_cov <= 0] <- min_pos
-            W_0 <- W_0 * W_cov
-            W_1 <- W_1 * W_cov
-          }
-          if (!is.null(treated_background_zero_before)) {
-            W_1[mml_full$t < as.numeric(treated_background_zero_before)] <- 0
-          }
+          areaS_0 <- biv_aS0
+          areaS_1 <- biv_aS1
+          W_0 <- biv_W0
+          W_1 <- biv_W1
           biv_precomp <- list(
             W_0 = W_0, W_1 = W_1,
             areaS_0 = areaS_0, areaS_1 = areaS_1,
@@ -2308,7 +2312,7 @@ em_style_labelling <- function(pp_data,
     all_accuracies = all_accuracies, all_metrics = all_metrics,
     change_factor_trace = change_factor_trace,
     retained_starting_trace = retained_starting_trace,
-    class_results = class_results, fits = fits,
+    class_results = class_results[seq_len(class_results_n)], fits = fits,
     etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
     bivariate_stability = if (is_biv_etas && !is.null(biv_etas_params)) {
       list(

@@ -1182,6 +1182,29 @@ fit_etas_bivariate <- function(params_init,
   return(fit)
 }
 
+.etas_biv_background_lmax <- function(mu, windowT, state_space, lookup,
+                                       ref_area = NULL) {
+  if (!is.function(lookup) || is.null(state_space) || !is.finite(mu) ||
+      mu < 1e-10) {
+    return(NULL)
+  }
+  area_ss <- spatstat.geom::area(state_space)
+  ref_area <- suppressWarnings(as.numeric(ref_area))
+  if (length(ref_area) != 1L || !is.finite(ref_area) || ref_area <= 0) {
+    ref_area <- area_ss
+  }
+  duration <- windowT[2] - windowT[1]
+  pixel_fun <- function(x, y) {
+    w <- suppressWarnings(as.numeric(lookup(x, y)))
+    w[!is.finite(w) | w < 0] <- 0
+    duration * (mu / ref_area) * w
+  }
+  intensity_im <- spatstat.geom::as.im(pixel_fun, W = state_space)
+  intensity_summary <- summary(intensity_im)
+  as.numeric(
+    intensity_summary$max + 0.05 * diff(intensity_summary$range)
+  )
+}
 
 #' Simulate a bivariate ETAS process
 #'
@@ -1205,6 +1228,8 @@ fit_etas_bivariate <- function(params_init,
 #'   which reproduces the total-rate behaviour. Use this to extend a fitted
 #'   background density onto a larger support (e.g. a control-everywhere
 #'   counterfactual with \code{ref_area = area(fitted control region)}).
+#' @param bg_lmax Optional named list of precomputed Poisson rejection bounds
+#'   for the control and treated background lookup functions.
 #' @param t_trunc Temporal truncation.
 #' @param ... Ignored.
 #' @return Data frame with x, y, t, mag, process_id, background columns.
@@ -1219,6 +1244,7 @@ sim_etas_bivariate <- function(params,
                                filtration = NULL,
                                covariate_lookup = NULL,
                                bg_ref_areas = NULL,
+                               bg_lmax = NULL,
                                t_trunc = NULL,
                                ...) {
   if (!inherits(windowS, "owin")) {
@@ -1246,7 +1272,8 @@ sim_etas_bivariate <- function(params,
   # density reference: intensity is mu / ref_area * w(x,y), so with the
   # default ref_area = area(ss) the total per-unit-time rate is mu, while a
   # smaller ref_area extends the same spatial density onto a larger support.
-  gen_bg <- function(mu, ss, proc_id, lookup = NULL, ref_area = NULL) {
+  gen_bg <- function(mu, ss, proc_id, lookup = NULL, ref_area = NULL,
+                     lmax = NULL) {
     if (mu < 1e-10 || is.null(ss)) {
       return(list(x = numeric(0), y = numeric(0), t = numeric(0),
                   mag = numeric(0), proc = integer(0)))
@@ -1263,7 +1290,13 @@ sim_etas_bivariate <- function(params,
         w[!is.finite(w) | w < 0] <- 0
         duration * (mu / ref_area) * w
       }
-      bg_pp <- spatstat.random::rpoispp(pixel_fun, win = ss)
+      lmax <- suppressWarnings(as.numeric(lmax))
+      use_lmax <- length(lmax) == 1L && is.finite(lmax) && lmax >= 0
+      bg_pp <- if (use_lmax) {
+        spatstat.random::rpoispp(pixel_fun, lmax = lmax, win = ss)
+      } else {
+        spatstat.random::rpoispp(pixel_fun, win = ss)
+      }
       bx <- bg_pp$x
       by <- bg_pp$y
       n_ok <- bg_pp$n
@@ -1305,9 +1338,11 @@ sim_etas_bivariate <- function(params,
 
   ctrl_ref_area <- if (is.list(bg_ref_areas)) bg_ref_areas[["control"]] else NULL
   treat_ref_area <- if (is.list(bg_ref_areas)) bg_ref_areas[["treated"]] else NULL
+  ctrl_lmax <- if (is.list(bg_lmax)) bg_lmax[["control"]] else NULL
+  treat_lmax <- if (is.list(bg_lmax)) bg_lmax[["treated"]] else NULL
 
-  bg0 <- gen_bg(mu_0, ctrl_ss, 0L, ctrl_lookup, ctrl_ref_area)
-  bg1 <- gen_bg(mu_1, treat_ss, 1L, treat_lookup, treat_ref_area)
+  bg0 <- gen_bg(mu_0, ctrl_ss, 0L, ctrl_lookup, ctrl_ref_area, ctrl_lmax)
+  bg1 <- gen_bg(mu_1, treat_ss, 1L, treat_lookup, treat_ref_area, treat_lmax)
 
   p_x   <- c(bg0$x, bg1$x)
   p_y   <- c(bg0$y, bg1$y)

@@ -21,6 +21,8 @@ ate_estim_bivariate <- function(
     crn_base_seed = 100000L,
     use_crn = TRUE,
     crn_pair = TRUE,
+    parallel_cluster = NULL,
+    cache_bg_lmax = TRUE,
     quiet = FALSE,
     contrast = c("all_or_nothing", "observed"),
     # Optional named list of background lookups (control/treated), each
@@ -134,7 +136,36 @@ ate_estim_bivariate <- function(
   }
   right_lab <- if (identical(contrast, "all_or_nothing")) "all-treated" else "obs-regime"
 
-  sim_one <- function(ss, ref_areas) {
+  make_bg_lmax <- function(ss, ref_areas) {
+    if (!isTRUE(cache_bg_lmax) || is.null(covariate_lookup)) return(NULL)
+    lmax_fun <- getFromNamespace(
+      ".etas_biv_background_lmax", "PPDisentangle"
+    )
+    lookup_for <- function(process) {
+      if (is.list(covariate_lookup)) {
+        covariate_lookup[[process]]
+      } else {
+        covariate_lookup
+      }
+    }
+    ref_for <- function(process) {
+      if (is.list(ref_areas)) ref_areas[[process]] else NULL
+    }
+    list(
+      control = lmax_fun(
+        params[["mu_0"]], windowT, ss[["control"]],
+        lookup_for("control"), ref_for("control")
+      ),
+      treated = lmax_fun(
+        params[["mu_1"]], windowT, ss[["treated"]],
+        lookup_for("treated"), ref_for("treated")
+      )
+    )
+  }
+  lmax_all_control <- make_bg_lmax(ss_all_control, ref_all_control)
+  lmax_right <- make_bg_lmax(ss_right, ref_right)
+
+  sim_one <- function(ss, ref_areas, bg_lmax) {
     sim_etas_bivariate(
       params = params,
       windowT = windowT,
@@ -145,6 +176,7 @@ ate_estim_bivariate <- function(
       filtration = pre_history,
       covariate_lookup = covariate_lookup,
       bg_ref_areas = ref_areas,
+      bg_lmax = bg_lmax,
       t_trunc = t_trunc
     )
   }
@@ -168,18 +200,18 @@ ate_estim_bivariate <- function(
       seed_s <- as.integer(crn_base_seed + s_int)
       if (isTRUE(crn_pair)) {
         set.seed(seed_s)
-        c_sim <- sim_one(ss_all_control, ref_all_control)
+        c_sim <- sim_one(ss_all_control, ref_all_control, lmax_all_control)
         set.seed(seed_s)
-        t_sim <- sim_one(ss_right, ref_right)
+        t_sim <- sim_one(ss_right, ref_right, lmax_right)
       } else {
         set.seed(seed_s)
-        c_sim <- sim_one(ss_all_control, ref_all_control)
+        c_sim <- sim_one(ss_all_control, ref_all_control, lmax_all_control)
         set.seed(as.integer(seed_s + 1000000L))
-        t_sim <- sim_one(ss_right, ref_right)
+        t_sim <- sim_one(ss_right, ref_right, lmax_right)
       }
     } else {
-      c_sim <- sim_one(ss_all_control, ref_all_control)
-      t_sim <- sim_one(ss_right, ref_right)
+      c_sim <- sim_one(ss_all_control, ref_all_control, lmax_all_control)
+      t_sim <- sim_one(ss_right, ref_right, lmax_right)
     }
     c(c_count = nrow(c_sim), t_count = nrow(t_sim))
   }
@@ -193,7 +225,15 @@ ate_estim_bivariate <- function(
   )
   # Prefer the Oklahoma analysis runner when available (PSOCK/fork + progress).
   # Fall back to mclapply, then sequential lapply.
-  sim_results <- if (n_cores_use > 1L && exists("run_parallel", mode = "function")) {
+  sim_results <- if (
+    n_cores_use > 1L &&
+      !is.null(parallel_cluster) &&
+      exists("run_parallel_on_cluster", mode = "function")
+  ) {
+    run_parallel_on_cluster(
+      parallel_cluster, sim_ids, run_one, label = parallel_label
+    )
+  } else if (n_cores_use > 1L && exists("run_parallel", mode = "function")) {
     run_parallel(sim_ids, run_one, cores = n_cores_use, label = parallel_label)
   } else if (n_cores_use > 1L && .Platform$OS.type != "windows") {
     parallel::mclapply(sim_ids, run_one, mc.cores = n_cores_use)

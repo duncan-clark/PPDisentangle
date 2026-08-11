@@ -2209,18 +2209,33 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
   }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
 }
 ate_cl_reuse <- NULL
+ate_cl_reuse_guard <- new.env(parent = emptyenv())
+ate_cl_reuse_guard$cluster <- NULL
+reg.finalizer(
+  ate_cl_reuse_guard,
+  function(e) {
+    if (!is.null(e$cluster)) {
+      try(parallel::stopCluster(e$cluster), silent = TRUE)
+      e$cluster <- NULL
+    }
+  },
+  onexit = TRUE
+)
+stop_ate_psock_pool <- function() {
+  if (!is.null(ate_cl_reuse)) {
+    try(parallel::stopCluster(ate_cl_reuse), silent = TRUE)
+    ate_cl_reuse <<- NULL
+    ate_cl_reuse_guard$cluster <- NULL
+  }
+  invisible(NULL)
+}
 ensure_ate_psock_pool <- function() {
   if (!is.null(ate_cl_reuse)) return(invisible(NULL))
   ate_cl_reuse_cores <- max(1L, min(ATE_SIM_CORES, ATE_N_SIMS))
   if (PARALLEL_BACKEND == "psock" && N_CORES > 1 && ATE_N_SIMS > 1 && ate_cl_reuse_cores > 1L) {
     cat(sprintf("  [parallel:ate-sim] initializing reusable PSOCK pool: cores=%d\n", ate_cl_reuse_cores))
     ate_cl_reuse <<- parallel::makePSOCKcluster(ate_cl_reuse_cores, outfile = "")
-    on.exit({
-      if (!is.null(ate_cl_reuse)) {
-        try(parallel::stopCluster(ate_cl_reuse), silent = TRUE)
-        ate_cl_reuse <<- NULL
-      }
-    }, add = TRUE)
+    ate_cl_reuse_guard$cluster <- ate_cl_reuse
     if (exists("REPO_DIR", envir = .GlobalEnv, inherits = FALSE)) {
       parallel::clusterExport(ate_cl_reuse, varlist = c("REPO_DIR"), envir = .GlobalEnv)
     }
@@ -3470,6 +3485,7 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
         crn_base_seed = ate_crn_base_seed,
         use_crn = OK_ATE_USE_CRN,
         crn_pair = OK_ATE_CRN_PAIR,
+        parallel_cluster = ate_cl_reuse,
         quiet = FALSE,
         contrast = contrast,
         covariate_lookup = bg_lookup
@@ -5625,6 +5641,8 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   cat("\n=== Oklahoma bootstrap stage finished successfully ===\n")
   quit(save = "no", status = 0)
 }
+
+stop_ate_psock_pool()
 
 # Sensitivity ATE payloads are already computed in Step 6a so they are
 # included in pre-bootstrap checkpoints and reused for final results.

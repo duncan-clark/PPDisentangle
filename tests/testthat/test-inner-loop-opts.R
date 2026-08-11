@@ -21,6 +21,7 @@
     location_process = ifelse(x < 5 | t < 0, "control", "treated"),
     stringsAsFactors = FALSE
   )
+  pp$process <- pp$location_process
   pp$inferred_process <- pp$location_process
   params <- c(
     mu_0 = 0.8, mu_1 = 0.6,
@@ -36,7 +37,8 @@
        windowT = c(0, 30))
 }
 
-.run_inner_small <- function(w, n_threads = 1L, iter = 3L, seed = 2718) {
+.run_inner_small <- function(w, n_threads = 1L, iter = 3L, seed = 2718,
+                             verbose = FALSE) {
   set.seed(seed)
   em_style_labelling(
     pp_data = w$pp,
@@ -62,7 +64,7 @@
     stagnation_trigger_every = 50,
     proposal_method = "simulation",
     fixed_params = as.list(w$params),   # freeze all params: no refits
-    verbose = FALSE,
+    verbose = verbose,
     model_type = "etas_bivariate",
     temporal_weight = 0,
     biv_n_threads = n_threads,
@@ -106,6 +108,7 @@ test_that("hoisted bivariate metric matches a direct batch likelihood", {
   )
   # metrics[iter] is the score of the selected (returned) labelling
   expect_equal(res$metrics[length(res$metrics)], expected[1], tolerance = 1e-8)
+  expect_length(res$class_results, sum(lengths(res$all_metrics)))
 })
 
 test_that("biv_n_threads does not change the inner-loop results", {
@@ -115,6 +118,28 @@ test_that("biv_n_threads does not change the inner-loop results", {
   r4 <- .run_inner_small(w, n_threads = 4L)
   expect_equal(r1$metrics, r4$metrics, tolerance = 1e-8)
   expect_identical(r1$labelling$inferred_process, r4$labelling$inferred_process)
+})
+
+test_that("SEM verbosity does not change stochastic results", {
+  skip_if_not_installed("spatstat.geom")
+  w <- .make_inner_workload()
+  quiet <- .run_inner_small(w, verbose = FALSE)
+  traced <- capture.output(
+    loud <- .run_inner_small(w, verbose = TRUE)
+  )
+
+  expect_gt(length(traced), 0L)
+  expect_equal(quiet$metrics, loud$metrics, tolerance = 1e-10)
+  expect_identical(
+    quiet$labelling$inferred_process,
+    loud$labelling$inferred_process
+  )
+  expect_equal(
+    quiet$etas_bivariate_params,
+    loud$etas_bivariate_params,
+    tolerance = 1e-10
+  )
+  expect_identical(quiet$class_results, loud$class_results)
 })
 
 test_that("cached nncross weights leave proposals bitwise identical", {
