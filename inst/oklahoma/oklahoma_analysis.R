@@ -269,6 +269,9 @@ BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
 T_TRUNC_SENS_PATCH_FILE <- trimws(Sys.getenv("OK_T_TRUNC_SENS_PATCH_FILE", ""))
 T_TRUNC_SENS_ONLY <- tolower(trimws(Sys.getenv("OK_T_TRUNC_SENS_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+# True C/D-only scope: skip homogeneous A/B and univariate G–J fits/ATEs.
+CD_ONLY <- tolower(trimws(Sys.getenv("OK_CD_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
 SMOKE_SEM_D_SEEDS <- suppressWarnings(as.integer(Sys.getenv("OK_SMOKE_SEM_D_SEEDS", "0")))
 if (!is.finite(SMOKE_SEM_D_SEEDS) || is.na(SMOKE_SEM_D_SEEDS) || SMOKE_SEM_D_SEEDS < 0L) {
   SMOKE_SEM_D_SEEDS <- 0L
@@ -772,6 +775,7 @@ cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-main-log: %s\n",
             SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
 cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
+cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
 
 analysis_start_time <- Sys.time()
 analysis_start_elapsed <- proc.time()[["elapsed"]]
@@ -2447,10 +2451,18 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
 
 if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY) && !isTRUE(T_TRUNC_SENS_ONLY)) {
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
-fit_jobs_all <- list(
-  list(kind = "A_hom_naive", variant_id = NA_character_),
-  list(kind = "B_hom_sem", variant_id = NA_character_)
-)
+fit_jobs_all <- list()
+if (!isTRUE(CD_ONLY)) {
+  fit_jobs_all <- c(
+    fit_jobs_all,
+    list(
+      list(kind = "A_hom_naive", variant_id = NA_character_),
+      list(kind = "B_hom_sem", variant_id = NA_character_)
+    )
+  )
+} else {
+  cat("  CD_ONLY: skipping homogeneous Fits A/B; dispatching C/D only.\n")
+}
 for (vid in kde_variant_ids) {
   fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "C_kde_naive", variant_id = vid)
   fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "D_kde_sem", variant_id = vid)
@@ -2537,19 +2549,28 @@ add_timing_row(
   detail = "elapsed from unified fit dispatch"
 )
 
-B_params <- if (!is.null(fitB)) fitB$par else biv_init
-B_loglik <- if (!is.null(fitB)) fitB$value else NA_real_
-cat("  Fit A params:", paste(biv_names, round(B_params, 4), sep = "=", collapse = ", "), "\n")
-if (!is.null(semD)) {
-  D_params <- semD$etas_bivariate_params
-  D_ctrl <- semD$hawkes_params_control
-  D_treat <- semD$hawkes_params_treated
-  cat("  Fit B params:", paste(biv_names, round(D_params, 4), sep = "=", collapse = ", "), "\n")
-} else {
-  D_params <- biv_init_D
+if (isTRUE(CD_ONLY) && is.null(fitB) && is.null(semD)) {
+  B_params <- NULL
+  B_loglik <- NA_real_
+  D_params <- NULL
   D_ctrl <- A_ctrl
   D_treat <- A_treat
-  cat("  Fit B failed, falling back to naive initialization.\n")
+  cat("  CD_ONLY: Fit A/B not run (params left NULL).\n")
+} else {
+  B_params <- if (!is.null(fitB)) fitB$par else biv_init
+  B_loglik <- if (!is.null(fitB)) fitB$value else NA_real_
+  cat("  Fit A params:", paste(biv_names, round(B_params, 4), sep = "=", collapse = ", "), "\n")
+  if (!is.null(semD)) {
+    D_params <- semD$etas_bivariate_params
+    D_ctrl <- semD$hawkes_params_control
+    D_treat <- semD$hawkes_params_treated
+    cat("  Fit B params:", paste(biv_names, round(D_params, 4), sep = "=", collapse = ", "), "\n")
+  } else {
+    D_params <- biv_init_D
+    D_ctrl <- A_ctrl
+    D_treat <- A_treat
+    cat("  Fit B failed, falling back to naive initialization.\n")
+  }
 }
 
 fitE <- NULL
@@ -2644,6 +2665,19 @@ H_params <- if (!is.null(kde_variant_fits$F$productivity_free) &&
 #   Public letters I/J: independent margins, homogeneous background (internal fitK/semL)
 # ============================================================================
 cat("\n--- Step 4G-4J: Univariate ETAS dispatch (public G/H univ+KDE, I/J univ homog) ---\n")
+if (isTRUE(CD_ONLY)) {
+  cat("  CD_ONLY: skipping univariate Fits G–J (I/J/K/L jobs).\n")
+  fitI <- NULL
+  semJ <- NULL
+  fitK <- NULL
+  semL <- NULL
+  I_params <- NULL
+  J_params <- NULL
+  K_params <- NULL
+  L_params <- NULL
+  pp_post_sem_J <- pp_post_bg
+  pp_post_sem_L <- pp_post
+} else {
 
 fit_indep_pair <- function(pp_data_in,
                            background_rate_var_in = NULL,
@@ -2900,6 +2934,8 @@ pp_post_sem_L <- if (!is.null(semL) && !is.null(semL$adaptive$adaptive_labelling
   pp_post
 }
 pp_post_sem_L <- pp_post_sem_L[pp_post_sem_L$t >= 0, , drop = FALSE]
+
+} # end !CD_ONLY univariate block
 
 # ============================================================================
 # 4K. KDE bandwidth sensitivity (county partition, inhomogeneous C/D = all_free)
@@ -3452,16 +3488,22 @@ ate_univ_both <- function(marg, observed_data, label) {
     ate_estim_fast(marg$ctrl, marg$treat, observed_data, label, contrast = contrast)
   })
 }
-t_ate_B <- proc.time()[["elapsed"]]
-ate_B <- ate_biv_or_marginal(B_params, B_marginals, pp_post,
-                             "Fit B (naive bivariate)")
-ate_B_elapsed <- proc.time()[["elapsed"]] - t_ate_B
-add_timing_row("ate_B", ate_B_elapsed, if (!is.null(ate_B)) "ok" else "failed")
-t_ate_D <- proc.time()[["elapsed"]]
-ate_D <- ate_biv_or_marginal(D_params, D_marginals, pp_post_sem_D,
-                             "Fit D (SEM bivariate)")
-ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
-add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
+if (isTRUE(CD_ONLY)) {
+  cat("  CD_ONLY: skipping ATE for homogeneous Fits A/B.\n")
+  ate_B <- NULL
+  ate_D <- NULL
+} else {
+  t_ate_B <- proc.time()[["elapsed"]]
+  ate_B <- ate_biv_or_marginal(B_params, B_marginals, pp_post,
+                               "Fit B (naive bivariate)")
+  ate_B_elapsed <- proc.time()[["elapsed"]] - t_ate_B
+  add_timing_row("ate_B", ate_B_elapsed, if (!is.null(ate_B)) "ok" else "failed")
+  t_ate_D <- proc.time()[["elapsed"]]
+  ate_D <- ate_biv_or_marginal(D_params, D_marginals, pp_post_sem_D,
+                               "Fit D (SEM bivariate)")
+  ate_D_elapsed <- proc.time()[["elapsed"]] - t_ate_D
+  add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
+}
 t_ate_E <- proc.time()[["elapsed"]]
 ate_E <- ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
                              "Fit C (naive biv+KDE, all-free)",
@@ -4009,6 +4051,7 @@ results_pre_sensitivity <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    CD_ONLY = CD_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
@@ -4593,6 +4636,7 @@ results_pre_bootstrap <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    CD_ONLY = CD_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
@@ -5814,6 +5858,7 @@ results <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    CD_ONLY = CD_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
