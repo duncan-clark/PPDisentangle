@@ -1,0 +1,345 @@
+---
+title: "Oklahoma C/D primary (slim)"
+subtitle: "Naive + SEM bivariate KDE (all-free) · settings · params · ATEs"
+author: "PPDisentangle"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    code-fold: true
+    theme: cosmo
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| label: setup
+#| include: false
+SCRIPT_DIR <- getwd()
+REPO_ROOT <- if (basename(SCRIPT_DIR) == "oklahoma" &&
+                  basename(dirname(SCRIPT_DIR)) == "inst") {
+  normalizePath(file.path(SCRIPT_DIR, "..", ".."), winslash = "/", mustWork = FALSE)
+} else {
+  normalizePath(SCRIPT_DIR, winslash = "/", mustWork = FALSE)
+}
+if (file.exists(file.path(REPO_ROOT, "DESCRIPTION")) &&
+    requireNamespace("pkgload", quietly = TRUE)) {
+  pkgload::load_all(REPO_ROOT, quiet = TRUE, export_all = FALSE,
+                    helpers = FALSE, attach_testthat = FALSE)
+}
+suppressPackageStartupMessages({
+  library(knitr)
+  library(kableExtra)
+})
+
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+scalar_chr <- function(x) {
+  if (is.null(x) || length(x) < 1L) return("N/A")
+  as.character(x[[1]])
+}
+safe_num <- function(x) {
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) < 1L) return(NA_real_)
+  v <- v[[1]]
+  if (is.finite(v)) v else NA_real_
+}
+fmt_num <- function(x, digits = 4) {
+  x <- safe_num(x)
+  if (!is.finite(x)) "N/A" else format(round(x, digits), nsmall = digits, trim = TRUE)
+}
+fmt_ate <- function(x) {
+  x <- safe_num(x)
+  if (!is.finite(x)) "N/A" else sprintf("%.1f", x)
+}
+
+results_path <- trimws(Sys.getenv("OK_RESULTS_FILE", ""))
+if (!nzchar(results_path)) {
+  out_dir <- PPDisentangle::pp_output_path("oklahoma", repo_root = REPO_ROOT)
+  candidates <- c(
+    file.path(out_dir, "oklahoma_cd_current.rds"),
+    file.path(out_dir, "for_paper.rds"),
+    file.path(out_dir, "oklahoma_results.rds")
+  )
+  existing <- candidates[file.exists(candidates)]
+  if (!length(existing)) stop("Set OK_RESULTS_FILE or place oklahoma_cd_current.rds under output/oklahoma/")
+  results_path <- existing[[1]]
+}
+results <- readRDS(results_path)
+cfg <- results$config %||% list()
+meta <- results$metadata %||% list()
+
+prev_path <- trimws(Sys.getenv("OK_CD_PREV_RESULTS_FILE", ""))
+prev <- NULL
+if (nzchar(prev_path) && file.exists(prev_path)) {
+  prev <- readRDS(prev_path)
+}
+
+fit_obj <- function(res, letter) {
+  if (is.null(res) || is.null(res$fits_named)) return(NULL)
+  res$fits_named[[letter]]
+}
+pick_ate <- function(ate_obj, contrast = "all_or_nothing") {
+  if (is.null(ate_obj)) return(NULL)
+  bc <- ate_obj$by_contrast
+  if (is.list(bc) && !is.null(bc[[contrast]])) return(bc[[contrast]])
+  if (!is.null(ate_obj$contrast) &&
+      identical(as.character(ate_obj$contrast)[1], contrast)) {
+    return(ate_obj)
+  }
+  if (identical(contrast, "all_or_nothing") && !is.null(ate_obj$all_nothing_sim)) {
+    return(ate_obj)
+  }
+  NULL
+}
+ate_saved <- function(ate_obj, contrast = "all_or_nothing") {
+  a <- pick_ate(ate_obj, contrast)
+  if (is.null(a) || is.null(a$all_nothing_sim)) return(numeric())
+  sim <- a$all_nothing_sim
+  if ("total_saved" %in% names(sim)) return(as.numeric(sim$total_saved))
+  if ("total_effect" %in% names(sim)) return(as.numeric(sim$total_effect))
+  numeric()
+}
+ate_summary <- function(ate_obj, contrast = "all_or_nothing") {
+  s <- ate_saved(ate_obj, contrast)
+  s <- s[is.finite(s)]
+  list(
+    mean = if (length(s)) mean(s) else NA_real_,
+    sd = if (length(s) > 1L) stats::sd(s) else NA_real_,
+    n = length(s)
+  )
+}
+fit_rho <- function(fit, beta_gr) {
+  p <- if (!is.null(fit)) fit$params else NULL
+  beta <- safe_num(beta_gr)
+  if (is.null(p) || !is.finite(beta)) return(NA_real_)
+  tryCatch(
+    PPDisentangle:::.etas_biv_spectral_radius(p, beta),
+    error = function(e) NA_real_
+  )
+}
+param_vec <- function(fit) {
+  if (is.null(fit) || is.null(fit$params)) return(NULL)
+  p <- unlist(fit$params)
+  p[is.finite(p)]
+}
+
+fit_C <- fit_obj(results, "C")
+fit_D <- fit_obj(results, "D")
+prev_C <- fit_obj(prev, "C")
+prev_D <- fit_obj(prev, "D")
+```
+
+# Run identity
+
+```{r tbl-identity}
+id_df <- data.frame(
+  Field = c(
+    "Results file",
+    "Job id",
+    "Saved at",
+    "Git / stage",
+    "Previous (compare) file"
+  ),
+  Value = c(
+    results_path,
+    scalar_chr(meta$job_id %||% cfg$JOB_ID %||% NA),
+    scalar_chr(meta$saved_at %||% NA),
+    paste(scalar_chr(meta$stage), scalar_chr(meta$git_sha %||% meta$commit), sep = " / "),
+    if (nzchar(prev_path) && file.exists(prev_path)) prev_path else "(none)"
+  ),
+  stringsAsFactors = FALSE
+)
+kable(id_df, align = "lc", caption = "Current C/D run identity.") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# Settings
+
+```{r tbl-settings}
+settings_df <- data.frame(
+  Setting = c(
+    "SEM t_trunc (days)",
+    "SEM t_trunc source",
+    "SEM t_trunc rel (auto)",
+    "BETA_GR",
+    "ETAS_M0",
+    "SEM_INNER_ITER",
+    "SEM_N_ITER",
+    "SEM_N_LABELLINGS",
+    "SEM_OUTER_MAXIT",
+    "SEM_OUTER_MAXIT_BIV",
+    "ATE_N_SIMS",
+    "ATE_BIVARIATE",
+    "ATE_CONTRAST",
+    "BOOT_N_REPS / boot_reps",
+    "KDE_VARIANT_MODE",
+    "RUN_SENSITIVITY",
+    "RUN_T_TRUNC_SENSITIVITY"
+  ),
+  Value = c(
+    fmt_num(cfg$SEM_T_TRUNC_DAYS, 4),
+    scalar_chr(cfg$SEM_T_TRUNC_SOURCE),
+    fmt_num(cfg$SEM_T_TRUNC_REL, 4),
+    fmt_num(cfg$BETA_GR, 6),
+    fmt_num(cfg$ETAS_M0, 2),
+    scalar_chr(cfg$SEM_INNER_ITER %||% cfg$SEM_INNER),
+    scalar_chr(cfg$SEM_N_ITER),
+    scalar_chr(cfg$SEM_N_LABELLINGS),
+    scalar_chr(cfg$SEM_OUTER_MAXIT),
+    scalar_chr(cfg$SEM_OUTER_MAXIT_BIV),
+    scalar_chr(cfg$ATE_N_SIMS),
+    scalar_chr(cfg$ATE_BIVARIATE),
+    scalar_chr(cfg$ATE_CONTRAST),
+    paste(scalar_chr(cfg$BOOT_N_REPS), scalar_chr(cfg$BOOT_REPS), sep = " / "),
+    scalar_chr(cfg$KDE_VARIANT_MODE),
+    scalar_chr(cfg$RUN_SENSITIVITY),
+    scalar_chr(cfg$RUN_T_TRUNC_SENSITIVITY)
+  ),
+  stringsAsFactors = FALSE
+)
+kable(settings_df, align = "lc",
+      caption = "Primary estimation / ATE settings for this C/D run.") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# Fit C / D ATEs
+
+Positive `saved = N(control) - N(treated)` means the treatment regime saved earthquakes.
+
+```{r tbl-ates}
+ate_row <- function(letter, fit, contrast) {
+  s <- ate_summary(if (!is.null(fit)) fit$ate else NULL, contrast)
+  data.frame(
+    Fit = letter,
+    Label = scalar_chr(fit$label %||% letter),
+    Contrast = contrast,
+    `Mean saved` = fmt_ate(s$mean),
+    `SD saved` = fmt_ate(s$sd),
+    `ATE sims` = as.character(s$n),
+    rho = fmt_num(fit_rho(fit, cfg$BETA_GR), 4),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+ate_df <- rbind(
+  ate_row("C", fit_C, "all_or_nothing"),
+  ate_row("D", fit_D, "all_or_nothing"),
+  ate_row("C", fit_C, "observed"),
+  ate_row("D", fit_D, "observed")
+)
+kable(ate_df, align = "lllllll",
+      caption = "C/D ATE summaries (bivariate law).") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# Fit C / D parameters
+
+```{r tbl-params}
+param_order <- c(
+  "mu_0", "mu_1",
+  "A_00", "alpha_m_00", "A_11", "alpha_m_11",
+  "A_01", "alpha_m_01", "A_10", "alpha_m_10",
+  "c", "p", "D", "gamma", "q"
+)
+pc <- param_vec(fit_C)
+pd <- param_vec(fit_D)
+nms <- unique(c(param_order, names(pc), names(pd)))
+nms <- nms[nms %in% unique(c(names(pc), names(pd)))]
+# Keep preferred order first
+nms <- c(intersect(param_order, nms), setdiff(nms, param_order))
+params_df <- data.frame(
+  Parameter = nms,
+  C = vapply(nms, function(nm) fmt_num(pc[[nm]], 5), character(1)),
+  D = vapply(nms, function(nm) fmt_num(pd[[nm]], 5), character(1)),
+  stringsAsFactors = FALSE
+)
+kable(params_df, align = "lrr",
+      caption = "C (naive biv+KDE all-free) and D (SEM biv+KDE all-free) parameters.") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# Diff vs previous (if provided)
+
+```{r tbl-diff}
+#| label: tbl-diff
+if (is.null(prev)) {
+  cat("No previous C/D RDS set (`OK_CD_PREV_RESULTS_FILE`). Re-run via `launch_oklahoma_cd_update_nesi.sh` to populate diffs.\n")
+} else {
+  prev_cfg <- prev$config %||% list()
+  diff_settings <- data.frame(
+    Setting = c("SEM_T_TRUNC_DAYS", "SEM_INNER_ITER", "SEM_OUTER_MAXIT_BIV", "ATE_N_SIMS", "BETA_GR"),
+    Previous = c(
+      fmt_num(prev_cfg$SEM_T_TRUNC_DAYS, 4),
+      scalar_chr(prev_cfg$SEM_INNER_ITER %||% prev_cfg$SEM_INNER),
+      scalar_chr(prev_cfg$SEM_OUTER_MAXIT_BIV),
+      scalar_chr(prev_cfg$ATE_N_SIMS),
+      fmt_num(prev_cfg$BETA_GR, 6)
+    ),
+    Current = c(
+      fmt_num(cfg$SEM_T_TRUNC_DAYS, 4),
+      scalar_chr(cfg$SEM_INNER_ITER %||% cfg$SEM_INNER),
+      scalar_chr(cfg$SEM_OUTER_MAXIT_BIV),
+      scalar_chr(cfg$ATE_N_SIMS),
+      fmt_num(cfg$BETA_GR, 6)
+    ),
+    stringsAsFactors = FALSE
+  )
+  kable(diff_settings, align = "lrr",
+        caption = "Settings: previous vs current.") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+  ate_diff_row <- function(letter, cur_fit, prev_fit, contrast) {
+    cur <- ate_summary(if (!is.null(cur_fit)) cur_fit$ate else NULL, contrast)
+    old <- ate_summary(if (!is.null(prev_fit)) prev_fit$ate else NULL, contrast)
+    data.frame(
+      Fit = letter,
+      Contrast = contrast,
+      `ATE prev` = fmt_ate(old$mean),
+      `ATE curr` = fmt_ate(cur$mean),
+      `Delta (curr-prev)` = fmt_ate(cur$mean - old$mean),
+      `rho prev` = fmt_num(fit_rho(prev_fit, prev_cfg$BETA_GR), 4),
+      `rho curr` = fmt_num(fit_rho(cur_fit, cfg$BETA_GR), 4),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+  }
+  ate_diff <- rbind(
+    ate_diff_row("C", fit_C, prev_C, "all_or_nothing"),
+    ate_diff_row("D", fit_D, prev_D, "all_or_nothing"),
+    ate_diff_row("C", fit_C, prev_C, "observed"),
+    ate_diff_row("D", fit_D, prev_D, "observed")
+  )
+  kable(ate_diff, align = "llrrrrr",
+        caption = "ATE / spectral radius: previous vs current.") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+  pc0 <- param_vec(prev_C)
+  pd0 <- param_vec(prev_D)
+  nms2 <- unique(c(names(pc), names(pd), names(pc0), names(pd0)))
+  nms2 <- c(intersect(param_order, nms2), setdiff(nms2, param_order))
+  param_diff <- data.frame(
+    Parameter = nms2,
+    `C prev` = vapply(nms2, function(nm) fmt_num(pc0[[nm]], 5), character(1)),
+    `C curr` = vapply(nms2, function(nm) fmt_num(pc[[nm]], 5), character(1)),
+    `C delta` = vapply(nms2, function(nm) {
+      a <- safe_num(pc0[[nm]]); b <- safe_num(pc[[nm]])
+      if (!is.finite(a) || !is.finite(b)) "N/A" else fmt_num(b - a, 5)
+    }, character(1)),
+    `D prev` = vapply(nms2, function(nm) fmt_num(pd0[[nm]], 5), character(1)),
+    `D curr` = vapply(nms2, function(nm) fmt_num(pd[[nm]], 5), character(1)),
+    `D delta` = vapply(nms2, function(nm) {
+      a <- safe_num(pd0[[nm]]); b <- safe_num(pd[[nm]])
+      if (!is.finite(a) || !is.finite(b)) "N/A" else fmt_num(b - a, 5)
+    }, character(1)),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  kable(param_diff, align = "lrrrrrr",
+        caption = "Parameter deltas (current − previous).") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
+```

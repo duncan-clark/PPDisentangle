@@ -62,6 +62,7 @@ PP_T_TRUNC_SENS_PATCH_FILE="${PP_T_TRUNC_SENS_PATCH_FILE:-}"
 PP_T_TRUNC_SENS_ONLY="${PP_T_TRUNC_SENS_ONLY:-0}"
 PP_SMOKE_SEM_D_SEEDS="${PP_SMOKE_SEM_D_SEEDS:-0}"
 PP_SMOKE_SEM_D_TRUNC="${PP_SMOKE_SEM_D_TRUNC:-3}"
+PP_SKIP_FULL_REPORT="${PP_SKIP_FULL_REPORT:-0}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
@@ -311,8 +312,31 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=80G; fi
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="02:00:00"; fi
       ;;
+    cd-primary|cd|cd_primary|cd-slim)
+      # C/D-focused refresh: large fixed t_trunc, no bootstrap/sens, no full HTML overwrite.
+      if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
+      if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=64; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+      if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+      if [ "$SEM_N_LABELLINGS_EXPLICIT" -ne 1 ]; then PP_SEM_N_LABELLINGS=20; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=5000; fi
+      if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
+      if [ -z "${PP_SEM_T_TRUNC_DAYS}" ]; then PP_SEM_T_TRUNC_DAYS=90; fi
+      PP_RUN_T_TRUNC_SENSITIVITY=0
+      if [ "$RUN_SENS_EXPLICIT" -ne 1 ]; then PP_RUN_SENSITIVITY=0; fi
+      if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
+      if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
+      if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
+      if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
+      if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="06:00:00"; fi
+      # Keep the full diagnostic HTML untouched; slim report is rendered locally.
+      PP_SKIP_FULL_REPORT=1
+      ;;
     *)
-      echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d)"
+      echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary)"
       exit 1
       ;;
   esac
@@ -465,13 +489,13 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   export PP_SEM_WORKER_LOGS PP_SEM_WORKER_LOG_VERBOSE PP_SEM_WORKER_LOG_SPLIT PP_SEM_TIMING_VERBOSE PP_SEM_PROPOSAL_VERBOSE
   export PP_SIM_PROGRESS_EVERY PP_SENS_SEM_INNER PP_BOOT_SEM_INNER PP_BOOT_REFIT_SCOPE PP_BOOT_TARGETS PP_KDE_VARIANT_MODE
   export PP_BOOT_OUTER_CORES PP_ATE_N_SIMS PP_ATE_BIVARIATE PP_ATE_CONTRAST PP_ATE_SCENARIO
-  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_SMOKE_SEM_D_SEEDS PP_SMOKE_SEM_D_TRUNC PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
+  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_SMOKE_SEM_D_SEEDS PP_SMOKE_SEM_D_TRUNC PP_SKIP_FULL_REPORT PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
   export PP_SEM_CHANGE_FACTOR_MIN_MULT PP_SEM_CHANGE_FACTOR_MAX_MULT PP_SEM_MAX_RELABEL_STEP_FRAC PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC
   export PP_RUN_SEM_PILOT PP_SEM_PILOT_INNER PP_SEM_PILOT_CORES PP_SEM_PILOT_MAX_COMBOS PP_SEM_PILOT_CHANGE_FACTORS
   export PP_SEM_PILOT_MIN_MULTS PP_SEM_PILOT_MAX_MULTS PP_SEM_PILOT_TEMPS PP_SETUP_TEST
   [ -n "${PP_R_GEO_MODULE:-}" ] && export PP_R_GEO_MODULE
 
-  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES ate_bivariate=${PP_ATE_BIVARIATE:-default} ate_contrast=${PP_ATE_CONTRAST:-default} ate_scenario=${PP_ATE_SCENARIO:-} ate_n_sims=$PP_ATE_N_SIMS boot_reps=$PP_BOOT_REPS boot_refit_scope=$PP_BOOT_REFIT_SCOPE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST"
+  echo "Submitting Oklahoma job: mode=${PP_MODE:-manual} cores=$PP_CORES ate_bivariate=${PP_ATE_BIVARIATE:-default} ate_contrast=${PP_ATE_CONTRAST:-default} ate_scenario=${PP_ATE_SCENARIO:-} ate_n_sims=$PP_ATE_N_SIMS boot_reps=$PP_BOOT_REPS boot_refit_scope=$PP_BOOT_REFIT_SCOPE boot_outer_cores=$PP_BOOT_OUTER_CORES setup_test=$PP_SETUP_TEST skip_full_report=$PP_SKIP_FULL_REPORT"
 
   JOB_ID=$(sbatch --parsable \
     --cpus-per-task="$PP_CORES" \
@@ -794,7 +818,13 @@ export OK_BOOT_SEED="$PP_SEED"
 export OK_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_IDENTICAL_RANDOMNESS=false
 export OK_BOOT_GUARD_DEGENERATE=true
-export OK_REPORT_FORMATS=html
+if [ "${PP_SKIP_FULL_REPORT:-0}" = "1" ] || [ "${PP_SKIP_FULL_REPORT:-0}" = "true" ] || [ "${PP_SKIP_FULL_REPORT:-0}" = "yes" ]; then
+  # Empty formats skips oklahoma_report.html so diagnostic HTML stays intact.
+  export OK_REPORT_FORMATS=""
+  echo "Skipping full oklahoma_report.html render (PP_SKIP_FULL_REPORT=1); use slim C/D report locally."
+else
+  export OK_REPORT_FORMATS=html
+fi
 echo "ATE settings: OK_ATE_BIVARIATE=$OK_ATE_BIVARIATE OK_ATE_CONTRAST=$OK_ATE_CONTRAST OK_ATE_SCENARIO=${OK_ATE_SCENARIO:-} OK_ATE_N_SIMS=$OK_ATE_N_SIMS OK_ATE_SIM_CORES=$OK_ATE_SIM_CORES"
 
 if [ "${PP_BOOT_REPS:-0}" -le 0 ]; then

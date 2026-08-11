@@ -102,6 +102,10 @@ estimation. The free parameters are:
 | `render_oklahoma_report.R` | Render report into `PPDisentangle-output/oklahoma/` |
 | `paper/oklahoma_paper_assets.R` | Builds publication figures and LaTeX table fragments from saved analysis results |
 | `launch_ate_scenarios_nesi.sh` | Submit four ATE-scenario bootstrap-only jobs on NeSI |
+| `launch_oklahoma_cd_nesi.sh` | C/D-primary refresh (default `t_trunc=90`, no bootstrap) |
+| `launch_oklahoma_cd_update_nesi.sh` | Re-run C/D primary and archive previous for slim-report diffs |
+| `watch_and_publish_cd.sh` | Fetch C/D job; write `oklahoma_cd_current.rds` + slim HTML |
+| `oklahoma_report_cd.qmd` / `render_oklahoma_report_cd.R` | Slim HTML: C/D settings, params, ATEs (+ optional prev diff) |
 | `render_ate_scenario_compare.R` | Build the four-way scenario-compare HTML/PDF |
 | `../sim_study/consistency_study.R` | Simulation study verifying point-process parameter recovery |
 
