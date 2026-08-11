@@ -18,6 +18,27 @@
 # Canonical ordering and names for the 8-element ETAS parameter vector.
 .etas_par_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 
+.etas_param_vector <- function(params, context = "ETAS parameters") {
+  pv <- if (is.list(params)) unlist(params, use.names = TRUE) else params
+  if (is.null(names(pv))) {
+    if (length(pv) != length(.etas_par_names)) {
+      stop(context, " must contain exactly ", length(.etas_par_names),
+           " values in canonical ETAS order.")
+    }
+    names(pv) <- .etas_par_names
+  }
+  missing_names <- setdiff(.etas_par_names, names(pv))
+  if (length(missing_names) > 0L) {
+    stop(context, " is missing: ", paste(missing_names, collapse = ", "), ".")
+  }
+  out <- suppressWarnings(as.numeric(pv[.etas_par_names]))
+  names(out) <- .etas_par_names
+  if (any(!is.finite(out))) {
+    stop(context, " must contain finite values for all ETAS parameters.")
+  }
+  out
+}
+
 .etas_resolve_beta_gr <- function(beta_gr, realiz = NULL, m0 = NULL) {
   beta_eff <- suppressWarnings(as.numeric(beta_gr))
   beta_eff <- beta_eff[is.finite(beta_eff) & beta_eff > 0]
@@ -189,6 +210,10 @@
 #' @param precomp  Optional list from \code{precompute_loglik_args} to skip
 #'   redundant area / inside.owin calculations.
 #' @param t_trunc  Temporal truncation horizon.  \code{NULL} = no truncation.
+#' @param history Optional pre-window event data with columns
+#'   \code{x}, \code{y}, \code{t}, and \code{mag}. These events contribute as
+#'   triggering parents, but their own intensities are not included in the
+#'   likelihood. The compensator is integrated only over \code{windowT}.
 #' @param ...  Additional arguments (ignored).
 #' @return Scalar log-likelihood value.
 #' @export
@@ -220,6 +245,7 @@ loglik_etas <- function(params,
                         stability_barrier_power = 4,
                         precomp = NULL,
                         t_trunc = NULL,
+                        history = NULL,
                         ...) {
   # --- Parse parameters ---
   if (is.list(params)) {
@@ -249,6 +275,34 @@ loglik_etas <- function(params,
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
   n <- nrow(realiz)
   if (n == 0) return(-1e15)
+
+  # --- Optional pre-window parent history ---
+  use_history <- !is.null(history)
+  history_data <- realiz[0, c("x", "y", "t", "mag"), drop = FALSE]
+  if (use_history) {
+    history <- as.data.frame(history)
+    required_history_cols <- c("x", "y", "t", "mag")
+    if (nrow(history) > 0L &&
+        !all(required_history_cols %in% names(history))) {
+      return(-1e15)
+    }
+    if (nrow(history) > 0L) {
+      history_data <- history[, required_history_cols, drop = FALSE]
+      history_finite <- vapply(history_data, function(z) all(is.finite(z)), logical(1))
+      if (!all(history_finite)) return(-1e15)
+      history_data <- history_data[
+        history_data$t < windowT[1], , drop = FALSE
+      ]
+      trunc_value <- suppressWarnings(as.numeric(t_trunc))
+      if (length(trunc_value) == 1L && is.finite(trunc_value) &&
+          !is.na(trunc_value) && trunc_value > 0) {
+        history_data <- history_data[
+          history_data$t >= windowT[1] - trunc_value, , drop = FALSE
+        ]
+      }
+      history_data <- history_data[order(history_data$t), , drop = FALSE]
+    }
+  }
 
   # --- Parameter bounds ---
   if (min(mu, A, cc, D) < 0 || p <= 1 || q <= 1 || gamma_p < 0) return(-1e15)
@@ -313,25 +367,56 @@ loglik_etas <- function(params,
   tval <- windowT[2] - windowT[1]
 
   # --- Call C++ ---
-  loglik <- etas_loglik_inhom_cpp(
-    t         = realiz$t - windowT[1],
-    x         = realiz$x,
-    y         = realiz$y,
-    mag       = realiz$mag,
-    W_val     = W_vec,
-    mu        = mu,
-    A         = A,
-    alpha_m   = alpha_m,
-    cc        = cc,
-    p         = p,
-    D         = D,
-    gamma_par = gamma_p,
-    q         = q,
-    m0        = m0,
-    areaS     = active_area,
-    t_max     = tval,
-    t_trunc   = if (!is.null(t_trunc)) t_trunc else -1.0
-  )
+  if (use_history) {
+    parents <- rbind(
+      history_data,
+      realiz[, c("x", "y", "t", "mag"), drop = FALSE]
+    )
+    parents <- parents[order(parents$t), , drop = FALSE]
+    loglik <- etas_loglik_inhom_filtration_cpp(
+      post_t     = realiz$t,
+      post_x     = realiz$x,
+      post_y     = realiz$y,
+      W_val      = W_vec,
+      parent_t   = parents$t,
+      parent_x   = parents$x,
+      parent_y   = parents$y,
+      parent_mag = parents$mag,
+      mu         = mu,
+      A          = A,
+      alpha_m    = alpha_m,
+      cc         = cc,
+      p          = p,
+      D           = D,
+      gamma_par  = gamma_p,
+      q           = q,
+      m0          = m0,
+      areaS       = active_area,
+      t_start     = windowT[1],
+      t_end       = windowT[2],
+      t_trunc     = if (!is.null(t_trunc)) t_trunc else -1.0
+    )
+  } else {
+    loglik <- etas_loglik_inhom_cpp(
+      t         = realiz$t - windowT[1],
+      x         = realiz$x,
+      y         = realiz$y,
+      mag       = realiz$mag,
+      W_val     = W_vec,
+      mu        = mu,
+      A         = A,
+      alpha_m   = alpha_m,
+      cc        = cc,
+      p         = p,
+      D         = D,
+      gamma_par = gamma_p,
+      q         = q,
+      m0        = m0,
+      areaS     = active_area,
+      t_max     = tval,
+      t_trunc   = if (!is.null(t_trunc)) t_trunc else -1.0
+    )
+  }
   if (!is.finite(loglik)) return(-1e15)
 
   # Hybrid boundary handling: keep hard admissibility, plus a smooth interior

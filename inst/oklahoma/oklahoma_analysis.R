@@ -133,7 +133,7 @@ BETA_GR    <- if (is.finite(BETA_GR_ENV) && BETA_GR_ENV > 0) BETA_GR_ENV else NA
 BETA_GR_SOURCE <- if (is.finite(BETA_GR)) "env:OK_BETA_GR" else "pending_pre_control_estimate"
 CRS_PROJ   <- 5070
 
-VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 1000
+VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 5000
 # Spatial scale is magnitude-independent: d(m) = D (gamma fixed at 0 in all fits).
 GAMMA_FIXED <- 0
 VANILLA_STARTS <- list(
@@ -227,7 +227,7 @@ SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
 SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_kde_holdout"
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
-SEM_OUTER_MAXIT_BIV   <- 1000
+SEM_OUTER_MAXIT_BIV   <- 5000
 env_sem_outer_maxit <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_MAXIT", "")))
 if (!is.na(env_sem_outer_maxit) && env_sem_outer_maxit > 0L) {
   SEM_OUTER_MAXIT <- env_sem_outer_maxit
@@ -263,6 +263,18 @@ BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
 T_TRUNC_SENS_PATCH_FILE <- trimws(Sys.getenv("OK_T_TRUNC_SENS_PATCH_FILE", ""))
 T_TRUNC_SENS_ONLY <- tolower(trimws(Sys.getenv("OK_T_TRUNC_SENS_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+SMOKE_SEM_D_SEEDS <- suppressWarnings(as.integer(Sys.getenv("OK_SMOKE_SEM_D_SEEDS", "0")))
+if (!is.finite(SMOKE_SEM_D_SEEDS) || is.na(SMOKE_SEM_D_SEEDS) || SMOKE_SEM_D_SEEDS < 0L) {
+  SMOKE_SEM_D_SEEDS <- 0L
+}
+SMOKE_SEM_D_TRUNC <- suppressWarnings(as.numeric(Sys.getenv("OK_SMOKE_SEM_D_TRUNC", "3")))
+if (!is.finite(SMOKE_SEM_D_TRUNC) || is.na(SMOKE_SEM_D_TRUNC) || SMOKE_SEM_D_TRUNC <= 0) {
+  SMOKE_SEM_D_TRUNC <- 3
+}
+# Multi-seed Fit D smoke reuses the trunc-only skip path (no main fits / ATE / bootstrap).
+if (SMOKE_SEM_D_SEEDS > 0L) {
+  T_TRUNC_SENS_ONLY <- TRUE
+}
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
@@ -728,10 +740,17 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   ))
 }
 if (isTRUE(T_TRUNC_SENS_ONLY)) {
-  cat(sprintf(
-    "t_trunc sensitivity ONLY mode: skip main county fits/ATEs/bootstrap; SEM inner=%d; grid=%s; patch into %s\n",
-    SEM_INNER_ITER, paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ","), T_TRUNC_SENS_PATCH_FILE
-  ))
+  if (SMOKE_SEM_D_SEEDS > 0L) {
+    cat(sprintf(
+      "Fit D SEM smoke: %d seeds at t_trunc=%.4g; SEM inner=%d; no ATE; patch source %s\n",
+      SMOKE_SEM_D_SEEDS, SMOKE_SEM_D_TRUNC, SEM_INNER_ITER, T_TRUNC_SENS_PATCH_FILE
+    ))
+  } else {
+    cat(sprintf(
+      "t_trunc sensitivity ONLY mode: skip main county fits/ATEs/bootstrap; SEM inner=%d; grid=%s; patch into %s\n",
+      SEM_INNER_ITER, paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ","), T_TRUNC_SENS_PATCH_FILE
+    ))
+  }
 }
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
 sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
@@ -1580,6 +1599,7 @@ run_sem_fit <- function(pp_data_in,
       hard_subcritical = TRUE,
       etas_bivariate_params = if (identical(model_type_in, "etas_bivariate")) init_params_sem else NULL,
       background_rate_var = background_rate_var_in,
+      etas_use_filtration_history = TRUE,
       use_pre_history_for_biv = use_pre_history_for_biv_in,
       treated_background_zero_before = treated_background_zero_before_in,
       control_background_everywhere_before = control_background_everywhere_before_in,
@@ -2620,8 +2640,14 @@ fit_indep_pair <- function(pp_data_in,
                            treat_init_in = A_treat,
                            fit_label = "Fit I") {
   fixed_params_in <- with_gamma_fixed(fixed_params_in)
-  dat <- as.data.frame(pp_data_in)
-  dat <- dat[dat$t >= 0, , drop = FALSE]
+  all_dat <- as.data.frame(pp_data_in)
+  pre_history <- all_dat[
+    all_dat$t < windowT_post[1],
+    c("x", "y", "t", "mag"),
+    drop = FALSE
+  ]
+  treated_history <- pre_history[0, , drop = FALSE]
+  dat <- all_dat[all_dat$t >= windowT_post[1], , drop = FALSE]
   if (nrow(dat) < 1L) return(NULL)
   ctrl_dat <- dat[dat$location_process == "control", , drop = FALSE]
   treat_dat <- dat[dat$location_process == "treated", , drop = FALSE]
@@ -2637,7 +2663,8 @@ fit_indep_pair <- function(pp_data_in,
       background_rate_var = background_rate_var_in,
       beta_gr = BETA_GR,
       max_branching_ratio = ETAS_BRANCHING_MAX,
-      t_trunc = SEM_T_TRUNC_DAYS
+      t_trunc = SEM_T_TRUNC_DAYS,
+      history = pre_history
     ),
     error = function(e) {
       cat(sprintf("  [%s] control independent fit error: %s\n", fit_label, e$message))
@@ -2653,7 +2680,8 @@ fit_indep_pair <- function(pp_data_in,
       background_rate_var = background_rate_var_in,
       beta_gr = BETA_GR,
       max_branching_ratio = ETAS_BRANCHING_MAX,
-      t_trunc = SEM_T_TRUNC_DAYS
+      t_trunc = SEM_T_TRUNC_DAYS,
+      history = treated_history
     ),
     error = function(e) {
       cat(sprintf("  [%s] treated independent fit error: %s\n", fit_label, e$message))
@@ -4097,9 +4125,144 @@ ate_partitions <- lapply(partition_results, function(pr) {
 
 # ============================================================================
 # 7a2. Fit D temporal-truncation sensitivity (ATE vs t_trunc)
+#      Optional: multi-seed smoke at fixed t_trunc (no ATE) when OK_SMOKE_SEM_D_SEEDS > 0
 # ============================================================================
-cat("\n--- Step 7a2: Fit D t_trunc sensitivity ---\n")
+smoke_sem_d <- NULL
 t_trunc_sensitivity <- NULL
+if (SMOKE_SEM_D_SEEDS > 0L) {
+  cat(sprintf("\n--- Step 7a2-smoke: Fit D SEM multi-seed at t_trunc=%.4g (%d seeds, no ATE) ---\n",
+              SMOKE_SEM_D_TRUNC, SMOKE_SEM_D_SEEDS))
+  biv_init_trunc <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
+  cap_tol <- 1e-4
+  run_smoke_d_seed <- function(seed_i) {
+    seed_i <- as.integer(seed_i)
+    t0 <- proc.time()[["elapsed"]]
+    rng_label <- sprintf("smoke_d_trunc%.4g_seed%d", SMOKE_SEM_D_TRUNC, seed_i)
+    cat(sprintf("    [smoke_d:%s] start pid=%d mem=%s\n",
+                rng_label, Sys.getpid(), mem_snapshot()))
+    sem_local <- tryCatch({
+      run_sem_fit(
+        pp_data_in = pp_all_bg,
+        partition_in = partition,
+        partition_processes_in = partition_processes,
+        state_spaces_in = state_spaces,
+        init_params_in = biv_init_trunc,
+        fixed_params_in = SENSITIVITY_FIXED_PARAMS,
+        background_rate_var_in = "W",
+        control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
+        sem_t_trunc_in = SMOKE_SEM_D_TRUNC,
+        sem_inner_iter_in = SEM_INNER_ITER,
+        verbose_in = FALSE,
+        sem_rng_label_in = rng_label,
+        label = sprintf("Fit D smoke trunc %.4g seed %d", SMOKE_SEM_D_TRUNC, seed_i)
+      )
+    }, error = function(e) {
+      cat(sprintf("    [smoke_d:%s] SEM error: %s\n", rng_label, e$message))
+      NULL
+    })
+    params_local <- if (!is.null(sem_local)) sem_local$etas_bivariate_params else NULL
+    rho_local <- if (!is.null(params_local)) {
+      tryCatch(
+        PPDisentangle:::.etas_biv_spectral_radius(params_local, BETA_GR),
+        error = function(e) NA_real_
+      )
+    } else {
+      NA_real_
+    }
+    is_explosive <- !is.null(params_local) && (
+      !is.finite(rho_local) ||
+        rho_local >= 1 ||
+        rho_local >= (ETAS_BRANCHING_MAX - cap_tol)
+    )
+    status_local <- if (is.null(params_local)) {
+      "failed"
+    } else if (isTRUE(is_explosive)) {
+      "explosive"
+    } else {
+      "ok"
+    }
+    elapsed <- proc.time()[["elapsed"]] - t0
+    cat(sprintf("    [smoke_d:%s] done in %.1fs status=%s rho=%s mem=%s\n",
+                rng_label, elapsed, status_local,
+                format(rho_local, digits = 6), mem_snapshot()))
+    list(
+      seed = seed_i,
+      rng_label = rng_label,
+      t_trunc_days = as.numeric(SMOKE_SEM_D_TRUNC),
+      status = status_local,
+      elapsed_sec = as.numeric(elapsed),
+      rho = as.numeric(rho_local),
+      branching_metric = as.numeric(rho_local),
+      params = params_local,
+      n_relabel = if (!is.null(sem_local) && !is.null(sem_local$adaptive$adaptive_labelling)) {
+        lp <- sem_local$adaptive$adaptive_labelling
+        lp <- lp[lp$t >= 0, , drop = FALSE]
+        sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
+      } else {
+        NA_integer_
+      }
+    )
+  }
+  smoke_jobs <- as.list(seq_len(SMOKE_SEM_D_SEEDS))
+  smoke_sem_d_runs <- if (N_CORES > 1L && length(smoke_jobs) > 1L) {
+    run_parallel(
+      smoke_jobs, run_smoke_d_seed,
+      cores = min(length(smoke_jobs), max(1L, N_CORES)),
+      label = "smoke_sem_d"
+    )
+  } else {
+    lapply(smoke_jobs, run_smoke_d_seed)
+  }
+  names(smoke_sem_d_runs) <- sprintf("seed_%d", seq_len(SMOKE_SEM_D_SEEDS))
+  n_ok <- sum(vapply(smoke_sem_d_runs, function(x) identical(x$status, "ok"), logical(1)))
+  n_exp <- sum(vapply(smoke_sem_d_runs, function(x) identical(x$status, "explosive"), logical(1)))
+  n_fail <- sum(vapply(smoke_sem_d_runs, function(x) identical(x$status, "failed"), logical(1)))
+  rhos <- vapply(smoke_sem_d_runs, function(x) as.numeric(x$rho), numeric(1))
+  cat(sprintf(
+    "  Fit D smoke complete: ok=%d explosive=%d failed=%d / %d | rho range=[%s, %s]\n",
+    as.integer(n_ok), as.integer(n_exp), as.integer(n_fail), length(smoke_sem_d_runs),
+    format(min(rhos, na.rm = TRUE), digits = 6),
+    format(max(rhos, na.rm = TRUE), digits = 6)
+  ))
+  smoke_sem_d <- list(
+    t_trunc_days = SMOKE_SEM_D_TRUNC,
+    n_seeds = SMOKE_SEM_D_SEEDS,
+    sem_inner_iter = SEM_INNER_ITER,
+    branching_max = ETAS_BRANCHING_MAX,
+    n_ok = as.integer(n_ok),
+    n_explosive = as.integer(n_exp),
+    n_failed = as.integer(n_fail),
+    rho = rhos,
+    runs = smoke_sem_d_runs
+  )
+  patch_file <- normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = TRUE)
+  out_file <- file.path(OUT_DIR, add_file_tag("oklahoma_smoke_sem_d.rds"))
+  saveRDS(list(
+    smoke_sem_d = smoke_sem_d,
+    metadata = list(
+      stage = "smoke_sem_d",
+      saved_at = as.character(Sys.time()),
+      patched_from = patch_file,
+      sem_inner_iter = SEM_INNER_ITER,
+      t_trunc_days = SMOKE_SEM_D_TRUNC,
+      n_seeds = SMOKE_SEM_D_SEEDS
+    ),
+    config = list(
+      SMOKE_SEM_D_SEEDS = SMOKE_SEM_D_SEEDS,
+      SMOKE_SEM_D_TRUNC = SMOKE_SEM_D_TRUNC,
+      SEM_INNER_ITER = SEM_INNER_ITER,
+      SEM_OUTER_MAXIT_BIV = SEM_OUTER_MAXIT_BIV,
+      ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX
+    )
+  ), out_file)
+  cat(sprintf(
+    "\n=== SMOKE_SEM_D: wrote %s; exiting ===\n",
+    out_file
+  ))
+  quit(save = "no", status = 0)
+}
+
+cat("\n--- Step 7a2: Fit D t_trunc sensitivity ---\n")
 if (length(T_TRUNC_SENS_DAYS) < 1L) {
   cat("  Skipping Fit D t_trunc sensitivity (empty grid / disabled).\n")
 } else {

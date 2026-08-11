@@ -158,6 +158,53 @@ test_that("loglik_etas with precomp matches zero_background_region", {
   expect_equal(ll_zbr, ll_pc, tolerance = 1e-10)
 })
 
+# ---- conditional pre-window history ----
+
+test_that("empty ETAS history matches the ordinary likelihood", {
+  empty_history <- etas_3pt[0, c("x", "y", "t", "mag"), drop = FALSE]
+  ll_plain <- loglik_etas(
+    etas_ref_params, etas_3pt, etas_windowT, etas_windowS, m0 = 2.5
+  )
+  ll_conditional <- loglik_etas(
+    etas_ref_params, etas_3pt, etas_windowT, etas_windowS,
+    m0 = 2.5, history = empty_history
+  )
+  expect_equal(ll_conditional, ll_plain, tolerance = 1e-10)
+})
+
+test_that("conditional ETAS history has the correct intensity and compensator", {
+  params <- c(
+    mu = 5, A = 0.3, alpha_m = 0.5, c = 0.1,
+    p = 2.2, D = 1, gamma = 0.2, q = 1.6
+  )
+  history <- data.frame(x = 5, y = 5, t = -1, mag = 3)
+  observed <- data.frame(x = 5, y = 5, t = 0.5, mag = 3, W = 1)
+  ll <- loglik_etas(
+    params, observed, etas_windowT, etas_windowS,
+    m0 = 2.5, beta_gr = 2.3, history = history
+  )
+
+  dm <- 3 - 2.5
+  kappa <- params[["A"]] * exp(params[["alpha_m"]] * dm)
+  spatial_scale <- params[["D"]] * exp(params[["gamma"]] * dm)
+  temporal_density <- function(dt) {
+    (params[["p"]] - 1) / params[["c"]] *
+      (1 + dt / params[["c"]]) ^ (-params[["p"]])
+  }
+  temporal_cdf <- function(dt) {
+    1 - (1 + dt / params[["c"]]) ^ (-(params[["p"]] - 1))
+  }
+  spatial_at_zero <- (params[["q"]] - 1) / (pi * spatial_scale)
+  lambda <- params[["mu"]] / spatstat.geom::area(etas_windowS) +
+    kappa * temporal_density(1.5) * spatial_at_zero
+  trigger_compensator <- kappa * (
+    temporal_cdf(11) - temporal_cdf(1) +
+      temporal_cdf(9.5)
+  )
+  expected <- log(lambda) - params[["mu"]] * 10 - trigger_compensator
+  expect_equal(ll, expected, tolerance = 1e-10)
+})
+
 # ---- temporal truncation ----
 
 test_that("t_trunc=NULL gives same result as no truncation", {

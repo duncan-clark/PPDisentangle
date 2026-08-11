@@ -31,6 +31,7 @@ loglik_etas(
   stability_barrier_power = 4,
   precomp = NULL,
   t_trunc = NULL,
+  history = NULL,
   ...
 )
 }
@@ -59,6 +60,11 @@ inhomogeneous background weights (default \code{"W"}).}
 redundant area / inside.owin calculations.}
 
 \item{t_trunc}{Temporal truncation horizon.  \code{NULL} = no truncation.}
+
+\item{history}{Optional pre-window event data with columns
+\code{x}, \code{y}, \code{t}, and \code{mag}. These events contribute as
+triggering parents, but their own intensities are not included in the
+likelihood. The compensator is integrated only over \code{windowT}.}
 
 \item{...}{Additional arguments (ignored).}
 }

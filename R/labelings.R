@@ -1127,6 +1127,11 @@ em_style_labelling <- function(pp_data,
   }
   is_etas <- identical(model_type, "etas")
   is_biv_etas <- identical(model_type, "etas_bivariate")
+  etas_use_filtration_history <- if ("etas_use_filtration_history" %in% names(dots)) {
+    isTRUE(dots$etas_use_filtration_history)
+  } else {
+    TRUE
+  }
   biv_etas_params <- dots$etas_bivariate_params
   biv_beta_eff <- NA_real_
   biv_m0 <- NULL
@@ -1255,9 +1260,13 @@ em_style_labelling <- function(pp_data,
   history_window <- c(history_window_start, time_window[2])
   current_metric_cache <- NA_real_
   select_pre_history_by_label <- function(label) {
-    if (nrow(pre_data) < 1L) return(pre_data[0, c("x", "y", "t"), drop = FALSE])
+    history_cols <- c("x", "y", "t")
+    if ("mag" %in% names(pre_data)) history_cols <- c(history_cols, "mag")
+    if (nrow(pre_data) < 1L) {
+      return(pre_data[0, history_cols, drop = FALSE])
+    }
     src <- if ("inferred_process" %in% names(pre_data)) pre_data$inferred_process else pre_data$location_process
-    out <- pre_data[src == label, c("x", "y", "t"), drop = FALSE]
+    out <- pre_data[src == label, history_cols, drop = FALSE]
     out <- out[out$t < time_window[1], , drop = FALSE]
     out[order(out$t), , drop = FALSE]
   }
@@ -1387,6 +1396,20 @@ em_style_labelling <- function(pp_data,
     if (!is.finite(loglik)) return(-Inf)
     loglik
   }
+  etas_conditional_loglik <- function(params_vec, post_realiz,
+                                      zero_background_region, pre_hist,
+                                      precomp = NULL) {
+    loglik_etas(
+      params = params_vec,
+      realiz = post_realiz,
+      windowT = time_window,
+      windowS = statespace,
+      zero_background_region = zero_background_region,
+      history = if (etas_use_filtration_history) pre_hist else NULL,
+      precomp = precomp,
+      ...
+    )
+  }
 
   fits <- list()
   labelling_proposals <- list()
@@ -1429,13 +1452,24 @@ em_style_labelling <- function(pp_data,
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
         post_inds <- as.numeric(tileindex(post_data$x, post_data$y, partition))
-        pre_for_proposals <- if (is_biv_etas || hawkes_use_filtration_history) {
+        pre_for_proposals <- if (
+          is_biv_etas ||
+          (is_etas && etas_use_filtration_history) ||
+          (!is_etas && hawkes_use_filtration_history)
+        ) {
           pre_data
         } else {
           pre_data[0, , drop = FALSE]
         }
-        filt_by_proc <- if (!is.null(pre_for_proposals$location_process)) {
-          split(pre_for_proposals, pre_for_proposals$location_process)
+        filt_labels <- if (!is.null(pre_for_proposals$inferred_process)) {
+          pre_for_proposals$inferred_process
+        } else if (!is.null(pre_for_proposals$process)) {
+          pre_for_proposals$process
+        } else {
+          pre_for_proposals$location_process
+        }
+        filt_by_proc <- if (!is.null(filt_labels)) {
+          split(pre_for_proposals, filt_labels)
         } else {
           NULL
         }
@@ -1517,8 +1551,31 @@ em_style_labelling <- function(pp_data,
     t_lik <- proc.time()[3]
     if (metric_name == "post_likelihood") {
       ref_post <- post_data
-      ctrl_params_vec <- unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
-      treat_params_vec <- unlist(as_hawkes_params(treated_par[[length(treated_par)]], hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)])
+      if (is_etas || is_biv_etas) {
+        ctrl_params_vec <- .etas_param_vector(
+          control_par[[length(control_par)]],
+          "Current control ETAS parameters"
+        )
+        treat_params_vec <- .etas_param_vector(
+          treated_par[[length(treated_par)]],
+          "Current treated ETAS parameters"
+        )
+      } else {
+        ctrl_params_vec <- unlist(
+          as_hawkes_params(
+            control_par[[length(control_par)]],
+            hawkes_kernel, hawkes_spatial_kernel,
+            hawkes_spatial_q, hawkes_spatial_d
+          )[hawkes_param_names(hawkes_kernel)]
+        )
+        treat_params_vec <- unlist(
+          as_hawkes_params(
+            treated_par[[length(treated_par)]],
+            hawkes_kernel, hawkes_spatial_kernel,
+            hawkes_spatial_q, hawkes_spatial_d
+          )[hawkes_param_names(hawkes_kernel)]
+        )
+      }
       metric <- rep(NA_real_, length(labelling_proposals))
       unchanged_idx <- which(flips_per_proposal == 0)
       changed_idx <- which(flips_per_proposal != 0)
@@ -1672,18 +1729,41 @@ em_style_labelling <- function(pp_data,
       eval_nonbiv <- function(realiz, ctrl_idx, treat_idx) {
         if (length(ctrl_idx) < 1L) return(-Inf)
         if (length(treat_idx) < 1L) return(-Inf)
-        control_lik <- loglik_fn(
-          params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_ctrl_all$active_area,
-                         in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]), ...
+        control_precomp <- list(
+          active_area = pc_ctrl_all$active_area,
+          in_zero_bg = pc_ctrl_all$in_zero_bg_all[ctrl_idx]
         )
-        treat_lik <- loglik_fn(
-          params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
-          windowT = time_window, windowS = statespace,
-          precomp = list(active_area = pc_treat_all$active_area,
-                         in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]), ...
+        treat_precomp <- list(
+          active_area = pc_treat_all$active_area,
+          in_zero_bg = pc_treat_all$in_zero_bg_all[treat_idx]
         )
+        if (is_etas) {
+          control_lik <- etas_conditional_loglik(
+            params_vec = ctrl_params_vec,
+            post_realiz = realiz[ctrl_idx, , drop = FALSE],
+            zero_background_region = treated_state_space,
+            pre_hist = select_pre_history_by_label("control"),
+            precomp = control_precomp
+          )
+          treat_lik <- etas_conditional_loglik(
+            params_vec = treat_params_vec,
+            post_realiz = realiz[treat_idx, , drop = FALSE],
+            zero_background_region = control_state_space,
+            pre_hist = select_pre_history_by_label("treated"),
+            precomp = treat_precomp
+          )
+        } else {
+          control_lik <- loglik_fn(
+            params = ctrl_params_vec, realiz = realiz[ctrl_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = control_precomp, ...
+          )
+          treat_lik <- loglik_fn(
+            params = treat_params_vec, realiz = realiz[treat_idx, , drop = FALSE],
+            windowT = time_window, windowS = statespace,
+            precomp = treat_precomp, ...
+          )
+        }
         if (verbose && !printed_metric_diag) {
           cat(sprintf("  [metric diag] proposal 1: n_ctrl=%d n_treat=%d ctrl_lik=%s treat_lik=%s\n",
                       length(ctrl_idx), length(treat_idx), signif(control_lik, 6), signif(treat_lik, 6)))
@@ -1710,16 +1790,34 @@ em_style_labelling <- function(pp_data,
     if (metric_name == "post_likelihood_control") {
       metric <- vapply(labelling_proposals, function(y) {
         post_ctrl <- y[y$inferred_process == "control", ]
-        if (hawkes_use_filtration_history && !is_etas && !is_biv_etas) {
+        if (is_etas) {
+          etas_conditional_loglik(
+            params_vec = .etas_param_vector(
+              control_par[[length(control_par)]],
+              "Current control ETAS parameters"
+            ),
+            post_realiz = post_ctrl,
+            zero_background_region = treated_state_space,
+            pre_hist = select_pre_history_by_label("control")
+          )
+        } else if (hawkes_use_filtration_history && !is_biv_etas) {
           hawkes_conditional_loglik(
-            params_vec = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]),
+            params_vec = unlist(as_hawkes_params(
+              control_par[[length(control_par)]],
+              hawkes_kernel, hawkes_spatial_kernel,
+              hawkes_spatial_q, hawkes_spatial_d
+            )[hawkes_param_names(hawkes_kernel)]),
             post_realiz = post_ctrl,
             zero_background_region = treated_state_space,
             pre_hist = select_pre_history_by_label("control")
           )
         } else {
           loglik_hawk_fast(
-            params = unlist(as_hawkes_params(hawkes_params_control, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[hawkes_param_names(hawkes_kernel)]), realiz = post_ctrl,
+            params = unlist(as_hawkes_params(
+              control_par[[length(control_par)]],
+              hawkes_kernel, hawkes_spatial_kernel,
+              hawkes_spatial_q, hawkes_spatial_d
+            )[hawkes_param_names(hawkes_kernel)]), realiz = post_ctrl,
             windowT = time_window, windowS = statespace,
             zero_background_region = treated_state_space,
             spatial_kernel = hawkes_spatial_kernel,
@@ -1995,7 +2093,14 @@ em_style_labelling <- function(pp_data,
 
         if (update_control_params) {
           optim_func_treat <- function(params, ...) {
-            if (hawkes_use_filtration_history && !is_etas) {
+            if (is_etas) {
+              etas_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(
                 params_vec = params,
                 post_realiz = mml_post_treated,
@@ -2011,7 +2116,14 @@ em_style_labelling <- function(pp_data,
             }
           }
           optim_func_control <- function(params, ...) {
-            if (hawkes_use_filtration_history && !is_etas) {
+            if (is_etas) {
+              etas_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_control,
+                zero_background_region = treated_state_space,
+                pre_hist = select_pre_history_by_label("control")
+              )
+            } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(
                 params_vec = params,
                 post_realiz = mml_post_control,
@@ -2034,7 +2146,14 @@ em_style_labelling <- function(pp_data,
           control_par[[length(control_par) + 1]] <- res_c$par_list
         } else {
           optim_func <- function(params, ...) {
-            if (hawkes_use_filtration_history && !is_etas) {
+            if (is_etas) {
+              etas_conditional_loglik(
+                params_vec = params,
+                post_realiz = mml_post_treated,
+                zero_background_region = control_state_space,
+                pre_hist = select_pre_history_by_label("treated")
+              )
+            } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(
                 params_vec = params,
                 post_realiz = mml_post_treated,

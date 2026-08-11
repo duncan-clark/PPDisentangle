@@ -59,6 +59,11 @@ adaptive_SEM <- function(pp_data,
   } else {
     TRUE
   }
+  etas_use_filtration_history <- if ("etas_use_filtration_history" %in% names(dots)) {
+    isTRUE(dots$etas_use_filtration_history)
+  } else {
+    TRUE
+  }
   treated_background_zero_before <- if ("treated_background_zero_before" %in% names(dots)) {
     as.numeric(dots$treated_background_zero_before)
   } else {
@@ -501,13 +506,25 @@ adaptive_SEM <- function(pp_data,
     sapply(labellings, function(y) {
       post_idx <- y$t >= treatment_time
       realiz <- y[post_idx, , drop = FALSE]
+      history_control <- if (etas_use_filtration_history) {
+        y[!post_idx & y$inferred_process == "control",
+          c("x", "y", "t", "mag"), drop = FALSE]
+      } else {
+        NULL
+      }
+      history_treated <- if (etas_use_filtration_history) {
+        y[!post_idx & y$inferred_process == "treated",
+          c("x", "y", "t", "mag"), drop = FALSE]
+      } else {
+        NULL
+      }
       include <- which(realiz$inferred_process == "control")
       if (length(include) == 0) return(-Inf)
       control_lik <- loglik_fn(
         params = control_par, realiz = realiz[include, ],
         windowT = sem_windowT,
         windowS = statespace, zero_background_region = treated_state_space,
-        t_trunc = t_trunc, ...
+        t_trunc = t_trunc, history = history_control, ...
       )
       include <- which(realiz$inferred_process == "treated")
       if (length(include) == 0) return(-Inf)
@@ -515,7 +532,7 @@ adaptive_SEM <- function(pp_data,
         params = treat_par, realiz = realiz[include, ],
         windowT = sem_windowT,
         windowS = statespace, zero_background_region = control_state_space,
-        t_trunc = t_trunc, ...
+        t_trunc = t_trunc, history = history_treated, ...
       )
       return(control_lik + treat_lik)
     })
@@ -559,10 +576,26 @@ adaptive_SEM <- function(pp_data,
       ]
       baseline_post <- baseline_post[order(baseline_post$t), , drop = FALSE]
       post_inds <- as.numeric(tileindex(baseline_post$x, baseline_post$y, partition))
-      pre_for_proposals <- if (is_biv_etas || hawkes_use_filtration_history) {
+      pre_for_proposals <- if (
+        is_biv_etas ||
+        (is_etas && etas_use_filtration_history) ||
+        (!is_etas && hawkes_use_filtration_history)
+      ) {
         pre
       } else {
         pre[0, , drop = FALSE]
+      }
+      proposal_filt_labels <- if (!is.null(pre_for_proposals$inferred_process)) {
+        pre_for_proposals$inferred_process
+      } else if (!is.null(pre_for_proposals$process)) {
+        pre_for_proposals$process
+      } else {
+        pre_for_proposals$location_process
+      }
+      proposal_filt_by_proc <- if (!is.null(proposal_filt_labels)) {
+        split(pre_for_proposals, proposal_filt_labels)
+      } else {
+        NULL
       }
       proposal_sim_cache <- NULL
       labellings <- vector("list", N_labellings)
@@ -573,10 +606,11 @@ adaptive_SEM <- function(pp_data,
           statespace = statespace,
           state_spaces = adaptive_control$state_spaces,
           windowT = c(treatment_time, max(starting_data$t)),
-          hawkes_params_control = hawkes_params_control,
+          hawkes_params_control = c_params[[length(c_params)]],
           hawkes_params_treated = t_params[[length(t_params)]],
           change_factor = adaptive_control$change_factor,
           filtration = pre_for_proposals, proximity_weight = 0,
+          filt_by_proc = proposal_filt_by_proc,
           verbose = isTRUE(adaptive_control$verbose),
           points_tile_index = post_inds,
           model_type = model_type,
@@ -947,9 +981,19 @@ adaptive_SEM <- function(pp_data,
       } else {
         prepared_for_process <- lapply(prepared_labellings, function(parts) {
           post_part <- parts[[split_key]]
+          history_key <- if (process_label == "control") {
+            "filt_control"
+          } else {
+            "filt_treated"
+          }
           pc <- precompute_loglik_args(post_part, statespace, zero_bg_region)
           list(
             post_part = post_part,
+            history = if (etas_use_filtration_history) {
+              parts[[history_key]][, c("x", "y", "t", "mag"), drop = FALSE]
+            } else {
+              NULL
+            },
             precomp = list(
               active_area = pc$active_area,
               in_zero_bg = pc$in_zero_bg_all
@@ -1011,7 +1055,8 @@ adaptive_SEM <- function(pp_data,
                 zero_background_region = zero_bg_region,
                 background_rate_var = "W",
                 precomp = parts$precomp,
-                t_trunc = t_trunc
+                t_trunc = t_trunc,
+                history = parts$history
               ),
               etas_ll_extra
             )

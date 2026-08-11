@@ -750,12 +750,13 @@ kable(trunc_df, align = "lc",
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
-```{r tbl-t-trunc-sensitivity}
-#| label: tbl-t-trunc-sensitivity
+```{r prep-t-trunc-sensitivity}
+#| label: prep-t-trunc-sensitivity
+#| include: false
 trunc_sens <- results$t_trunc_sensitivity
-if (is.null(trunc_sens) || length(trunc_sens) < 1L) {
-  cat("No Fit D t_trunc sensitivity grid was saved in this results file.\n")
-} else {
+trunc_sens_df <- NULL
+trunc_sens_main_ttr <- suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS))
+if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
   rows <- lapply(trunc_sens, function(x) {
     if (is.null(x)) return(NULL)
     data.frame(
@@ -769,60 +770,77 @@ if (is.null(trunc_sens) || length(trunc_sens) < 1L) {
       stringsAsFactors = FALSE
     )
   })
-  sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
-  if (is.null(sens_df) || nrow(sens_df) < 1L) {
-    cat("Fit D truncation sensitivity payload was present but empty.\n")
+  trunc_sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+  if (!is.null(trunc_sens_df) && nrow(trunc_sens_df) >= 1L) {
+    trunc_sens_df <- trunc_sens_df[order(trunc_sens_df$t_trunc_days), , drop = FALSE]
   } else {
-    sens_df <- sens_df[order(sens_df$t_trunc_days), , drop = FALSE]
-    main_ttr <- suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS))
-    cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
-    if (is.finite(main_ttr)) {
-      cap <- paste0(cap, sprintf(" Main-run $t_{\\\\mathrm{trunc}}=%.3f$ days.", main_ttr))
-    }
-    kable(
-      sens_df |>
-        transmute(
-          `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
-          Status = status,
-          `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
-          `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
-          `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
-          Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA"),
-          `Elapsed (min)` = ifelse(is.finite(elapsed_min), sprintf("%.1f", elapsed_min), "NA")
-        ),
-      align = "lcccccc",
-      caption = cap
-    ) |>
-      kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
-    if (requireNamespace("ggplot2", quietly = TRUE) &&
-        sum(is.finite(sens_df$mean_saved)) >= 2L) {
-      p_trunc <- ggplot2::ggplot(
-        sens_df[is.finite(sens_df$mean_saved), , drop = FALSE],
-        ggplot2::aes(x = t_trunc_days, y = mean_saved)
-      ) +
-        ggplot2::geom_line(linewidth = 0.8, colour = "#1b9e77") +
-        ggplot2::geom_point(size = 2.4, colour = "#1b9e77") +
-        ggplot2::geom_errorbar(
-          ggplot2::aes(
-            ymin = mean_saved - sd_saved,
-            ymax = mean_saved + sd_saved
-          ),
-          width = 0.4, colour = "#1b9e77", alpha = 0.7,
-          na.rm = TRUE
-        ) +
-        ggplot2::labs(
-          title = "Fit D ATE vs temporal truncation",
-          x = expression(t[trunc]~"(days)"),
-          y = "Mean saved events (AoN)"
-        ) +
-        ggplot2::theme_minimal()
-      if (is.finite(main_ttr)) {
-        p_trunc <- p_trunc +
-          ggplot2::geom_vline(xintercept = main_ttr, linetype = "dashed", colour = "grey40")
-      }
-      print(p_trunc)
-    }
+    trunc_sens_df <- NULL
   }
+}
+```
+
+```{r tbl-t-trunc-sensitivity}
+#| label: tbl-t-trunc-sensitivity
+if (is.null(trunc_sens_df)) {
+  cat("No Fit D t_trunc sensitivity grid was saved in this results file.\n")
+} else {
+  # Plain-text caption: nested LaTeX in kable captions can drop HTML tables.
+  cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
+  if (is.finite(trunc_sens_main_ttr)) {
+    cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3f days.", trunc_sens_main_ttr))
+  }
+  knitr::kable(
+    trunc_sens_df |>
+      transmute(
+        `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
+        Status = status,
+        `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
+        `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
+        `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
+        Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA"),
+        `Elapsed (min)` = ifelse(is.finite(elapsed_min), sprintf("%.1f", elapsed_min), "NA")
+      ),
+    align = "lcccccc",
+    caption = cap,
+    row.names = FALSE
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
+```
+
+```{r fig-t-trunc-sensitivity}
+#| label: fig-t-trunc-sensitivity
+#| fig-cap: "Fit D all-or-nothing ATE versus temporal truncation horizon."
+if (!is.null(trunc_sens_df) &&
+    requireNamespace("ggplot2", quietly = TRUE) &&
+    sum(is.finite(trunc_sens_df$mean_saved)) >= 2L) {
+  p_trunc <- ggplot2::ggplot(
+    trunc_sens_df[is.finite(trunc_sens_df$mean_saved), , drop = FALSE],
+    ggplot2::aes(x = t_trunc_days, y = mean_saved)
+  ) +
+    ggplot2::geom_line(linewidth = 0.8, colour = "#1b9e77") +
+    ggplot2::geom_point(size = 2.4, colour = "#1b9e77") +
+    ggplot2::geom_errorbar(
+      ggplot2::aes(
+        ymin = mean_saved - sd_saved,
+        ymax = mean_saved + sd_saved
+      ),
+      width = 0.4, colour = "#1b9e77", alpha = 0.7,
+      na.rm = TRUE
+    ) +
+    ggplot2::labs(
+      title = "Fit D ATE vs temporal truncation",
+      x = expression(t[trunc]~"(days)"),
+      y = "Mean saved events (AoN)"
+    ) +
+    ggplot2::theme_minimal()
+  if (is.finite(trunc_sens_main_ttr)) {
+    p_trunc <- p_trunc +
+      ggplot2::geom_vline(
+        xintercept = trunc_sens_main_ttr, linetype = "dashed", colour = "grey40"
+      )
+  }
+  print(p_trunc)
 }
 ```
 
@@ -1287,16 +1305,17 @@ beta_proxy <- suppressWarnings(as.numeric(unlist(cfg$BETA_GR, use.names = FALSE)
 beta_proxy <- beta_proxy[is.finite(beta_proxy)]
 beta_proxy <- if (length(beta_proxy) > 0) beta_proxy[[1]] else 2.3
 
-eta_proxy <- function(mu, A, alpha_m, beta_gr = beta_proxy) {
+eta_exact <- function(mu, A, alpha_m, beta_gr = beta_proxy) {
   if (!all(is.finite(c(mu, A, alpha_m, beta_gr))) || beta_gr <= 0) return(NA_real_)
-  A * exp(alpha_m / beta_gr)
+  if (alpha_m >= beta_gr) return(Inf)
+  A * beta_gr / (beta_gr - alpha_m)
 }
 
 param_rows <- do.call(rbind, lapply(param_models, function(m) {
   mu_c <- bc(m$par, "mu"); A_c <- bc(m$par, "A"); a_c <- bc(m$par, "alpha_m")
   mu_t <- bt(m$par, "mu"); A_t <- bt(m$par, "A"); a_t <- bt(m$par, "alpha_m")
-  eta_c <- eta_proxy(mu_c, A_c, a_c)
-  eta_t <- eta_proxy(mu_t, A_t, a_t)
+  eta_c <- eta_exact(mu_c, A_c, a_c)
+  eta_t <- eta_exact(mu_t, A_t, a_t)
   rbind(
     data.frame(
       Fit = m$long, Process = "Control",
@@ -1324,11 +1343,12 @@ tbl_k <- kable(
   param_rows,
   digits = 4,
   align = "llrrrrr",
-  col.names = c("Fit", "Process", "mu", "A", "alpha_m", "Branch proxy (A*exp(alpha/beta))", "mu * branch proxy"),
+  col.names = c("Fit", "Process", "mu", "A", "alpha_m", "Branching ratio", "mu * branching ratio"),
   caption = paste0(
-    "Marginal ETAS parameters and branching proxies by fit. ",
+    "Marginal ETAS parameters and exact branching ratios by fit. ",
     "Double separators mark fit boundaries. ",
-    "Branch proxy uses beta=", signif(beta_proxy, 4), "."
+    "The branching ratio is A*beta/(beta-alpha), with beta=",
+    signif(beta_proxy, 4), "."
   ),
   booktabs = TRUE,
   linesep = "",

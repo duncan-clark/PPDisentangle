@@ -172,6 +172,25 @@ etas_loglik_inhom_cpp <- function(t, x, y, mag, W_val, mu, A, alpha_m, cc, p, D,
     .Call(`_PPDisentangle_etas_loglik_inhom_cpp`, t, x, y, mag, W_val, mu, A, alpha_m, cc, p, D, gamma_par, q, m0, areaS, t_max, t_trunc)
 }
 
+#' Conditional ETAS log-likelihood with observed parent history
+#'
+#' Evaluates the ETAS likelihood only for events in the post-treatment
+#' observation window while allowing earlier events to contribute as parents.
+#' The triggering compensator is integrated only over the observation window,
+#' including the remaining offspring mass of pre-window parents.
+#'
+#' @param post_t,post_x,post_y Coordinates and times of observed events.
+#' @param W_val Background weights for the observed events.
+#' @param parent_t,parent_x,parent_y,parent_mag Coordinates, times, and
+#'   magnitudes of all possible parents (history plus observed events), sorted
+#'   by time.
+#' @param t_start,t_end Bounds of the observation window.
+#' @inheritParams etas_loglik_inhom_cpp
+#' @return Scalar conditional log-likelihood value.
+etas_loglik_inhom_filtration_cpp <- function(post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, parent_mag, mu, A, alpha_m, cc, p, D, gamma_par, q, m0, areaS, t_start, t_end, t_trunc = -1.0) {
+    .Call(`_PPDisentangle_etas_loglik_inhom_filtration_cpp`, post_t, post_x, post_y, W_val, parent_t, parent_x, parent_y, parent_mag, mu, A, alpha_m, cc, p, D, gamma_par, q, m0, areaS, t_start, t_end, t_trunc)
+}
+
 #' Simulate ETAS offspring via BFS branching
 #'
 #' Starting from a set of parent events, generates all offspring (and their

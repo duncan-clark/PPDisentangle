@@ -1,4 +1,5 @@
 #include <Rcpp.h>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 using namespace Rcpp;
@@ -166,5 +167,117 @@ double etas_loglik_inhom_cpp(NumericVector t,
 
   if (NumericVector::is_na(loglik) || std::isinf(loglik)) return -1e15;
 
+  return loglik;
+}
+
+//' Conditional ETAS log-likelihood with observed parent history
+//'
+//' Evaluates the ETAS likelihood only for events in the post-treatment
+//' observation window while allowing earlier events to contribute as parents.
+//' The triggering compensator is integrated only over the observation window,
+//' including the remaining offspring mass of pre-window parents.
+//'
+//' @param post_t,post_x,post_y Coordinates and times of observed events.
+//' @param W_val Background weights for the observed events.
+//' @param parent_t,parent_x,parent_y,parent_mag Coordinates, times, and
+//'   magnitudes of all possible parents (history plus observed events), sorted
+//'   by time.
+//' @param t_start,t_end Bounds of the observation window.
+//' @inheritParams etas_loglik_inhom_cpp
+//' @return Scalar conditional log-likelihood value.
+// [[Rcpp::export]]
+double etas_loglik_inhom_filtration_cpp(NumericVector post_t,
+                                         NumericVector post_x,
+                                         NumericVector post_y,
+                                         NumericVector W_val,
+                                         NumericVector parent_t,
+                                         NumericVector parent_x,
+                                         NumericVector parent_y,
+                                         NumericVector parent_mag,
+                                         double mu, double A, double alpha_m,
+                                         double cc, double p, double D,
+                                         double gamma_par, double q, double m0,
+                                         double areaS,
+                                         double t_start, double t_end,
+                                         double t_trunc = -1.0) {
+  const int n_post = post_t.size();
+  const int n_parent = parent_t.size();
+  if (n_post == 0 || n_parent == 0 || areaS <= 0.0 || t_end <= t_start) {
+    return -1e15;
+  }
+
+  const double pi_val = 3.14159265358979323846;
+  const bool do_trunc = (t_trunc > 0.0);
+  const double mu_base = mu / areaS;
+  const double inv_cc = 1.0 / cc;
+
+  auto temporal_cdf = [&](double dt) {
+    if (dt <= 0.0) return 0.0;
+    return 1.0 - std::pow(1.0 + dt * inv_cc, -(p - 1.0));
+  };
+
+  double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
+  if (temporal_norm < 1e-15) temporal_norm = 1e-15;
+
+  const double base_const =
+    A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+
+  const double* ppt = parent_t.begin();
+  const double* ppx = parent_x.begin();
+  const double* ppy = parent_y.begin();
+  const double* ppmag = parent_mag.begin();
+
+  std::vector<double> d_parent(n_parent), pair_parent(n_parent),
+    compensator_parent(n_parent);
+  for (int j = 0; j < n_parent; ++j) {
+    const double dm = ppmag[j] - m0;
+    const double productivity = std::exp(alpha_m * dm);
+    const double spatial_scale = D * std::exp(gamma_par * dm);
+    d_parent[j] = spatial_scale;
+    pair_parent[j] = base_const * productivity / spatial_scale;
+    compensator_parent[j] = A * productivity;
+  }
+
+  double loglik = 0.0;
+  for (int i = 0; i < n_post; ++i) {
+    double lambda_i = mu_base * W_val[i];
+    const double ti = post_t[i];
+    const double xi = post_x[i];
+    const double yi = post_y[i];
+
+    const double* first_ge = std::lower_bound(ppt, ppt + n_parent, ti);
+    int j_start = static_cast<int>(first_ge - ppt) - 1;
+    for (int j = j_start; j >= 0; --j) {
+      const double dt = ti - ppt[j];
+      if (do_trunc && dt > t_trunc) break;
+      if (dt <= 0.0) continue;
+      const double dx = xi - ppx[j];
+      const double dy = yi - ppy[j];
+      const double r2 = dx * dx + dy * dy;
+      lambda_i += pair_parent[j] *
+        std::exp(-p * std::log(1.0 + dt * inv_cc)
+                 - q * std::log(1.0 + r2 / d_parent[j]));
+    }
+
+    if (lambda_i <= 1e-15) lambda_i = 1e-15;
+    loglik += std::log(lambda_i);
+  }
+
+  double triggering_integral = 0.0;
+  for (int j = 0; j < n_parent; ++j) {
+    const double parent_time = ppt[j];
+    double integration_start = std::max(t_start, parent_time);
+    double integration_end = t_end;
+    if (do_trunc) {
+      integration_end = std::min(integration_end, parent_time + t_trunc);
+    }
+    if (integration_end <= integration_start) continue;
+    triggering_integral += compensator_parent[j] *
+      (temporal_cdf(integration_end - parent_time) -
+       temporal_cdf(integration_start - parent_time)) / temporal_norm;
+  }
+
+  loglik -= mu * (t_end - t_start) + triggering_integral;
+  if (NumericVector::is_na(loglik) || std::isinf(loglik)) return -1e15;
   return loglik;
 }
