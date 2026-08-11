@@ -226,7 +226,7 @@ if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 
 SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
 SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_kde_holdout"
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
-SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 220
+SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 5000
 SEM_OUTER_MAXIT_BIV   <- 5000
 env_sem_outer_maxit <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_OUTER_MAXIT", "")))
 if (!is.na(env_sem_outer_maxit) && env_sem_outer_maxit > 0L) {

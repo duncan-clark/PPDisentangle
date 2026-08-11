@@ -222,7 +222,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1000; fi
       if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
       if [ "$SEM_N_LABELLINGS_EXPLICIT" -ne 1 ]; then PP_SEM_N_LABELLINGS=20; fi
-      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=220; fi
+      if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=5000; fi
       if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
       if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1000; fi
       if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
@@ -338,7 +338,7 @@ if [ -z "$PP_SEM_N_LABELLINGS" ]; then
   PP_SEM_N_LABELLINGS=20
 fi
 if [ -z "$PP_SEM_OUTER_MAXIT" ]; then
-  PP_SEM_OUTER_MAXIT=220
+  PP_SEM_OUTER_MAXIT=5000
 fi
 if [ -z "$PP_SEM_OUTER_MAXIT_BIV" ]; then
   PP_SEM_OUTER_MAXIT_BIV=5000
