@@ -64,6 +64,7 @@ PP_SMOKE_SEM_D_SEEDS="${PP_SMOKE_SEM_D_SEEDS:-0}"
 PP_SMOKE_SEM_D_TRUNC="${PP_SMOKE_SEM_D_TRUNC:-3}"
 PP_SKIP_FULL_REPORT="${PP_SKIP_FULL_REPORT:-0}"
 PP_CD_ONLY="${PP_CD_ONLY:-0}"
+PP_SKIP_CONTROL_SNAPSHOTS="${PP_SKIP_CONTROL_SNAPSHOTS:-}"
 PP_MEM="${PP_MEM:-}"
 PP_TIME="${PP_TIME:-72:00:00}"
 PP_SETUP_TEST="${PP_SETUP_TEST:-0}"
@@ -165,6 +166,7 @@ while [[ "$#" -gt 0 ]]; do
     --bootstrap-patch-file) PP_BOOTSTRAP_PATCH_FILE="$2"; shift 2 ;;
     --bootstrap-only) PP_BOOTSTRAP_ONLY=1; shift ;;
     --ate-n-sims) PP_ATE_N_SIMS="$2"; ATE_N_SIMS_EXPLICIT=1; shift 2 ;;
+    --skip-control-snapshots) PP_SKIP_CONTROL_SNAPSHOTS="$2"; shift 2 ;;
     --ate-bivariate) PP_ATE_BIVARIATE="$2"; shift 2 ;;
     --ate-contrast) PP_ATE_CONTRAST="$2"; shift 2 ;;
     --ate-scenario) PP_ATE_SCENARIO="$2"; shift 2 ;;
@@ -359,6 +361,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="04:00:00"; fi
       PP_SKIP_FULL_REPORT=1
       PP_CD_ONLY=1
+      if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
       ;;
     *)
       echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary | cd-only)"
@@ -876,6 +879,9 @@ if [ "${PP_CD_ONLY:-0}" = "1" ] || [ "${PP_CD_ONLY:-0}" = "true" ] || [ "${PP_CD
   export OK_CD_ONLY=true
 else
   export OK_CD_ONLY=false
+fi
+if [ -n "${PP_SKIP_CONTROL_SNAPSHOTS:-}" ]; then
+  export OK_SKIP_CONTROL_SNAPSHOTS="$PP_SKIP_CONTROL_SNAPSHOTS"
 fi
 if [ "$PP_RUN_SENSITIVITY" = "1" ] || [ "$PP_RUN_SENSITIVITY" = "true" ] || [ "$PP_RUN_SENSITIVITY" = "yes" ]; then
   export OK_RUN_SENSITIVITY=true

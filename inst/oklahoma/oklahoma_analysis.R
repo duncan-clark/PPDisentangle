@@ -287,6 +287,12 @@ AB_ONLY <- tolower(trimws(Sys.getenv("OK_AB_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
 SKIP_ATE <- tolower(trimws(Sys.getenv("OK_SKIP_ATE", "false"))) %in%
   c("1", "true", "yes", "y")
+# Diagnostic control snapshots do not initialize SEM. Skip them in C/D-only
+# by default; set OK_SKIP_CONTROL_SNAPSHOTS=0 to keep them.
+SKIP_CONTROL_SNAPSHOTS <- tolower(trimws(Sys.getenv(
+  "OK_SKIP_CONTROL_SNAPSHOTS",
+  if (isTRUE(CD_ONLY)) "true" else "false"
+))) %in% c("1", "true", "yes", "y")
 if (isTRUE(AB_ONLY) && isTRUE(CD_ONLY)) {
   stop("OK_AB_ONLY and OK_CD_ONLY are mutually exclusive.")
 }
@@ -390,18 +396,19 @@ if (!is.finite(ETAS_BRANCHING_MAX) || is.na(ETAS_BRANCHING_MAX) ||
     ETAS_BRANCHING_MAX <= 0 || ETAS_BRANCHING_MAX >= 1) {
   ETAS_BRANCHING_MAX <- 0.98
 }
-# Oklahoma uses the normalized ETAS kernels (p > 1, q > 1) and controls
-# cascade stability through the fitted GR branching ratio/spectral radius.
-# Finite first-moment restrictions p > 2 and q > 1.5 are not imposed.
+# Finite t_trunc renormalizes Omori, so p > 0 is admissible. q > 1 remains
+# required for the infinite-plane spatial kernel. Cascade stability is the
+# fitted GR branching ratio / spectral radius (cap 0.98). Finite first-moment
+# restrictions p > 2 and q > 1.5 are not imposed.
 ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS <- FALSE
 ETAS_P_LOWER_BOUND <- suppressWarnings(as.numeric(Sys.getenv(
-  "OK_ETAS_P_LOWER_BOUND", "1"
+  "OK_ETAS_P_LOWER_BOUND", "0"
 )))
 ETAS_Q_LOWER_BOUND <- suppressWarnings(as.numeric(Sys.getenv(
   "OK_ETAS_Q_LOWER_BOUND", "1"
 )))
-if (!is.finite(ETAS_P_LOWER_BOUND) || ETAS_P_LOWER_BOUND < 1) {
-  ETAS_P_LOWER_BOUND <- 1
+if (!is.finite(ETAS_P_LOWER_BOUND) || ETAS_P_LOWER_BOUND < 0) {
+  ETAS_P_LOWER_BOUND <- 0
 }
 if (!is.finite(ETAS_Q_LOWER_BOUND) || ETAS_Q_LOWER_BOUND < 1) {
   ETAS_Q_LOWER_BOUND <- 1
@@ -859,6 +866,7 @@ cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
 cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("AB-only scope (skip C/D + univ): %s\n", if (isTRUE(AB_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("Skip ATE evaluation: %s\n", if (isTRUE(SKIP_ATE)) "TRUE" else "FALSE"))
+cat(sprintf("Skip control snapshots: %s\n", if (isTRUE(SKIP_CONTROL_SNAPSHOTS)) "TRUE" else "FALSE"))
 
 analysis_start_time <- Sys.time()
 analysis_start_elapsed <- proc.time()[["elapsed"]]
@@ -1374,23 +1382,43 @@ pp_all_control_full <- rbind(
   pp_post[, c("x", "y", "t", "mag"), drop = FALSE]
 )
 pp_all_control_full <- pp_all_control_full[order(pp_all_control_full$t), , drop = FALSE]
-control_snapshot_fits <- list(
-  pre50 = fit_control_snapshot(
-    as_snapshot_df(pp_pre_holdout),
-    "50% pretreatment (all control, all regions control)",
-    if (nrow(pp_pre_holdout) > 0) max(pp_pre_holdout$t, na.rm = TRUE) else NA_real_
-  ),
-  tstar = fit_control_snapshot(
-    as_snapshot_df(pp_pre_all),
-    "Treatment time (all control, all regions control)",
-    0
-  ),
-  end = fit_control_snapshot(
-    as_snapshot_df(pp_all_control_full),
-    "End time (all points treated as control, all regions control)",
-    post_end_days
+skipped_control_snapshot <- function(label) {
+  list(
+    label = label,
+    n_events = NA_integer_,
+    window_start = NA_real_,
+    window_end = NA_real_,
+    status = "skipped",
+    loglik = NA_real_,
+    params = NULL
   )
-)
+}
+if (isTRUE(SKIP_CONTROL_SNAPSHOTS)) {
+  cat("  Skipping diagnostic control snapshots (not used for SEM init).\n")
+  control_snapshot_fits <- list(
+    pre50 = skipped_control_snapshot("50% pretreatment (all control, all regions control)"),
+    tstar = skipped_control_snapshot("Treatment time (all control, all regions control)"),
+    end = skipped_control_snapshot("End time (all points treated as control, all regions control)")
+  )
+} else {
+  control_snapshot_fits <- list(
+    pre50 = fit_control_snapshot(
+      as_snapshot_df(pp_pre_holdout),
+      "50% pretreatment (all control, all regions control)",
+      if (nrow(pp_pre_holdout) > 0) max(pp_pre_holdout$t, na.rm = TRUE) else NA_real_
+    ),
+    tstar = fit_control_snapshot(
+      as_snapshot_df(pp_pre_all),
+      "Treatment time (all control, all regions control)",
+      0
+    ),
+    end = fit_control_snapshot(
+      as_snapshot_df(pp_all_control_full),
+      "End time (all points treated as control, all regions control)",
+      post_end_days
+    )
+  )
+}
 for (nm in names(control_snapshot_fits)) {
   cs <- control_snapshot_fits[[nm]]
   csp <- cs$params
