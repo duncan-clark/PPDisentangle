@@ -33,11 +33,18 @@ pp_nesi_print_config
 # Tunables (env overrides)
 PP_BOOT_REPS="${PP_BOOT_REPS:-512}"
 PP_CORES="${PP_CORES:-64}"
-PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-12}"
 PP_ATE_N_SIMS="${PP_ATE_N_SIMS:-500}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-2000}"
 PP_TIME="${PP_TIME:-36:00:00}"
 PP_MEM="${PP_MEM:-64G}"
+# RAM-aware outer workers: 2 GB/worker + 8 GB reserve. On the default 64G
+# allocation this is 28 workers (job 8353220 was ~0.85 GB RSS/worker).
+# Override with PP_BOOT_OUTER_CORES; raise PP_MEM to get more workers.
+# shellcheck source=../include/nesi_mem.sh
+source "$PKG_ROOT/inst/include/nesi_mem.sh"
+if [ -z "${PP_BOOT_OUTER_CORES:-}" ]; then
+  PP_BOOT_OUTER_CORES="$(pp_boot_outer_from_mem "$PP_CORES" "$PP_MEM" "${PP_BOOT_WORKER_GB:-2}" "${PP_BOOT_MEM_RESERVE_GB:-8}")"
+fi
 PP_SCENARIO_SUFFIX="${PP_SCENARIO_SUFFIX:-_boot512}"
 # Refresh immutable seed from current remote for_paper.rds (fit params only matter).
 PP_REFRESH_SEED="${PP_REFRESH_SEED:-1}"
@@ -60,7 +67,7 @@ if [ -z "$REMOTE_BRANCH" ]; then
   REMOTE_BRANCH="$(pp_git_current_branch "$PKG_ROOT")"
 fi
 
-echo "Syncing seed + submitting 4 scenario jobs (boot_reps=${PP_BOOT_REPS} suffix=${PP_SCENARIO_SUFFIX}) via ${PP_NESI_SSH} ..."
+echo "Syncing seed + submitting 4 scenario jobs (boot_reps=${PP_BOOT_REPS} cores=${PP_CORES} outer=${PP_BOOT_OUTER_CORES} mem=${PP_MEM} suffix=${PP_SCENARIO_SUFFIX}) via ${PP_NESI_SSH} ..."
 ssh "$PP_NESI_SSH" bash -s -- \
   "$PP_NESI_REMOTE_PKG" \
   "$PP_NESI_REMOTE_OUTPUT" \

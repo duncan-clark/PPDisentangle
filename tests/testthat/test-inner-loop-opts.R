@@ -142,6 +142,17 @@ test_that("SEM verbosity does not change stochastic results", {
   expect_identical(quiet$class_results, loud$class_results)
 })
 
+test_that("inner SEM is seed-deterministic after W-recycle and area hoist", {
+  skip_if_not_installed("spatstat.geom")
+  w <- .make_inner_workload()
+  a <- .run_inner_small(w, seed = 4242)
+  b <- .run_inner_small(w, seed = 4242)
+  expect_equal(a$metrics, b$metrics, tolerance = 1e-12)
+  expect_identical(a$labelling$inferred_process, b$labelling$inferred_process)
+  expect_equal(a$etas_bivariate_params, b$etas_bivariate_params, tolerance = 1e-12)
+  expect_identical(a$class_results, b$class_results)
+})
+
 test_that("cached nncross weights leave proposals bitwise identical", {
   skip_if_not_installed("spatstat.geom")
   w <- .make_inner_workload()

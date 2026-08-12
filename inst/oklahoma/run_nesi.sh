@@ -39,10 +39,10 @@ PP_SEM_PILOT_MIN_MULTS="${PP_SEM_PILOT_MIN_MULTS:-}"
 PP_SEM_PILOT_MAX_MULTS="${PP_SEM_PILOT_MAX_MULTS:-}"
 PP_SEM_PILOT_TEMPS="${PP_SEM_PILOT_TEMPS:-}"
 PP_SEM_WORKER_LOGS="${PP_SEM_WORKER_LOGS:-1}"
-PP_SEM_WORKER_LOG_VERBOSE="${PP_SEM_WORKER_LOG_VERBOSE:-1}"
+PP_SEM_WORKER_LOG_VERBOSE="${PP_SEM_WORKER_LOG_VERBOSE:-0}"
 PP_SEM_WORKER_LOG_SPLIT="${PP_SEM_WORKER_LOG_SPLIT:-0}"
-PP_SEM_TIMING_VERBOSE="${PP_SEM_TIMING_VERBOSE:-1}"
-PP_SEM_PROPOSAL_VERBOSE="${PP_SEM_PROPOSAL_VERBOSE:-1}"
+PP_SEM_TIMING_VERBOSE="${PP_SEM_TIMING_VERBOSE:-0}"
+PP_SEM_PROPOSAL_VERBOSE="${PP_SEM_PROPOSAL_VERBOSE:-0}"
 PP_SIM_PROGRESS_EVERY="${PP_SIM_PROGRESS_EVERY:-10000}"
 PP_SENS_SEM_INNER="${PP_SENS_SEM_INNER:-}"
 PP_BOOT_SEM_INNER="${PP_BOOT_SEM_INNER:-}"
@@ -494,6 +494,21 @@ else
   PKG_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
 source "$PKG_ROOT/inst/include/output_root.sh"
+# shellcheck source=../include/nesi_mem.sh
+source "$PKG_ROOT/inst/include/nesi_mem.sh"
+
+# Cap bootstrap outer workers so they fit in PP_MEM. 2 GB/worker plus 8 GB
+# for the master/OS: 64G → 28 workers (covers ~1.9 GB full-mode spikes;
+# bootstrap-only jobs measured ~0.85 GB). Set PP_BOOT_RAM_CAP=0 to disable.
+if [ "${PP_BOOT_RAM_CAP:-1}" != "0" ] && [ "${PP_BOOT_RAM_CAP:-1}" != "false" ]; then
+  PP_BOOT_WORKER_GB="${PP_BOOT_WORKER_GB:-2}"
+  PP_BOOT_MEM_RESERVE_GB="${PP_BOOT_MEM_RESERVE_GB:-8}"
+  BOOT_RAM_CAP="$(pp_boot_outer_from_mem "$PP_CORES" "$PP_MEM" "$PP_BOOT_WORKER_GB" "$PP_BOOT_MEM_RESERVE_GB")"
+  if [ "$PP_BOOT_OUTER_CORES" -gt "$BOOT_RAM_CAP" ]; then
+    echo "RAM-aware bootstrap outer cap: ${PP_BOOT_OUTER_CORES} -> ${BOOT_RAM_CAP} (${PP_MEM}, ${PP_BOOT_WORKER_GB}G/worker, ${PP_BOOT_MEM_RESERVE_GB}G reserve)"
+    PP_BOOT_OUTER_CORES="$BOOT_RAM_CAP"
+  fi
+fi
 
 # ----------------------------
 # Submit mode
@@ -726,11 +741,51 @@ else
   echo "Skipping runtime dependency bootstrap (set PP_REFRESH_DEPS=1 to recheck)."
 fi
 
-echo "Installing PPDisentangle from source (fresh install)..."
-wait_for_pp_lock_clear "$PP_LOCK_DIR"
-cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
-"$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
-cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
+# Skip a full --preclean rebuild when this git SHA is already installed
+# for this R version. Dirty trees and PP_FORCE_INSTALL=1 always rebuild.
+PP_FORCE_INSTALL="${PP_FORCE_INSTALL:-0}"
+PKG_SHA=""
+PKG_DIRTY=0
+if git -C "$PKG_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  PKG_SHA="$(git -C "$PKG_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  if ! git -C "$PKG_ROOT" diff --quiet --ignore-submodules HEAD 2>/dev/null ||
+     ! git -C "$PKG_ROOT" diff --cached --quiet --ignore-submodules 2>/dev/null; then
+    PKG_DIRTY=1
+  fi
+fi
+R_VER_STAMP="$("$RSCRIPT_BIN" -e 'cat(R.version$major, ".", R.version$minor, sep="")' 2>/dev/null || echo unknown)"
+INSTALL_STAMP=""
+if [ -n "$PKG_SHA" ] && [ "$PKG_DIRTY" -eq 0 ]; then
+  INSTALL_STAMP="${SHARED_R_LIBS_USER}/.ppdis_pkg_install_${PKG_SHA}_${R_VER_STAMP}"
+fi
+NEED_INSTALL=1
+if [ "$PP_FORCE_INSTALL" = "1" ] || [ "$PP_FORCE_INSTALL" = "true" ] || [ "$PP_FORCE_INSTALL" = "yes" ]; then
+  echo "Forcing PPDisentangle rebuild (PP_FORCE_INSTALL=1)."
+elif [ -n "$INSTALL_STAMP" ] && [ -f "$INSTALL_STAMP" ] && [ -d "${SHARED_R_LIBS_USER}/PPDisentangle" ]; then
+  NEED_INSTALL=0
+  echo "Skipping PPDisentangle install; SHA ${PKG_SHA} already built for R ${R_VER_STAMP}."
+  echo "  stamp: $INSTALL_STAMP"
+  echo "  set PP_FORCE_INSTALL=1 to rebuild."
+elif [ "$PKG_DIRTY" -eq 1 ]; then
+  echo "Installing PPDisentangle from source (dirty tree; SHA ${PKG_SHA:-unknown})..."
+else
+  echo "Installing PPDisentangle from source (fresh install)..."
+fi
+if [ "$NEED_INSTALL" -eq 1 ]; then
+  wait_for_pp_lock_clear "$PP_LOCK_DIR"
+  cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
+  if [ -n "$INSTALL_STAMP" ] && [ -f "$INSTALL_STAMP" ] && [ -d "${SHARED_R_LIBS_USER}/PPDisentangle" ]; then
+    echo "Skipping PPDisentangle install after lock wait; SHA ${PKG_SHA} already built."
+  else
+    "$R_BIN" CMD INSTALL --preclean --no-multiarch "$PKG_ROOT"
+    rm -f "${SHARED_R_LIBS_USER}"/.ppdis_pkg_install_*
+    if [ -n "$INSTALL_STAMP" ]; then
+      touch "$INSTALL_STAMP"
+      echo "Recorded install stamp: $INSTALL_STAMP"
+    fi
+  fi
+  cleanup_pp_lock_if_safe "$PP_LOCK_DIR"
+fi
 echo ""
 
 # Oklahoma run config.

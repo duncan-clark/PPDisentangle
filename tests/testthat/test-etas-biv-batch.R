@@ -51,6 +51,46 @@ test_that("batched bivariate ETAS loglik matches per-labelling calls", {
   expect_equal(batch, single, tolerance = 1e-9)
 })
 
+test_that("shared n x 1 W masks match replicated n x K masks", {
+  skip_if_not_installed("spatstat.geom")
+  set.seed(20260812)
+  n <- 40
+  t <- sort(runif(n, 0, 20))
+  x <- runif(n, 0, 10)
+  y <- runif(n, 0, 10)
+  mag <- 2.5 + rexp(n, 1.5)
+  windowT <- c(0, 20)
+  ctrl <- spatstat.geom::owin(c(0, 5), c(0, 10))
+  treat <- spatstat.geom::owin(c(5, 10), c(0, 10))
+  W0 <- as.numeric(!spatstat.geom::inside.owin(x, y, treat))
+  W1 <- as.numeric(!spatstat.geom::inside.owin(x, y, ctrl))
+  params <- c(
+    mu_0 = 0.8, mu_1 = 0.6,
+    A_00 = 0.2, alpha_m_00 = 0.5,
+    A_11 = 0.25, alpha_m_11 = 0.6,
+    A_01 = 0.02, alpha_m_01 = 0.4,
+    A_10 = 0.02, alpha_m_10 = 0.4,
+    c = 0.5, p = 2.1, D = 1.0, gamma = 0, q = 1.6
+  )
+  K <- 5L
+  pid_mat <- matrix(rbinom(n * K, 1, 0.5), n, K)
+  args <- list(
+    params = params, t = t, x = x, y = y, mag = mag,
+    process_ids = pid_mat,
+    areaS_0 = spatstat.geom::area(ctrl),
+    areaS_1 = spatstat.geom::area(treat),
+    windowT = windowT, t_already_shifted = FALSE,
+    m0 = 2.5, beta_gr = 1.5, max_branching_radius = 0.98, t_trunc = 5
+  )
+  replicated <- do.call(loglik_etas_bivariate_batch, c(args, list(
+    W0s = matrix(W0, n, K), W1s = matrix(W1, n, K)
+  )))
+  shared <- do.call(loglik_etas_bivariate_batch, c(args, list(
+    W0s = matrix(W0, n, 1L), W1s = matrix(W1, n, 1L)
+  )))
+  expect_equal(shared, replicated, tolerance = 1e-12)
+})
+
 test_that("threaded K=1 batch likelihood matches scalar likelihood", {
   skip_if_not_installed("spatstat.geom")
   set.seed(20260811)
@@ -129,4 +169,56 @@ test_that("closed-form bivariate spectral radius matches eigen", {
     max(Re(eigen(M, only.values = TRUE)$values)),
     tolerance = 1e-12
   )
+})
+
+test_that("frozen-geometry precomp matches the full loglik path", {
+  skip_if_not_installed("spatstat.geom")
+  set.seed(20260812)
+  n <- 40
+  t <- sort(runif(n, 0, 20))
+  x <- runif(n, 0, 10)
+  y <- runif(n, 0, 10)
+  mag <- 2.5 + rexp(n, 1.5)
+  windowT <- c(0, 20)
+  windowS <- spatstat.geom::owin(c(0, 10), c(0, 10))
+  ctrl <- spatstat.geom::owin(c(0, 5), c(0, 10))
+  treat <- spatstat.geom::owin(c(5, 10), c(0, 10))
+  W0 <- as.numeric(!spatstat.geom::inside.owin(x, y, treat))
+  W1 <- as.numeric(!spatstat.geom::inside.owin(x, y, ctrl))
+  area0 <- spatstat.geom::area(ctrl)
+  area1 <- spatstat.geom::area(treat)
+  pid <- rbinom(n, 1, 0.5)
+  realiz <- data.frame(
+    x = x, y = y, t = t, mag = mag,
+    inferred_process = ifelse(pid == 1L, "treated", "control")
+  )
+  params <- c(
+    mu_0 = 0.8, mu_1 = 0.6,
+    A_00 = 0.2, alpha_m_00 = 0.5,
+    A_11 = 0.25, alpha_m_11 = 0.6,
+    A_01 = 0.02, alpha_m_01 = 0.4,
+    A_10 = 0.02, alpha_m_10 = 0.4,
+    c = 0.5, p = 2.1, D = 1.0, gamma = 0, q = 1.6
+  )
+  pre_slow <- list(W_0 = W0, W_1 = W1, areaS_0 = area0, areaS_1 = area1)
+  cb_mass <- (area0 + area1) / area0
+  pre_fast <- c(
+    pre_slow,
+    list(
+      process_id = as.integer(pid),
+      t_shifted = t - windowT[1],
+      x = x, y = y, mag = mag,
+      t_max = windowT[2] - windowT[1],
+      t_expo_0 = PPDisentangle:::.etas_bg_exposure_control(windowT, NULL, cb_mass),
+      t_expo_1 = PPDisentangle:::.etas_bg_exposure(windowT, NULL)
+    )
+  )
+  ll_args <- list(
+    params = params, realiz = realiz, windowT = windowT, windowS = windowS,
+    control_state_space = ctrl, treated_state_space = treat,
+    m0 = 2.5, beta_gr = 1.5, max_branching_radius = 0.98, t_trunc = 5
+  )
+  ll_slow <- do.call(loglik_etas_bivariate, c(ll_args, list(precomp = pre_slow)))
+  ll_fast <- do.call(loglik_etas_bivariate, c(ll_args, list(precomp = pre_fast)))
+  expect_equal(ll_fast, ll_slow, tolerance = 1e-12)
 })

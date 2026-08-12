@@ -163,3 +163,74 @@ test_that("partitioned ETAS generators use tile union during branching", {
   expect_equal(nrow(univ), 0L)
   expect_equal(nrow(biv), 0L)
 })
+
+test_that("bivariate ETAS trims filtration that cannot hit the window", {
+  skip_if_not_installed("spatstat.geom")
+  windowT <- c(0, 2)
+  windowS <- spatstat.geom::owin(c(0, 10), c(0, 10))
+  params <- c(
+    mu_0 = 0, mu_1 = 0,
+    A_00 = 0.6, alpha_m_00 = 0.2,
+    A_11 = 0, alpha_m_11 = 0.2,
+    A_01 = 0, alpha_m_01 = 0.2,
+    A_10 = 0, alpha_m_10 = 0.2,
+    c = 0.05, p = 2.2, D = 0.8, gamma = 0, q = 2.2
+  )
+  t_trunc <- 1
+  filtration <- data.frame(
+    x = c(5, 5, 5), y = c(5, 5, 5),
+    t = c(-10, -0.4, -0.1),
+    mag = c(3, 3, 3),
+    process_id = c(0L, 0L, 0L)
+  )
+  common <- list(
+    params = params, windowT = windowT, windowS = windowS,
+    state_spaces = list(control = windowS, treated = NULL),
+    m0 = 2.5, beta_gr = 2.3, t_trunc = t_trunc
+  )
+  keep <- filtration$t >= (windowT[1] - t_trunc)
+
+  set.seed(20260812)
+  internal <- do.call(sim_etas_bivariate, c(common, list(filtration = filtration)))
+  set.seed(20260812)
+  pretrimmed <- do.call(
+    sim_etas_bivariate,
+    c(common, list(filtration = filtration[keep, , drop = FALSE]))
+  )
+  expect_equal(internal, pretrimmed)
+
+  old_only <- filtration[!keep, , drop = FALSE]
+  set.seed(20260812)
+  from_old <- do.call(sim_etas_bivariate, c(common, list(filtration = old_only)))
+  expect_equal(nrow(from_old), 0L)
+})
+
+test_that("bivariate ETAS keeps old filtration when t_trunc is unbounded", {
+  skip_if_not_installed("spatstat.geom")
+  windowT <- c(0, 20)
+  windowS <- spatstat.geom::owin(c(0, 10), c(0, 10))
+  params <- c(
+    mu_0 = 0, mu_1 = 0,
+    A_00 = 0.7, alpha_m_00 = 0.2,
+    A_11 = 0, alpha_m_11 = 0.2,
+    A_01 = 0, alpha_m_01 = 0.2,
+    A_10 = 0, alpha_m_10 = 0.2,
+    c = 0.1, p = 1.2, D = 0.8, gamma = 0, q = 2.2
+  )
+  old <- data.frame(
+    x = rep(5, 80), y = rep(5, 80),
+    t = rep(-8, 80), mag = rep(3, 80),
+    process_id = rep(0L, 80)
+  )
+  common <- list(
+    params = params, windowT = windowT, windowS = windowS,
+    state_spaces = list(control = windowS, treated = NULL),
+    m0 = 2.5, beta_gr = 2.3, filtration = old
+  )
+  set.seed(20260812)
+  truncated <- do.call(sim_etas_bivariate, c(common, list(t_trunc = 1)))
+  set.seed(20260812)
+  unbounded <- do.call(sim_etas_bivariate, c(common, list(t_trunc = NULL)))
+  expect_equal(nrow(truncated), 0L)
+  expect_gt(nrow(unbounded), 0L)
+})

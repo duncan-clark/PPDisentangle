@@ -134,6 +134,10 @@ BETA_GR_SOURCE <- if (is.finite(BETA_GR)) "env:OK_BETA_GR" else "pending_pre_con
 CRS_PROJ   <- 5070
 
 VANILLA_MAXIT <- if (QUICK_CHECK) 120 else if (TEST_MODE) 500 else 5000
+env_vanilla_maxit <- suppressWarnings(as.integer(Sys.getenv("OK_VANILLA_MAXIT", "")))
+if (!is.na(env_vanilla_maxit) && env_vanilla_maxit > 0L) {
+  VANILLA_MAXIT <- env_vanilla_maxit
+}
 # Spatial scale is magnitude-independent: d(m) = D (gamma fixed at 0 in all fits).
 GAMMA_FIXED <- 0
 # Interior branching-ratio starts (~0.5-0.85 after GR scaling) to avoid
@@ -279,6 +283,13 @@ T_TRUNC_SENS_ONLY <- tolower(trimws(Sys.getenv("OK_T_TRUNC_SENS_ONLY", "false"))
 # True C/D-only scope: skip homogeneous A/B and univariate G–J fits/ATEs.
 CD_ONLY <- tolower(trimws(Sys.getenv("OK_CD_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+AB_ONLY <- tolower(trimws(Sys.getenv("OK_AB_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
+SKIP_ATE <- tolower(trimws(Sys.getenv("OK_SKIP_ATE", "false"))) %in%
+  c("1", "true", "yes", "y")
+if (isTRUE(AB_ONLY) && isTRUE(CD_ONLY)) {
+  stop("OK_AB_ONLY and OK_CD_ONLY are mutually exclusive.")
+}
 SMOKE_SEM_D_SEEDS <- suppressWarnings(as.integer(Sys.getenv("OK_SMOKE_SEM_D_SEEDS", "0")))
 if (!is.finite(SMOKE_SEM_D_SEEDS) || is.na(SMOKE_SEM_D_SEEDS) || SMOKE_SEM_D_SEEDS < 0L) {
   SMOKE_SEM_D_SEEDS <- 0L
@@ -297,7 +308,7 @@ RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 SEM_WORKER_LOGS <- tolower(Sys.getenv("OK_SEM_WORKER_LOGS", "true")) %in% c("1", "true", "yes", "y")
-SEM_WORKER_LOG_VERBOSE <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_VERBOSE", if (SEM_WORKER_LOGS) "true" else "false")) %in% c("1", "true", "yes", "y")
+SEM_WORKER_LOG_VERBOSE <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 SEM_WORKER_LOG_SPLIT <- tolower(Sys.getenv("OK_SEM_WORKER_LOG_SPLIT", "false")) %in% c("1", "true", "yes", "y")
 
 STRUCT_DEFAULTS <- list(c = 0.05, p = 1.2, D = 5.0, gamma = GAMMA_FIXED, q = 1.5)
@@ -846,6 +857,8 @@ cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-ma
             SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
 cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
 cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
+cat(sprintf("AB-only scope (skip C/D + univ): %s\n", if (isTRUE(AB_ONLY)) "TRUE" else "FALSE"))
+cat(sprintf("Skip ATE evaluation: %s\n", if (isTRUE(SKIP_ATE)) "TRUE" else "FALSE"))
 
 analysis_start_time <- Sys.time()
 analysis_start_elapsed <- proc.time()[["elapsed"]]
@@ -2598,9 +2611,13 @@ if (!isTRUE(CD_ONLY)) {
 } else {
   cat("  CD_ONLY: skipping homogeneous Fits A/B; dispatching C/D only.\n")
 }
-for (vid in kde_variant_ids) {
-  fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "C_kde_naive", variant_id = vid)
-  fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "D_kde_sem", variant_id = vid)
+if (!isTRUE(AB_ONLY)) {
+  for (vid in kde_variant_ids) {
+    fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "C_kde_naive", variant_id = vid)
+    fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "D_kde_sem", variant_id = vid)
+  }
+} else {
+  cat("  AB_ONLY: skipping KDE Fits C/D; dispatching homogeneous A/B only.\n")
 }
 run_all_fit_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
@@ -2852,8 +2869,9 @@ H_params <- if (!is.null(kde_variant_fits$F$productivity_free) &&
 #   Public letters I/J: independent margins, homogeneous background (internal fitK/semL)
 # ============================================================================
 cat("\n--- Step 4G-4J: Univariate ETAS dispatch (public G/H univ+KDE, I/J univ homog) ---\n")
-if (isTRUE(CD_ONLY)) {
-  cat("  CD_ONLY: skipping univariate Fits G–J (I/J/K/L jobs).\n")
+if (isTRUE(CD_ONLY) || isTRUE(AB_ONLY)) {
+  cat(sprintf("  %s: skipping univariate Fits G–J (I/J/K/L jobs).\n",
+              if (isTRUE(AB_ONLY)) "AB_ONLY" else "CD_ONLY"))
   fitI <- NULL
   semJ <- NULL
   fitK <- NULL
@@ -3688,6 +3706,10 @@ ate_with_both_contrasts <- function(compute_one) {
 }
 ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
                                 bg_lookup = NULL) {
+  if (isTRUE(SKIP_ATE)) {
+    cat(sprintf("    SKIP_ATE: not evaluating ATE for %s.\n", label))
+    return(NULL)
+  }
   if (is.null(biv_params) || is.null(marg)) {
     cat(sprintf("    Skipping ATE for %s: fitted parameters are NULL.\n", label))
     return(NULL)
@@ -3726,7 +3748,7 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
   })
 }
 ate_univ_both <- function(marg, observed_data, label, bg_lookup = NULL) {
-  if (is.null(marg)) return(NULL)
+  if (isTRUE(SKIP_ATE) || is.null(marg)) return(NULL)
   ate_with_both_contrasts(function(contrast) {
     ate_estim_fast(
       marg$ctrl, marg$treat, observed_data, label,

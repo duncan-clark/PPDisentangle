@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include "omori_kernel.h"
 using namespace Rcpp;
 
 //' ETAS log-likelihood for an inhomogeneous spatio-temporal point process
@@ -89,15 +90,8 @@ double etas_loglik_inhom_cpp(NumericVector t,
   // G(t_trunc) = 1 - (1 + t_trunc / c)^{-(p-1)}
   // When not truncating, temporal_norm = 1 (the Omori-Utsu density already
   // integrates to 1 over [0, inf) for p > 1).
-  double temporal_norm = do_trunc ?
-    (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
-  if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-
-  // Pre-factor that is constant across all (i, j) pairs:
-  //   A * (p-1) * (q-1) / (pi * c * temporal_norm)
-  // The magnitude-dependent terms kappa(m_j)/d(m_j) are folded into the
-  // per-parent factor pk[j] below.
-  const double base_const = A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  const double omori_pref = omori_time_prefactor(p, cc, t_trunc, do_trunc);
+  const double base_const = A * omori_pref * (q - 1.0) / pi_val;
   const double inv_cc = 1.0 / cc;
 
   const double* pt = t.begin();
@@ -160,7 +154,7 @@ double etas_loglik_inhom_cpp(NumericVector t,
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
     triggering_integral += comp_kappa[i] *
-      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
+      omori_time_cdf(p, cc, horizon, t_trunc, do_trunc);
   }
 
   loglik -= (mu * t_max + triggering_integral);
@@ -211,16 +205,8 @@ double etas_loglik_inhom_filtration_cpp(NumericVector post_t,
   const double mu_base = mu / areaS;
   const double inv_cc = 1.0 / cc;
 
-  auto temporal_cdf = [&](double dt) {
-    if (dt <= 0.0) return 0.0;
-    return 1.0 - std::pow(1.0 + dt * inv_cc, -(p - 1.0));
-  };
-
-  double temporal_norm = do_trunc ? temporal_cdf(t_trunc) : 1.0;
-  if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-
-  const double base_const =
-    A * (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  const double omori_pref = omori_time_prefactor(p, cc, t_trunc, do_trunc);
+  const double base_const = A * omori_pref * (q - 1.0) / pi_val;
 
   const double* ppt = parent_t.begin();
   const double* ppx = parent_x.begin();
@@ -273,8 +259,8 @@ double etas_loglik_inhom_filtration_cpp(NumericVector post_t,
     }
     if (integration_end <= integration_start) continue;
     triggering_integral += compensator_parent[j] *
-      (temporal_cdf(integration_end - parent_time) -
-       temporal_cdf(integration_start - parent_time)) / temporal_norm;
+      (omori_time_cdf(p, cc, integration_end - parent_time, t_trunc, do_trunc) -
+       omori_time_cdf(p, cc, integration_start - parent_time, t_trunc, do_trunc));
   }
 
   loglik -= mu * (t_end - t_start) + triggering_integral;

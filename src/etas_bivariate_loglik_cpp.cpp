@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <cmath>
 #include <vector>
+#include "omori_kernel.h"
 using namespace Rcpp;
 
 //' Bivariate ETAS log-likelihood with cross-excitation
@@ -81,11 +82,8 @@ double etas_bivariate_loglik_cpp(
   const double mu_base_0 = mu_0 / areaS_0;
   const double mu_base_1 = mu_1 / areaS_1;
 
-  double temporal_norm = do_trunc ?
-    (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
-  if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-
-  const double base_const = (p - 1.0) * (q - 1.0) / (pi_val * cc * temporal_norm);
+  const double omori_pref = omori_time_prefactor(p, cc, t_trunc, do_trunc);
+  const double base_const = omori_pref * (q - 1.0) / pi_val;
 
   // Kernel matrix: A_mat[child][parent], alpha_mat[child][parent]
   double A_mat[2][2], alpha_mat[2][2];
@@ -174,8 +172,7 @@ double etas_bivariate_loglik_cpp(
     double horizon = t_max - pt[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     if (horizon <= 0.0) continue;
-    const double G_h =
-      (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
+    const double G_h = omori_time_cdf(p, cc, horizon, t_trunc, do_trunc);
     if (kap0[j] >= 1e-20) comp_trig += kap0[j] * G_h;
     if (kap1[j] >= 1e-20) comp_trig += kap1[j] * G_h;
   }

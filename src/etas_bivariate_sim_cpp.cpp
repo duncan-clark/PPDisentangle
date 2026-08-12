@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <string>
+#include "omori_kernel.h"
 using namespace Rcpp;
 
 //' Simulate bivariate ETAS offspring via BFS branching
@@ -66,10 +67,6 @@ List sim_etas_bivariate_children_cpp(
   }
   int next_progress = progress_every;
 
-  double cdf_max = do_trunc ?
-    (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
-
-  double pm1_inv = 1.0 / (p - 1.0);
   double qm1_inv = 1.0 / (q - 1.0);
   const double two_pi = 2.0 * 3.14159265358979323846;
 
@@ -123,8 +120,8 @@ List sim_etas_bivariate_children_cpp(
       if (n_kids == 0) continue;
 
       for (int k = 0; k < n_kids; ++k) {
-        double u_t = R::runif(0.0, 1.0) * cdf_max;
-        double dt = cc * (std::pow(1.0 - u_t, -pm1_inv) - 1.0);
+        double u_t = R::runif(0.0, 1.0);
+        double dt = omori_sample_delay(p, cc, t_trunc, do_trunc, u_t);
         double new_t = pt + dt;
         if (new_t > t_max || new_t < t_min) continue;
 

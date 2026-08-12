@@ -509,7 +509,7 @@ adaptive_SEM <- function(pp_data,
             params = biv_par,
             t = geom0$t - biv_wT[1], x = geom0$x, y = geom0$y, mag = geom0$mag,
             process_ids = pid_mat,
-            W0s = matrix(W0, nn, K_w), W1s = matrix(W1, nn, K_w),
+            W0s = matrix(W0, nn, 1L), W1s = matrix(W1, nn, 1L),
             areaS_0 = aS0, areaS_1 = aS1,
             t_max = biv_wT[2] - biv_wT[1],
             windowT = biv_wT,
@@ -942,8 +942,8 @@ adaptive_SEM <- function(pp_data,
           as.integer(proc_col)
         }
       }
-      W0_mat <- matrix(W0_shared, nn, K_keep)
-      W1_mat <- matrix(W1_shared, nn, K_keep)
+      W0_mat <- matrix(W0_shared, nn, 1L)
+      W1_mat <- matrix(W1_shared, nn, 1L)
       tt_shift <- geom0$t - biv_wT[1]
       t_max_biv <- biv_wT[2] - biv_wT[1]
       biv_ll_extra_names <- intersect(

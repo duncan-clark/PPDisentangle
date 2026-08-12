@@ -268,8 +268,8 @@
 #' @param treated_state_space owin for the treated region.
 #' @param background_rate_var Optional column of \code{realiz} with a
 #'   mean-one spatial background weight (e.g. KDE), multiplied into both
-#'   background weights. Skipped when a \code{precomp} is supplied via
-#'   \code{...} (precomputed weights must already include it).
+#'   background weights. Skipped when a \code{precomp} is supplied
+#'   (precomputed weights must already include it).
 #' @param treated_background_zero_before Optional activation time of the
 #'   treated background. Event-side weights before this time are zeroed
 #'   (baked into \code{precomp} weights when one is supplied) and the
@@ -292,8 +292,14 @@
 #'   \code{background_rate_var} (e.g. a KDE) must pass the KDE mass ratio
 #'   \code{integral(full) / integral(control region)}.
 #' @param t_trunc Temporal truncation (NULL = none).
-#' @param ... Optionally \code{precomp} (list with \code{W_0}, \code{W_1},
-#'   \code{areaS_0}, \code{areaS_1}, and optionally \code{process_id}).
+#' @param precomp Optional list with \code{W_0}, \code{W_1}, \code{areaS_0},
+#'   \code{areaS_1}, and optionally \code{process_id}. If \code{t_shifted}
+#'   is supplied and matches \code{nrow(realiz)}, geometry checks (sort,
+#'   time-window subset, \code{inside.owin}) are skipped and \code{t_shifted}
+#'   is passed to the C++ kernel. Optional \code{x}, \code{y}, \code{mag},
+#'   \code{t_expo_0}, \code{t_expo_1}, \code{t_max} hoist further per-eval work.
+#' @param ... Ignored (kept so older callers can still pass \code{precomp}
+#'   through \code{...}).
 #' @return Scalar log-likelihood.
 #' @export
 loglik_etas_bivariate <- function(params,
@@ -331,6 +337,7 @@ loglik_etas_bivariate <- function(params,
                                   stability_barrier_weight = 0,
                                   stability_barrier_power = 4,
                                   t_trunc = NULL,
+                                  precomp = NULL,
                                   ...) {
   if (is.list(params) && !is.null(names(params))) {
     pv <- unlist(params)
@@ -358,28 +365,50 @@ loglik_etas_bivariate <- function(params,
   core_par <- c(mu_0, mu_1, A_00, A_11, A_01, A_10, cc, p, D, gamma_p, q)
   if (any(!is.finite(core_par))) return(-1e15)
   if (min(mu_0, mu_1, A_00, A_11, cc, D) < 0 ||
-      A_01 < 0 || A_10 < 0 || p <= 1 || q <= 1 || gamma_p < 0) {
+      A_01 < 0 || A_10 < 0 || q <= 1 || gamma_p < 0) {
     return(-1e15)
   }
+  if (!.etas_omori_p_admissible(p, t_trunc)) return(-1e15)
   p_min <- suppressWarnings(as.numeric(p_lower_bound))
   if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(q_lower_bound))
   if (length(q_min) != 1L || !is.finite(q_min) || is.na(q_min)) q_min <- 1.501
   if (isTRUE(enforce_finite_trigger_moments) && (p <= p_min || q <= q_min)) return(-1e15)
 
-  if (!all(is.finite(realiz$t)) || !all(is.finite(realiz$x)) || !all(is.finite(realiz$y)) || !all(is.finite(realiz$mag))) {
-    return(-1e15)
+  if (is.null(precomp)) {
+    dots_pre <- list(...)
+    if (!is.null(dots_pre$precomp)) precomp <- dots_pre$precomp
   }
-  if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
-  t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
-  if (!all(t_idx)) realiz <- realiz[t_idx, ]
-  if (!all(spatstat.geom::inside.owin(
-    realiz$x, realiz$y, spatstat.geom::as.owin(windowS)
-  ))) {
-    return(-1e15)
+  t_shifted <- if (!is.null(precomp)) precomp$t_shifted else NULL
+  n_realiz <- nrow(realiz)
+  frozen_geom <- !is.null(t_shifted) && length(t_shifted) == n_realiz && n_realiz > 0L
+
+  if (!frozen_geom) {
+    if (!all(is.finite(realiz$t)) || !all(is.finite(realiz$x)) ||
+        !all(is.finite(realiz$y)) || !all(is.finite(realiz$mag))) {
+      return(-1e15)
+    }
+    if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
+    t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
+    if (!all(t_idx)) realiz <- realiz[t_idx, ]
+    if (!all(spatstat.geom::inside.owin(
+      realiz$x, realiz$y, spatstat.geom::as.owin(windowS)
+    ))) {
+      return(-1e15)
+    }
+    n <- nrow(realiz)
+    if (n == 0) return(-1e15)
+    tt <- realiz$t - windowT[1]
+    xx <- realiz$x
+    yy <- realiz$y
+    mm <- realiz$mag
+  } else {
+    n <- n_realiz
+    tt <- t_shifted
+    xx <- if (!is.null(precomp$x) && length(precomp$x) == n) precomp$x else realiz$x
+    yy <- if (!is.null(precomp$y) && length(precomp$y) == n) precomp$y else realiz$y
+    mm <- if (!is.null(precomp$mag) && length(precomp$mag) == n) precomp$mag else realiz$mag
   }
-  n <- nrow(realiz)
-  if (n == 0) return(-1e15)
 
   if (is.null(m0)) m0 <- min(realiz$mag)
   beta_eff <- .etas_resolve_beta_gr(beta_gr, realiz = realiz, m0 = m0)
@@ -401,8 +430,6 @@ loglik_etas_bivariate <- function(params,
   }
 
   # Build process_id vector (0 = control, 1 = treated)
-  dots <- list(...)
-  precomp <- dots$precomp
   if (!is.null(precomp) && !is.null(precomp$process_id) && length(precomp$process_id) == n) {
     process_id <- as.integer(precomp$process_id)
   } else if ("inferred_process" %in% names(realiz)) {
@@ -491,29 +518,36 @@ loglik_etas_bivariate <- function(params,
     }
   }
 
-  tval <- windowT[2] - windowT[1]
+  tval <- if (!is.null(precomp) && !is.null(precomp$t_max) &&
+              is.finite(precomp$t_max)) {
+    precomp$t_max
+  } else {
+    windowT[2] - windowT[1]
+  }
   # Compensator exposure: the treated background is only on from the cutoff
   # onward, so mu_1 must be charged over that span only (never over the full
-  # window). This applies whether or not precomp is supplied, so callers with
-  # precomp must still pass treated_background_zero_before.
-  t_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
-  # Control-background exposure: before its policy cutoff the control
-  # background covers the whole domain, so each pre-cutoff day charges
-  # mu_0 * mass_ratio (density-continuous convention). Also applies with a
-  # precomp, so callers must pass the cutoff/mass ratio alongside it.
-  cb_mass <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
-  if (length(cb_mass) != 1L || !is.finite(cb_mass) || is.na(cb_mass) || cb_mass <= 0) {
-    cb_mass <- (areaS_0 + areaS_1) / areaS_0
+  # window). Callers may hoist the two exposures onto precomp when the
+  # window and policy cutoffs are frozen (SEM M-step / MLE).
+  if (!is.null(precomp) && !is.null(precomp$t_expo_0) && !is.null(precomp$t_expo_1) &&
+      is.finite(precomp$t_expo_0) && is.finite(precomp$t_expo_1)) {
+    t_expo_0 <- precomp$t_expo_0
+    t_expo_1 <- precomp$t_expo_1
+  } else {
+    t_expo_1 <- .etas_bg_exposure(windowT, treated_background_zero_before)
+    cb_mass <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
+    if (length(cb_mass) != 1L || !is.finite(cb_mass) || is.na(cb_mass) || cb_mass <= 0) {
+      cb_mass <- (areaS_0 + areaS_1) / areaS_0
+    }
+    t_expo_0 <- .etas_bg_exposure_control(
+      windowT, control_background_everywhere_before, cb_mass
+    )
   }
-  t_expo_0 <- .etas_bg_exposure_control(
-    windowT, control_background_everywhere_before, cb_mass
-  )
 
   loglik <- etas_bivariate_loglik_cpp(
-    t         = realiz$t - windowT[1],
-    x         = realiz$x,
-    y         = realiz$y,
-    mag       = realiz$mag,
+    t         = tt,
+    x         = xx,
+    y         = yy,
+    mag       = mm,
     process_id = as.integer(process_id),
     W_val_0   = W_0,
     W_val_1   = W_1,
@@ -670,7 +704,8 @@ loglik_etas_bivariate <- function(params,
 #' @param t,x,y,mag Shared event geometry (t already shifted so window starts at 0,
 #'   or pass \code{windowT} and unshifted times).
 #' @param process_ids Integer matrix \code{n x K} (0/1).
-#' @param W0s,W1s Numeric matrices \code{n x K} of background weights.
+#' @param W0s,W1s Numeric matrices \code{n x K} of background weights, or
+#'   \code{n x 1} to recycle the same mask across labellings.
 #' @param areaS_0,areaS_1 Active areas.
 #' @param t_max Window length. If NULL, uses \code{diff(windowT)}.
 #' @param windowT Optional \code{c(start,end)}; used when \code{t_max} is NULL,
@@ -747,9 +782,10 @@ loglik_etas_bivariate_batch <- function(params,
   core_par <- c(mu_0, mu_1, A_00, A_11, A_01, A_10, cc, p, D, gamma_p, q)
   if (any(!is.finite(core_par))) return(reject)
   if (min(mu_0, mu_1, A_00, A_11, cc, D) < 0 ||
-      A_01 < 0 || A_10 < 0 || p <= 1 || q <= 1 || gamma_p < 0) {
+      A_01 < 0 || A_10 < 0 || q <= 1 || gamma_p < 0) {
     return(reject)
   }
+  if (!.etas_omori_p_admissible(p, t_trunc)) return(reject)
   p_min <- suppressWarnings(as.numeric(p_lower_bound))
   if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(q_lower_bound))
@@ -758,9 +794,13 @@ loglik_etas_bivariate_batch <- function(params,
 
   n <- length(t)
   if (n == 0L || length(x) != n || length(y) != n || length(mag) != n) return(reject)
-  if (nrow(process_ids) != n || nrow(W0s) != n || nrow(W1s) != n ||
-      ncol(W0s) != K || ncol(W1s) != K) {
-    stop("process_ids/W0s/W1s must be n x K with n = length(t).")
+  if (nrow(process_ids) != n || nrow(W0s) != n || nrow(W1s) != n) {
+    stop("process_ids/W0s/W1s must have n = length(t) rows.")
+  }
+  w0_ok <- ncol(W0s) == K || ncol(W0s) == 1L
+  w1_ok <- ncol(W1s) == K || ncol(W1s) == 1L
+  if (!isTRUE(w0_ok) || !isTRUE(w1_ok)) {
+    stop("W0s/W1s must be n x K, or n x 1 to recycle shared masks across labellings.")
   }
   if (!all(is.finite(t)) || !all(is.finite(x)) || !all(is.finite(y)) || !all(is.finite(mag))) {
     return(reject)
@@ -1088,7 +1128,45 @@ fit_etas_bivariate <- function(params_init,
   if (!is.null(treated_background_zero_before)) {
     W_1[realiz$t < as.numeric(treated_background_zero_before)] <- 0
   }
-  precomp <- list(W_0 = W_0, W_1 = W_1, areaS_0 = areaS_0, areaS_1 = areaS_1)
+  cb_mass_fit <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
+  if (length(cb_mass_fit) != 1L || !is.finite(cb_mass_fit) ||
+      is.na(cb_mass_fit) || cb_mass_fit <= 0) {
+    cb_mass_fit <- (areaS_0 + areaS_1) / areaS_0
+  }
+  precomp <- list(
+    W_0 = W_0, W_1 = W_1, areaS_0 = areaS_0, areaS_1 = areaS_1,
+    t_expo_0 = .etas_bg_exposure_control(
+      windowT, control_background_everywhere_before, cb_mass_fit
+    ),
+    t_expo_1 = .etas_bg_exposure(windowT, treated_background_zero_before),
+    t_max = windowT[2] - windowT[1]
+  )
+  # Freeze geometry for Nelder-Mead only when every point is already inside
+  # windowS; otherwise loglik must keep the inside.owin reject.
+  if (n > 0L && all(spatstat.geom::inside.owin(
+    realiz$x, realiz$y, spatstat.geom::as.owin(windowS)
+  ))) {
+    precomp$t_shifted <- realiz$t - windowT[1]
+    precomp$x <- realiz$x
+    precomp$y <- realiz$y
+    precomp$mag <- realiz$mag
+    proc_col <- if ("inferred_process" %in% names(realiz)) {
+      realiz$inferred_process
+    } else if ("process" %in% names(realiz)) {
+      realiz$process
+    } else if ("location_process" %in% names(realiz)) {
+      realiz$location_process
+    } else {
+      NULL
+    }
+    if (!is.null(proc_col)) {
+      precomp$process_id <- if (is.character(proc_col)) {
+        as.integer(proc_col == "treated")
+      } else {
+        as.integer(proc_col)
+      }
+    }
+  }
 
   build_ll_args <- function(par15, for_optim = TRUE) {
     ll_args <- list(
@@ -1412,9 +1490,11 @@ sim_etas_bivariate <- function(params,
   p_proc <- c(bg0$proc, bg1$proc)
   p_bg  <- rep(TRUE, length(p_x))
 
-  # Add filtration
+  # Add filtration. Parents older than windowT[1] - t_trunc cannot place a
+  # child in the observation window (out-of-window children never reproduce).
   if (!is.null(filtration)) {
-    if (is.data.frame(filtration)) {
+    filtration <- .etas_trim_filtration_to_trunc(filtration, windowT, t_trunc)
+    if (is.data.frame(filtration) && nrow(filtration) > 0) {
       f_proc <- if ("process_id" %in% names(filtration)) {
         as.integer(filtration$process_id)
       } else if ("inferred_process" %in% names(filtration)) {

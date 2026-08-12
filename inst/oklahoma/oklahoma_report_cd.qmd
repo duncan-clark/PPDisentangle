@@ -34,6 +34,7 @@ if (file.exists(file.path(REPO_ROOT, "DESCRIPTION")) &&
 suppressPackageStartupMessages({
   library(knitr)
   library(kableExtra)
+  library(ggplot2)
 })
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
@@ -170,6 +171,10 @@ settings_df <- data.frame(
     "SEM_INNER_ITER",
     "SEM_N_ITER",
     "SEM_N_LABELLINGS",
+    "SEM change factor",
+    "SEM max relabel step frac",
+    "SEM forced refit flip frac",
+    "SEM temporal relabel weight",
     "SEM_OUTER_MAXIT",
     "SEM_OUTER_MAXIT_BIV",
     "ATE_N_SIMS",
@@ -189,6 +194,10 @@ settings_df <- data.frame(
     scalar_chr(cfg$SEM_INNER_ITER %||% cfg$SEM_INNER),
     scalar_chr(cfg$SEM_N_ITER),
     scalar_chr(cfg$SEM_N_LABELLINGS),
+    fmt_num(cfg$SEM_CHANGE_FACTOR, 4),
+    fmt_num(cfg$SEM_MAX_RELABEL_STEP_FRAC, 4),
+    fmt_num(cfg$SEM_FORCE_PARAM_UPDATE_FLIP_FRAC, 4),
+    fmt_num(cfg$SEM_TEMPORAL_WEIGHT, 4),
     scalar_chr(cfg$SEM_OUTER_MAXIT),
     scalar_chr(cfg$SEM_OUTER_MAXIT_BIV),
     scalar_chr(cfg$ATE_N_SIMS),
@@ -260,6 +269,280 @@ params_df <- data.frame(
 kable(params_df, align = "lrr",
       caption = "C (naive biv+KDE all-free) and D (SEM biv+KDE all-free) parameters.") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# SEM relabelling diagnostics
+
+Fit C is a naive MLE, so it has no relabelling. The traces below are Fit D (and Fit B if present).
+
+```{r sem-relabel-helpers}
+#| label: sem-relabel-helpers
+#| include: false
+sem_fit_obj <- function(fit) {
+  if (is.null(fit)) return(NULL)
+  if (!is.null(fit$fit) && !is.null(fit$fit$adaptive)) return(fit$fit)
+  if (!is.null(fit$sem) && !is.null(fit$sem$adaptive)) return(fit$sem)
+  if (!is.null(fit$adaptive)) return(fit)
+  NULL
+}
+get_sem_metric_trace <- function(fit) {
+  sem_obj <- sem_fit_obj(fit)
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive)) return(NULL)
+  ad <- sem_obj$adaptive
+  if (!is.null(ad$metrics) && length(ad$metrics) > 0) {
+    return(as.numeric(ad$metrics))
+  }
+  if (!is.null(ad$all_metrics) && length(ad$all_metrics) > 0) {
+    vals <- vapply(ad$all_metrics, function(v) {
+      if (is.null(v) || length(v) == 0) return(NA_real_)
+      max(as.numeric(v), na.rm = TRUE)
+    }, numeric(1))
+    vals[is.infinite(vals)] <- NA_real_
+    return(vals)
+  }
+  NULL
+}
+extract_selected_confusion_trace <- function(sem_obj, model_label) {
+  ad <- if (!is.null(sem_obj$adaptive)) sem_obj$adaptive else sem_obj$fit$adaptive
+  if (is.null(ad) || is.null(ad$class_results) || is.null(ad$all_metrics)) return(NULL)
+  if (length(ad$class_results) < 1 || length(ad$all_metrics) < 1) return(NULL)
+  offset <- 0L
+  rows <- list()
+  for (i in seq_along(ad$all_metrics)) {
+    metric_i <- ad$all_metrics[[i]]
+    n_i <- length(metric_i)
+    if (n_i < 1L) next
+    best_j <- which.max(as.numeric(metric_i))
+    class_idx <- offset + best_j
+    if (class_idx > length(ad$class_results)) break
+    cm <- ad$class_results[[class_idx]]
+    if (is.null(cm)) {
+      offset <- offset + n_i
+      next
+    }
+    rows[[length(rows) + 1L]] <- data.frame(
+      iteration = i,
+      Model = model_label,
+      control_as_control = as.numeric(cm$control_as_control %||% 0),
+      control_as_treated = as.numeric(cm$control_as_treated %||% 0),
+      treated_as_control = as.numeric(cm$treated_as_control %||% 0),
+      treated_as_treated = as.numeric(cm$treated_as_treated %||% 0)
+    )
+    offset <- offset + n_i
+  }
+  if (length(rows) < 1L) return(NULL)
+  do.call(rbind, rows)
+}
+build_cm <- function(sem_obj) {
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive$adaptive_labelling)) return(NULL)
+  lab <- sem_obj$adaptive$adaptive_labelling
+  post <- lab[lab$t >= 0, , drop = FALSE]
+  if (is.null(post$location_process) || is.null(post$inferred_process)) return(NULL)
+  tab <- table(Location = post$location_process, Inferred = post$inferred_process)
+  as.data.frame.matrix(tab)
+}
+fit_B <- fit_obj(results, "B")
+sem_specs <- list(
+  list(fit = fit_B, lab = "B: SEM Biv"),
+  list(fit = fit_D, lab = "D: SEM Biv+KDE (all-free)")
+)
+```
+
+```{r tbl-cm-summary}
+#| label: tbl-cm-summary
+sum_rows <- list()
+for (info in sem_specs) {
+  cm <- build_cm(sem_fit_obj(info$fit))
+  if (is.null(cm)) next
+  n_total <- sum(cm)
+  ctrl_to_treat <- if ("treated" %in% colnames(cm) && "control" %in% rownames(cm)) {
+    cm["control", "treated"]
+  } else {
+    0
+  }
+  treat_to_ctrl <- if ("control" %in% colnames(cm) && "treated" %in% rownames(cm)) {
+    cm["treated", "control"]
+  } else {
+    0
+  }
+  n_flipped <- ctrl_to_treat + treat_to_ctrl
+  sum_rows[[length(sum_rows) + 1L]] <- data.frame(
+    Model = info$lab,
+    `Post events` = n_total,
+    `Ctrl to Treat` = ctrl_to_treat,
+    `Treat to Ctrl` = treat_to_ctrl,
+    `Total relabelled` = n_flipped,
+    `Pct relabelled` = paste0(round(n_flipped / n_total * 100, 1), "%"),
+    check.names = FALSE
+  )
+}
+if (length(sum_rows) > 0) {
+  kable(do.call(rbind, sum_rows),
+        caption = "SEM relabelling summary on post-treatment events (location vs inferred process).",
+        align = "lccccc") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+} else {
+  cat("No SEM relabelling summaries available (Fit D SEM object missing or has no adaptive_labelling).\n")
+}
+```
+
+```{r fig-sem-confusion}
+#| label: fig-sem-confusion
+#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration."
+#| fig-height: 4
+trace_rows <- list()
+for (info in sem_specs) {
+  sem_obj <- sem_fit_obj(info$fit)
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive)) next
+  trace_df <- extract_selected_confusion_trace(sem_obj, info$lab)
+  if (!is.null(trace_df) && nrow(trace_df) > 0) {
+    trace_rows[[length(trace_rows) + 1L]] <- trace_df
+  }
+}
+if (length(trace_rows) > 0) {
+  trace_df <- do.call(rbind, trace_rows)
+  trace_long <- reshape2::melt(
+    trace_df,
+    id.vars = c("iteration", "Model"),
+    measure.vars = c(
+      "control_as_control", "control_as_treated",
+      "treated_as_control", "treated_as_treated"
+    ),
+    variable.name = "entry",
+    value.name = "count"
+  )
+  trace_long$entry <- factor(
+    as.character(trace_long$entry),
+    levels = c("control_as_control", "control_as_treated", "treated_as_control", "treated_as_treated"),
+    labels = c("Control -> Control", "Control -> Treated", "Treated -> Control", "Treated -> Treated")
+  )
+  ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
+    scale_color_manual(name = "Confusion entry", values = c(
+      "Control -> Control" = "#1f78b4",
+      "Control -> Treated" = "#e31a1c",
+      "Treated -> Control" = "#ff7f00",
+      "Treated -> Treated" = "#33a02c"
+    )) +
+    labs(x = "Iteration", y = "Count") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No SEM confusion-matrix trace found.")
+}
+```
+
+```{r fig-sem-adaptive-loglik}
+#| label: fig-sem-adaptive-loglik
+#| fig-cap: "Adaptive SEM selected-proposal score (solid) and running best (dashed). This trace is stochastic and is not expected to be monotone."
+#| fig-height: 4
+sem_metric_rows <- list()
+for (info in sem_specs) {
+  tr <- get_sem_metric_trace(info$fit)
+  if (!is.null(tr) && length(tr) > 0) {
+    sem_metric_rows[[length(sem_metric_rows) + 1]] <- data.frame(
+      Iteration = seq_along(tr),
+      LogLik = as.numeric(tr),
+      Model = info$lab
+    )
+  }
+}
+if (length(sem_metric_rows) > 0) {
+  sem_metric_df <- do.call(rbind, sem_metric_rows)
+  sem_metric_df <- sem_metric_df[is.finite(sem_metric_df$LogLik), , drop = FALSE]
+  sem_metric_df$RunningBest <- ave(sem_metric_df$LogLik, sem_metric_df$Model, FUN = cummax)
+  last_idx <- !duplicated(sem_metric_df$Model, fromLast = TRUE)
+  sem_metric_last <- sem_metric_df[last_idx, , drop = FALSE]
+  sem_metric_last$lbl <- sprintf("final = %.2f", sem_metric_last$LogLik)
+  ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
+    geom_line(linewidth = 0.9) +
+    geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
+    geom_text(
+      data = sem_metric_last,
+      aes(x = Inf, y = -Inf, label = lbl),
+      inherit.aes = FALSE,
+      hjust = 1.05, vjust = -0.4, size = 3.2, colour = "black"
+    ) +
+    labs(x = "Adaptive SEM iteration", y = "Selected SEM score / running best") +
+    facet_wrap(~Model, scales = "free_y") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "none")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No adaptive SEM score trace found.")
+}
+```
+
+```{r fig-sem-cumulative-flips}
+#| label: fig-sem-cumulative-flips
+#| fig-cap: "Per-iteration SEM label flips (average over proposals vs accepted proposal)."
+#| fig-height: 4.5
+flip_rows <- list()
+for (info in sem_specs) {
+  sem_obj <- sem_fit_obj(info$fit)
+  ad <- if (!is.null(sem_obj)) sem_obj$adaptive else NULL
+  if (is.null(ad) || is.null(ad$average_flips) || is.null(ad$max_metric_flips)) next
+  n <- min(length(ad$average_flips), length(ad$max_metric_flips))
+  if (n < 1) next
+  flip_rows[[length(flip_rows) + 1]] <- data.frame(
+    Iteration = seq_len(n),
+    Model = info$lab,
+    AverageFlips = as.numeric(ad$average_flips[seq_len(n)]),
+    AcceptedFlips = as.numeric(ad$max_metric_flips[seq_len(n)])
+  )
+}
+if (length(flip_rows) > 0) {
+  flip_df <- do.call(rbind, flip_rows)
+  flip_long <- reshape2::melt(
+    flip_df,
+    id.vars = c("Iteration", "Model"),
+    measure.vars = c("AverageFlips", "AcceptedFlips"),
+    variable.name = "Metric",
+    value.name = "Flips"
+  )
+  flip_long$Metric <- factor(
+    as.character(flip_long$Metric),
+    levels = c("AverageFlips", "AcceptedFlips"),
+    labels = c("Average flips", "Accepted flips")
+  )
+  ggplot(flip_long, aes(x = Iteration, y = Flips, colour = Metric)) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~ Model, scales = "free_y") +
+    scale_colour_manual(values = c(
+      "Average flips" = "#08519c",
+      "Accepted flips" = "#a50f15"
+    )) +
+    labs(x = "Adaptive SEM iteration", y = "Flips per iteration") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "top")
+} else {
+  plot.new()
+  text(0.5, 0.5, "No SEM flip traces found.")
+}
+```
+
+```{r tbl-final-loglik-compare}
+#| label: tbl-final-loglik-compare
+final_ll_rows <- list()
+for (info in sem_specs) {
+  tr <- as.numeric(get_sem_metric_trace(info$fit))
+  tr <- tr[is.finite(tr)]
+  if (length(tr) > 0) {
+    final_ll_rows[[length(final_ll_rows) + 1]] <- data.frame(
+      Model = info$lab,
+      Iterations = length(tr),
+      Final_Objective = round(tail(tr, 1), 2),
+      stringsAsFactors = FALSE
+    )
+  }
+}
+if (length(final_ll_rows) > 0) {
+  kable(do.call(rbind, final_ll_rows), align = "lrc",
+        caption = "Final selected objective from the adaptive relabelling trace (higher is better).") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
 ```
 
 # Diff vs previous (if provided)

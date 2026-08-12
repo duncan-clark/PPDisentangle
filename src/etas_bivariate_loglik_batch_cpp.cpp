@@ -10,6 +10,7 @@
 #include <vector>
 #include <thread>
 #include <algorithm>
+#include "omori_kernel.h"
 using namespace Rcpp;
 
 static const double PI_VAL = 3.14159265358979323846;
@@ -20,7 +21,8 @@ static const double PI_VAL = 3.14159265358979323846;
 //' @param x,y Spatial coordinates (shared).
 //' @param mag Event magnitudes (shared).
 //' @param process_ids Integer matrix n x K: 0 = control, 1 = treated.
-//' @param W0s,W1s Numeric matrices n x K of background weights.
+//' @param W0s,W1s Numeric matrices n x K of background weights, or n x 1
+//'   to recycle the same mask across all labellings.
 //' @param mu_0,mu_1 Background rates.
 //' @param A_00,alpha_m_00,A_11,alpha_m_11,A_01,alpha_m_01,A_10,alpha_m_10
 //'   Productivity parameters.
@@ -69,10 +71,8 @@ NumericVector etas_bivariate_loglik_batch_cpp(
   const double mu_base_0 = mu_0 / areaS_0;
   const double mu_base_1 = mu_1 / areaS_1;
 
-  double temporal_norm = do_trunc ?
-    (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
-  if (temporal_norm < 1e-15) temporal_norm = 1e-15;
-  const double base_const = (p - 1.0) * (q - 1.0) / (PI_VAL * cc * temporal_norm);
+  const double omori_pref = omori_time_prefactor(p, cc, t_trunc, do_trunc);
+  const double base_const = omori_pref * (q - 1.0) / PI_VAL;
 
   double A_mat[2][2], alpha_mat[2][2];
   A_mat[0][0] = A_00;   alpha_mat[0][0] = alpha_m_00;
@@ -81,15 +81,37 @@ NumericVector etas_bivariate_loglik_batch_cpp(
   A_mat[1][1] = A_11;   alpha_mat[1][1] = alpha_m_11;
 
   // Plain buffers: worker threads must not touch R memory management.
+  // W0s/W1s may be n x K or n x 1 (shared masks recycled across labellings).
+  const int w0_cols = W0s.ncol();
+  const int w1_cols = W1s.ncol();
+  const int w0_stride = (w0_cols == 1) ? 0 : n;
+  const int w1_stride = (w1_cols == 1) ? 0 : n;
   std::vector<double> vt(t.begin(), t.end()), vx(x.begin(), x.end()),
       vy(y.begin(), y.end());
   std::vector<int> pid(static_cast<size_t>(n) * K);
-  std::vector<double> W0(static_cast<size_t>(n) * K), W1(static_cast<size_t>(n) * K);
+  std::vector<double> W0(static_cast<size_t>(w0_cols == 1 ? n : n * K));
+  std::vector<double> W1(static_cast<size_t>(w1_cols == 1 ? n : n * K));
   for (int kk = 0; kk < K; ++kk) {
     for (int i = 0; i < n; ++i) {
       pid[static_cast<size_t>(kk) * n + i] = process_ids(i, kk);
-      W0[static_cast<size_t>(kk) * n + i] = W0s(i, kk);
-      W1[static_cast<size_t>(kk) * n + i] = W1s(i, kk);
+    }
+  }
+  if (w0_cols == 1) {
+    for (int i = 0; i < n; ++i) W0[static_cast<size_t>(i)] = W0s(i, 0);
+  } else {
+    for (int kk = 0; kk < K; ++kk) {
+      for (int i = 0; i < n; ++i) {
+        W0[static_cast<size_t>(kk) * n + i] = W0s(i, kk);
+      }
+    }
+  }
+  if (w1_cols == 1) {
+    for (int i = 0; i < n; ++i) W1[static_cast<size_t>(i)] = W1s(i, 0);
+  } else {
+    for (int kk = 0; kk < K; ++kk) {
+      for (int i = 0; i < n; ++i) {
+        W1[static_cast<size_t>(kk) * n + i] = W1s(i, kk);
+      }
     }
   }
 
@@ -154,8 +176,8 @@ NumericVector etas_bivariate_loglik_batch_cpp(
         const int* pidk = pid.data() + static_cast<size_t>(kk) * n;
         const int k = pidk[i];
         double lam = (k == 0)
-          ? mu_base_0 * W0[static_cast<size_t>(kk) * n + i]
-          : mu_base_1 * W1[static_cast<size_t>(kk) * n + i];
+          ? mu_base_0 * W0[static_cast<size_t>(kk) * w0_stride + i]
+          : mu_base_1 * W1[static_cast<size_t>(kk) * w1_stride + i];
         for (int s = 0; s < m; ++s) {
           const int j = jbuf[s];
           lam += Echan[k * 2 + pidk[j]][j] * wbuf[s];
@@ -184,7 +206,7 @@ NumericVector etas_bivariate_loglik_batch_cpp(
     double horizon = t_max - vt[j];
     if (do_trunc && horizon > t_trunc) horizon = t_trunc;
     G_h[j] = (horizon <= 0.0) ? 0.0
-      : (1.0 - std::pow(1.0 + horizon / cc, -(p - 1.0))) / temporal_norm;
+      : omori_time_cdf(p, cc, horizon, t_trunc, do_trunc);
   }
 
   // Background compensator: charge each mu_k only over the time span its

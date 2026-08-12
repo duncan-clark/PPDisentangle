@@ -173,3 +173,36 @@ test_that("sim_etas_children_cpp returns correct types", {
   expect_equal(length(ch$x), length(ch$t))
   expect_equal(length(ch$x), length(ch$mag))
 })
+
+test_that("sim_etas trims filtration that cannot hit the window", {
+  skip_if_not_installed("spatstat.geom")
+  windowT <- c(0, 2)
+  windowS <- spatstat.geom::owin(c(0, 10), c(0, 10))
+  params <- list(mu = 0, A = 0.6, alpha_m = 0.2, c = 0.05, p = 2.2,
+                 D = 0.8, gamma = 0, q = 2.2)
+  t_trunc <- 1
+  filtration <- data.frame(
+    x = c(5, 5, 5), y = c(5, 5, 5),
+    t = c(-10, -0.4, -0.1),
+    mag = c(3, 3, 3)
+  )
+  common <- list(
+    params = params, windowT = windowT, windowS = windowS,
+    m0 = 2.5, beta_gr = 2.3, t_trunc = t_trunc
+  )
+  keep <- filtration$t >= (windowT[1] - t_trunc)
+
+  set.seed(20260812)
+  internal <- do.call(sim_etas, c(common, list(filtration = filtration)))
+  set.seed(20260812)
+  pretrimmed <- do.call(
+    sim_etas, c(common, list(filtration = filtration[keep, , drop = FALSE]))
+  )
+  expect_equal(internal, pretrimmed)
+
+  set.seed(20260812)
+  from_old <- do.call(
+    sim_etas, c(common, list(filtration = filtration[!keep, , drop = FALSE]))
+  )
+  expect_equal(length(from_old$t), 0L)
+})

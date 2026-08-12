@@ -18,6 +18,19 @@
 # Canonical ordering and names for the 8-element ETAS parameter vector.
 .etas_par_names <- c("mu", "A", "alpha_m", "c", "p", "D", "gamma", "q")
 
+# Untruncated Omori needs p > 1. A finite t_trunc renormalizes on [0, t_trunc],
+# so any p > 0 is a decaying density (p = 1 is the log antiderivative).
+.etas_trunc_active <- function(t_trunc) {
+  tt <- suppressWarnings(as.numeric(t_trunc))
+  length(tt) == 1L && is.finite(tt) && !is.na(tt) && tt > 0
+}
+
+.etas_omori_p_admissible <- function(p, t_trunc) {
+  if (!is.finite(p)) return(FALSE)
+  if (.etas_trunc_active(t_trunc)) return(p > 0)
+  p > 1
+}
+
 .etas_param_vector <- function(params, context = "ETAS parameters") {
   pv <- if (is.list(params)) unlist(params, use.names = TRUE) else params
   if (is.null(names(pv))) {
@@ -389,7 +402,8 @@ loglik_etas <- function(params,
   }
 
   # --- Parameter bounds ---
-  if (min(mu, A, cc, D) < 0 || p <= 1 || q <= 1 || gamma_p < 0) return(-1e15)
+  if (min(mu, A, cc, D) < 0 || q <= 1 || gamma_p < 0) return(-1e15)
+  if (!.etas_omori_p_admissible(p, t_trunc)) return(-1e15)
   p_min <- suppressWarnings(as.numeric(p_lower_bound))
   if (length(p_min) != 1L || !is.finite(p_min) || is.na(p_min)) p_min <- 2.001
   q_min <- suppressWarnings(as.numeric(q_lower_bound))
@@ -908,6 +922,37 @@ fit_etas <- function(params_init,
   return(fit)
 }
 
+#' Drop filtration parents that cannot place a child in \code{windowT}
+#'
+#' With finite \code{t_trunc > 0} the maximum delay is \code{t_trunc}, so a
+#' parent at \code{t_p} can hit \code{[windowT[1], windowT[2]]} only if
+#' \code{t_p >= windowT[1] - t_trunc}. Children outside the window never
+#' become parents, so there is no multi-generation path through the
+#' pre-window. \code{NULL} or non-positive \code{t_trunc} keeps everyone.
+#' Exact in law; not same-seed identical to an untrimmed filtration because
+#' skipped parents would have consumed RNG.
+#' @keywords internal
+.etas_trim_filtration_to_trunc <- function(filtration, windowT, t_trunc) {
+  if (is.null(filtration)) return(NULL)
+  if (is.null(t_trunc) || !is.finite(t_trunc) || t_trunc <= 0) return(filtration)
+  t_keep <- windowT[[1]] - t_trunc
+  if (is.data.frame(filtration)) {
+    if (!nrow(filtration)) return(filtration)
+    keep <- is.finite(filtration$t) & filtration$t >= t_keep
+    return(filtration[keep, , drop = FALSE])
+  }
+  if (is.list(filtration) && !is.null(filtration$t)) {
+    n <- length(filtration$t)
+    keep <- is.finite(filtration$t) & filtration$t >= t_keep
+    out <- filtration
+    for (nm in names(out)) {
+      if (length(out[[nm]]) == n) out[[nm]] <- out[[nm]][keep]
+    }
+    return(out)
+  }
+  filtration
+}
+
 
 #' Simulate a spatio-temporal ETAS process
 #'
@@ -1077,7 +1122,10 @@ sim_etas <- function(params,
   }
 
   # --- Filtration (history) ---
+  # Parents older than windowT[1] - t_trunc cannot place a child in the
+  # observation window (children outside the window never reproduce).
   if (!is.null(filtration)) {
+    filtration <- .etas_trim_filtration_to_trunc(filtration, windowT, t_trunc)
     if (is.data.frame(filtration)) {
       f_x <- filtration$x; f_y <- filtration$y; f_t <- filtration$t
       f_mag <- if ("mag" %in% names(filtration)) filtration$mag else rep(m0, nrow(filtration))

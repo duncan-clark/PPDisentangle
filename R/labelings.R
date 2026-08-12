@@ -500,7 +500,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                                                    return_proposal_sim_cache = FALSE,
                                                    ...) {
   proposal_trace <- isTRUE(verbose) &&
-    (tolower(Sys.getenv("OK_SEM_PROPOSAL_TIMING", "true")) %in% c("1", "true", "yes", "y"))
+    (tolower(Sys.getenv("OK_SEM_PROPOSAL_TIMING", "false")) %in% c("1", "true", "yes", "y"))
   dat <- pp_data
   if (is.null(dat$inferred_process)) {
     dat$inferred_process <- dat$location_process
@@ -1047,8 +1047,8 @@ em_style_labelling <- function(pp_data,
   if (!is.finite(biv_n_threads) || is.na(biv_n_threads) || biv_n_threads < 1L) {
     biv_n_threads <- 1L
   }
-  sem_timing_verbose <- tolower(Sys.getenv("OK_SEM_TIMING_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
-  sem_proposal_verbose <- tolower(Sys.getenv("OK_SEM_PROPOSAL_VERBOSE", "true")) %in% c("1", "true", "yes", "y")
+  sem_timing_verbose <- tolower(Sys.getenv("OK_SEM_TIMING_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
+  sem_proposal_verbose <- tolower(Sys.getenv("OK_SEM_PROPOSAL_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
   dots <- list(...)
   base_change_factor <- as.numeric(change_factor)
   if (!is.finite(base_change_factor) || base_change_factor <= 0) {
@@ -1369,6 +1369,9 @@ em_style_labelling <- function(pp_data,
   treated_idx <- (partition_processes == "treated")
   treated_state_space <- as.owin(partition[treated_idx])
   control_state_space <- as.owin(partition[!treated_idx])
+  statespace_area_cached <- spatstat.geom::area(statespace)
+  treated_ss_area_cached <- spatstat.geom::area(treated_state_space)
+  control_ss_area_cached <- spatstat.geom::area(control_state_space)
 
   if (is.null(pp_data$inferred_process)) {
     pp_data$inferred_process <- pp_data$location_process
@@ -1472,6 +1475,18 @@ em_style_labelling <- function(pp_data,
     }
     biv_tt <- biv_geom_full$t - history_window[1]
     biv_tmax <- history_window[2] - history_window[1]
+    biv_x <- biv_geom_full$x
+    biv_y <- biv_geom_full$y
+    biv_mag <- biv_geom_full$mag
+    biv_cb_mass <- suppressWarnings(as.numeric(control_background_pre_mass_ratio))
+    if (length(biv_cb_mass) != 1L || !is.finite(biv_cb_mass) ||
+        is.na(biv_cb_mass) || biv_cb_mass <= 0) {
+      biv_cb_mass <- (biv_aS0 + biv_aS1) / biv_aS0
+    }
+    biv_t_expo_1 <- .etas_bg_exposure(history_window, treated_background_zero_before)
+    biv_t_expo_0 <- .etas_bg_exposure_control(
+      history_window, control_background_everywhere_before, biv_cb_mass
+    )
     # Fallback for labellings that do not preserve the post_data row order
     # (none of the current proposal generators reorder rows).
     biv_label_slow_path <- function(post_realiz) {
@@ -1506,10 +1521,16 @@ em_style_labelling <- function(pp_data,
       rep(1, nrow(post_realiz))
     }
     W_post[!is.finite(W_post)] <- 0
-    total_area <- spatstat.geom::area(statespace)
+    total_area <- statespace_area_cached
     active_area <- total_area
     if (!is.null(zero_background_region)) {
-      zero_area <- spatstat.geom::area(zero_background_region)
+      zero_area <- if (identical(zero_background_region, treated_state_space)) {
+        treated_ss_area_cached
+      } else if (identical(zero_background_region, control_state_space)) {
+        control_ss_area_cached
+      } else {
+        spatstat.geom::area(zero_background_region)
+      }
       active_area <- max(1e-12, total_area - zero_area)
       in_zero <- inside.owin(post_realiz$x, post_realiz$y, w = zero_background_region)
       W_post[in_zero] <- 0
@@ -1793,8 +1814,8 @@ em_style_labelling <- function(pp_data,
                 x = biv_geom_full$x, y = biv_geom_full$y,
                 mag = biv_geom_full$mag,
                 process_ids = pid_mat,
-                W0s = matrix(biv_W0, biv_nn, K_m),
-                W1s = matrix(biv_W1, biv_nn, K_m),
+                W0s = matrix(biv_W0, biv_nn, 1L),
+                W1s = matrix(biv_W1, biv_nn, 1L),
                 areaS_0 = biv_aS0, areaS_1 = biv_aS1,
                 t_max = biv_tmax,
                 windowT = history_window,
@@ -1830,7 +1851,7 @@ em_style_labelling <- function(pp_data,
           })
           ctrl_mem <- .hawkes_batch_membership(labs, "control", time_window[1], TRUE)
           treat_mem <- .hawkes_batch_membership(labs, "treated", time_window[1], TRUE)
-          total_area <- spatstat.geom::area(statespace)
+          total_area <- statespace_area_cached
           W_ctrl <- rep(1.0, length(ctrl_mem$t))
           W_treat <- rep(1.0, length(treat_mem$t))
           if (!is.null(background_rate_var) && background_rate_var %in% names(ctrl_mem$geom)) {
@@ -1842,11 +1863,11 @@ em_style_labelling <- function(pp_data,
           area_ctrl <- total_area
           area_treat <- total_area
           if (!is.null(treated_state_space)) {
-            area_ctrl <- max(1e-12, total_area - spatstat.geom::area(treated_state_space))
+            area_ctrl <- max(1e-12, total_area - treated_ss_area_cached)
             W_ctrl[inside.owin(ctrl_mem$x, ctrl_mem$y, w = treated_state_space)] <- 0
           }
           if (!is.null(control_state_space)) {
-            area_treat <- max(1e-12, total_area - spatstat.geom::area(control_state_space))
+            area_treat <- max(1e-12, total_area - control_ss_area_cached)
             W_treat[inside.owin(treat_mem$x, treat_mem$y, w = control_state_space)] <- 0
           }
           ctrl_liks <- loglik_hawk_filtration_batch(
@@ -2113,12 +2134,17 @@ em_style_labelling <- function(pp_data,
           biv_precomp <- list(
             W_0 = W_0, W_1 = W_1,
             areaS_0 = areaS_0, areaS_1 = areaS_1,
-            process_id = process_id_full
+            process_id = process_id_full,
+            t_shifted = biv_tt,
+            x = biv_x, y = biv_y, mag = biv_mag,
+            t_expo_0 = biv_t_expo_0, t_expo_1 = biv_t_expo_1,
+            t_max = biv_tmax
           )
           biv_obj <- function(par15) {
-            # precomp already includes event-side W masks / process_id, so do
-            # not re-pass background_rate_var. The policy cutoffs are still
-            # passed: loglik uses them only for the mu compensator exposures.
+            # precomp already includes event-side W masks / process_id / frozen
+            # geometry and compensator exposures, so do not re-pass
+            # background_rate_var. Cutoffs stay in the call for the fallback
+            # path if a precomp slot is missing.
             do.call(
               loglik_etas_bivariate,
               c(

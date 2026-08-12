@@ -7,7 +7,8 @@
 #' @param x,y Spatial coordinates (shared).
 #' @param mag Event magnitudes (shared).
 #' @param process_ids Integer matrix n x K: 0 = control, 1 = treated.
-#' @param W0s,W1s Numeric matrices n x K of background weights.
+#' @param W0s,W1s Numeric matrices n x K of background weights, or n x 1
+#'   to recycle the same mask across all labellings.
 #' @param mu_0,mu_1 Background rates.
 #' @param A_00,alpha_m_00,A_11,alpha_m_11,A_01,alpha_m_01,A_10,alpha_m_10
 #'   Productivity parameters.

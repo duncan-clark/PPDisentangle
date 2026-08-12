@@ -1,4 +1,5 @@
 #include <Rcpp.h>
+#include "omori_kernel.h"
 using namespace Rcpp;
 
 //' Simulate ETAS offspring via BFS branching
@@ -66,12 +67,6 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
   bool use_gr = (beta_gr > 0.0);
   int pool_n = mag_pool.size();
 
-  // CDF at t_trunc for truncated Omori inverse-CDF sampling
-  // G(t_trunc) = 1 - (1 + t_trunc/c)^{-(p-1)}
-  double cdf_max = do_trunc ?
-    (1.0 - std::pow(1.0 + t_trunc / cc, -(p - 1.0))) : 1.0;
-
-  double pm1_inv = 1.0 / (p - 1.0);  // 1/(p-1) for temporal inverse CDF
   double qm1_inv = 1.0 / (q - 1.0);  // 1/(q-1) for spatial inverse CDF
 
   const double two_pi = 2.0 * 3.14159265358979323846;
@@ -118,8 +113,8 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
 
       // --- Temporal delay: inverse-CDF of Omori-Utsu ---
       // dt = c * ((1 - u)^{-1/(p-1)} - 1),  u ~ Uniform(0, cdf_max)
-      double u_t = R::runif(0.0, 1.0) * cdf_max;
-      double dt = cc * (std::pow(1.0 - u_t, -pm1_inv) - 1.0);
+      double u_t = R::runif(0.0, 1.0);
+      double dt = omori_sample_delay(p, cc, t_trunc, do_trunc, u_t);
       double new_t = pt + dt;
 
       if (new_t > t_max || new_t < t_min) continue;
