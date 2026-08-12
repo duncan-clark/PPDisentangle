@@ -348,6 +348,11 @@ loglik_etas <- function(params,
   # --- Time window filter ---
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
+  support_window <- spatstat.geom::as.owin(windowS)
+  spatial_idx <- spatstat.geom::inside.owin(
+    realiz$x, realiz$y, support_window
+  )
+  if (!all(spatial_idx)) return(-1e15)
   n <- nrow(realiz)
   if (n == 0) return(-1e15)
 
@@ -375,6 +380,10 @@ loglik_etas <- function(params,
           history_data$t >= windowT[1] - trunc_value, , drop = FALSE
         ]
       }
+      history_inside <- spatstat.geom::inside.owin(
+        history_data$x, history_data$y, support_window
+      )
+      history_data <- history_data[history_inside, , drop = FALSE]
       history_data <- history_data[order(history_data$t), , drop = FALSE]
     }
   }
@@ -928,6 +937,9 @@ fit_etas <- function(params_init,
 #'   offspring but are not themselves part of the new realisation.
 #' @param covariate_lookup  Function(x, y) returning spatial covariate
 #'   values, or \code{NULL} for homogeneous background.
+#' @param bg_ref_area Optional reference area used to interpret \code{mu} as
+#'   a rate on another support. With a covariate lookup, the background
+#'   intensity is \code{mu / bg_ref_area * covariate_lookup(x, y)}.
 #' @param t_trunc  Temporal truncation (\code{NULL} = none).
 #' @param ...  Additional arguments (ignored).
 #' @return A list with elements \code{x, y, t, mag, n, background, W}.
@@ -941,6 +953,7 @@ sim_etas <- function(params,
                      background_realization = NULL,
                      filtration = NULL,
                      covariate_lookup = NULL,
+                     bg_ref_area = NULL,
                      t_trunc = NULL,
                      ...) {
   if (!inherits(windowS, "owin")) {
@@ -1023,7 +1036,12 @@ sim_etas <- function(params,
         p_t <- numeric(0); p_mag <- numeric(0); p_bg <- logical(0)
       }
     } else {
-      mu_star <- mu / areaS
+      ref_area <- suppressWarnings(as.numeric(bg_ref_area))
+      if (length(ref_area) != 1L || !is.finite(ref_area) ||
+          is.na(ref_area) || ref_area <= 0) {
+        ref_area <- areaS
+      }
+      mu_star <- mu / ref_area
       pixel_fun <- function(x, y) {
         (windowT[2] - windowT[1]) * mu_star * get_covariate(x, y)
       }
@@ -1079,45 +1097,68 @@ sim_etas <- function(params,
     p_bg <- c(p_bg, rep(TRUE, n_filt))
   }
 
+  # windowS is the modeled support, not merely its bounding rectangle.
+  # Unsupported backgrounds/history must be removed before they can reproduce.
+  supported <- spatstat.geom::inside.owin(p_x, p_y, windowS)
+  p_x <- p_x[supported]; p_y <- p_y[supported]; p_t <- p_t[supported]
+  p_mag <- p_mag[supported]; p_bg <- p_bg[supported]
+
   # --- Offspring generation ---
+  combined_x <- p_x; combined_y <- p_y
+  combined_t <- p_t; combined_mag <- p_mag; combined_bg <- p_bg
   if (A > 1e-10 && length(p_t) > 0) {
-    children <- sim_etas_children_cpp(
-      parent_x   = p_x,
-      parent_y   = p_y,
-      parent_t   = p_t,
-      parent_mag = p_mag,
-      A          = A,
-      alpha_m    = alpha_m,
-      cc         = cc,
-      p          = p,
-      D          = D,
-      gamma_par  = gamma_p,
-      q          = q,
-      m0         = m0,
-      beta_gr    = if (use_gr) beta_gr else -1.0,
-      t_min      = windowT[1],
-      t_max      = windowT[2],
-      x_min      = x_min,
-      x_max      = x_max,
-      y_min      = y_min,
-      y_max      = y_max,
-      t_trunc    = if (!is.null(t_trunc)) t_trunc else -1.0,
-      mag_pool   = pool
-    )
-    n_ch <- length(children$x)
-    if (n_ch > 0) {
-      combined_x   <- c(p_x, children$x)
-      combined_y   <- c(p_y, children$y)
-      combined_t   <- c(p_t, children$t)
-      combined_mag <- c(p_mag, children$mag)
-      combined_bg  <- c(p_bg, rep(FALSE, n_ch))
-    } else {
-      combined_x <- p_x; combined_y <- p_y
-      combined_t <- p_t; combined_mag <- p_mag; combined_bg <- p_bg
+    # Simulate one generation at a time so unsupported children are killed
+    # before they can generate descendants that re-enter an irregular window.
+    generation <- list(x = p_x, y = p_y, t = p_t, mag = p_mag)
+    generation_index <- 0L
+    repeat {
+      generation_index <- generation_index + 1L
+      if (generation_index > 10000L) {
+        stop("Univariate ETAS exceeded 10,000 offspring generations.")
+      }
+      children <- sim_etas_children_cpp(
+        parent_x   = generation$x,
+        parent_y   = generation$y,
+        parent_t   = generation$t,
+        parent_mag = generation$mag,
+        A          = A,
+        alpha_m    = alpha_m,
+        cc         = cc,
+        p          = p,
+        D          = D,
+        gamma_par  = gamma_p,
+        q          = q,
+        m0         = m0,
+        beta_gr    = if (use_gr) beta_gr else -1.0,
+        t_min      = windowT[1],
+        t_max      = windowT[2],
+        x_min      = x_min,
+        x_max      = x_max,
+        y_min      = y_min,
+        y_max      = y_max,
+        t_trunc    = if (!is.null(t_trunc)) t_trunc else -1.0,
+        mag_pool   = pool,
+        max_generations = 1L
+      )
+      if (length(children$x) < 1L) break
+
+      child_supported <- spatstat.geom::inside.owin(
+        children$x, children$y, windowS
+      )
+      if (!any(child_supported)) break
+      generation <- list(
+        x = children$x[child_supported],
+        y = children$y[child_supported],
+        t = children$t[child_supported],
+        mag = children$mag[child_supported]
+      )
+      n_ch <- length(generation$x)
+      combined_x <- c(combined_x, generation$x)
+      combined_y <- c(combined_y, generation$y)
+      combined_t <- c(combined_t, generation$t)
+      combined_mag <- c(combined_mag, generation$mag)
+      combined_bg <- c(combined_bg, rep(FALSE, n_ch))
     }
-  } else {
-    combined_x <- p_x; combined_y <- p_y
-    combined_t <- p_t; combined_mag <- p_mag; combined_bg <- p_bg
   }
 
   n_total <- length(combined_t)
@@ -1131,9 +1172,9 @@ sim_etas <- function(params,
     combined_bg  <- combined_bg[valid_t]
   }
 
-  # --- Spatial filter (non-rectangular windows) ---
-  if (!is_rect && length(combined_x) > 0) {
-    inside <- inside.owin(combined_x, combined_y, windowS)
+  # --- Spatial filter (defensive; generation is already support-aware) ---
+  if (length(combined_x) > 0) {
+    inside <- spatstat.geom::inside.owin(combined_x, combined_y, windowS)
     if (!all(inside)) {
       combined_x   <- combined_x[inside];   combined_y   <- combined_y[inside]
       combined_t   <- combined_t[inside];   combined_mag <- combined_mag[inside]
@@ -1154,6 +1195,19 @@ sim_etas <- function(params,
     n = rep(n_final, n_final),
     background = combined_bg, W = W_vals
   )
+}
+
+
+# Union non-empty process state spaces into the actual modeled support.
+.etas_union_support <- function(state_spaces, fallback) {
+  wins <- Filter(
+    function(w) inherits(w, "owin") &&
+      is.finite(spatstat.geom::area(w)) &&
+      spatstat.geom::area(w) > 0,
+    state_spaces
+  )
+  if (length(wins) < 1L) return(fallback)
+  Reduce(spatstat.geom::union.owin, wins)
 }
 
 
@@ -1208,6 +1262,7 @@ generate_inhomogeneous_etas <- function(Omega,
       as.owin(partition[idx])
     })
   }
+  support_window <- .etas_union_support(state_spaces, Omega)
 
   dots <- list(...)
   has_covariate <- !is.null(dots$covariate_lookup) && is.function(dots$covariate_lookup)
@@ -1240,15 +1295,19 @@ generate_inhomogeneous_etas <- function(Omega,
   # --- Split filtration by process ---
   filt_by_proc <- filt_by_proc_precomputed
   if (is.null(filt_by_proc) && !is.null(filtration)) {
-    if (is.null(filtration$location_process)) {
-      filtration$location_process <-
-        partition_processes[tileindex(filtration$x, filtration$y, partition)]
-    }
-    filt_by_proc <- if (is.data.frame(filtration)) {
-      split(filtration, filtration$location_process)
+    filt_df <- as.data.frame(filtration)
+    filt_tile <- as.integer(tileindex(
+      filt_df$x, filt_df$y, partition, close.gaps = FALSE
+    ))
+    filt_supported <- !is.na(filt_tile) &
+      spatstat.geom::inside.owin(filt_df$x, filt_df$y, support_window)
+    filt_df <- filt_df[filt_supported, , drop = FALSE]
+    filt_tile <- filt_tile[filt_supported]
+    if (nrow(filt_df) > 0L) {
+      filt_df$location_process <- partition_processes[filt_tile]
+      filt_by_proc <- split(filt_df, filt_df$location_process)
     } else {
-      filt_df <- as.data.frame(filtration)
-      split(filt_df, filt_df$location_process)
+      filt_by_proc <- list()
     }
   }
 
@@ -1274,7 +1333,8 @@ generate_inhomogeneous_etas <- function(Omega,
     }
 
     new_events <- sim_etas(
-      params = etas_params[[pr]], windowT = time_window, windowS = Omega,
+      params = etas_params[[pr]], windowT = time_window,
+      windowS = support_window,
       m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool,
       background_realization = bg_realization, filtration = f,
       covariate_lookup = dots$covariate_lookup, t_trunc = t_trunc
@@ -1282,7 +1342,16 @@ generate_inhomogeneous_etas <- function(Omega,
     n_new <- length(new_events$t)
     if (n_new == 0) next
 
-    tile_idx <- as.integer(tileindex(new_events$x, new_events$y, partition))
+    tile_idx <- as.integer(tileindex(
+      new_events$x, new_events$y, partition, close.gaps = FALSE
+    ))
+    supported_new <- !is.na(tile_idx)
+    if (!all(supported_new)) {
+      new_events <- lapply(new_events, function(x) x[supported_new])
+      tile_idx <- tile_idx[supported_new]
+      n_new <- length(new_events$t)
+    }
+    if (n_new == 0L) next
     loc_proc <- partition_processes[tile_idx]
 
     w_vals <- if (has_covariate) {

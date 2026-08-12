@@ -141,6 +141,24 @@ test_that("sim_etas preserves Poisson immigrant rate on irregular windows", {
   expect_true(abs(mean_count - expected_mean) < 12)
 })
 
+test_that("sim_etas can preserve reference-area background density", {
+  target <- spatstat.geom::owin(xrange = c(0, 10), yrange = c(0, 10))
+  params <- list(mu = 10, A = 0, alpha_m = 1, c = 0.1, p = 1.2,
+                 D = 1, gamma = 0.5, q = 1.5)
+  windowT <- c(0, 1)
+
+  set.seed(20260812)
+  counts <- replicate(200, length(sim_etas(
+    params, windowT, target,
+    m0 = etas_sim_m0, beta_gr = 2.3,
+    covariate_lookup = function(x, y) rep(1, length(x)),
+    bg_ref_area = 50
+  )$t))
+
+  # Target area is twice the reference area, so expected immigrants double.
+  expect_lt(abs(mean(counts) - 20), 3)
+})
+
 test_that("sim_etas_children_cpp returns correct types", {
   ch <- sim_etas_children_cpp(
     parent_x = 25, parent_y = 25, parent_t = 5, parent_mag = 3.5,

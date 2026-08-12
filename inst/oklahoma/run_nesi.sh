@@ -396,7 +396,12 @@ if [ -z "$PP_BOOT_SEM_INNER" ]; then
   PP_BOOT_SEM_INNER="$PP_SEM_INNER"
 fi
 if [ -z "$PP_BOOT_REFIT_SCOPE" ]; then
-  PP_BOOT_REFIT_SCOPE="none"
+  # Keep "none" when bootstrap is off; require full refits when reps > 0.
+  if [ "${PP_BOOT_REPS:-0}" -gt 0 ]; then
+    PP_BOOT_REFIT_SCOPE="full"
+  else
+    PP_BOOT_REFIT_SCOPE="none"
+  fi
 fi
 boot_refit_norm="$(echo "$PP_BOOT_REFIT_SCOPE" | tr '[:upper:]' '[:lower:]')"
 if [ "$boot_refit_norm" = "none" ] || [ "$boot_refit_norm" = "partial" ] || [ "$boot_refit_norm" = "full" ]; then
@@ -404,6 +409,11 @@ if [ "$boot_refit_norm" = "none" ] || [ "$boot_refit_norm" = "partial" ] || [ "$
 else
   echo "Invalid --boot-refit-scope '$PP_BOOT_REFIT_SCOPE' (expected: none | partial | full)"
   exit 1
+fi
+# Parametric bootstrap requires per-replicate refits; upgrade none -> full.
+if [ "${PP_BOOT_REPS:-0}" -gt 0 ] && [ "$PP_BOOT_REFIT_SCOPE" = "none" ]; then
+  echo "NOTE: boot_reps=${PP_BOOT_REPS} with boot-refit-scope=none is invalid; using full."
+  PP_BOOT_REFIT_SCOPE="full"
 fi
 if [ -z "$PP_BOOT_OUTER_CORES" ]; then
   PP_BOOT_OUTER_CORES="$PP_CORES"

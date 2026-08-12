@@ -9,8 +9,9 @@
 # yields hundreds of events both inside and outside the treated
 # region.  Treatment is applied on 18 March 2015 and the post
 # window ends on 24 June 2015, just before the next regional
-# directive (AOI_20150624) becomes active.  A 300 km buffer around
-# the AOI ensures plenty of control observations.  Cells are
+# directive (AOI_20150624) becomes active. A 300 km buffer around
+# the AOI is intersected with the Oklahoma county union so no modeled
+# event or grid cell lies outside the state. Cells are
 # designated as treated if their centroid lies within the AOI.
 # A 20 km tessellation grid strikes a balance between spatial
 # resolution and sufficient counts per cell.
@@ -21,7 +22,7 @@
 # "oklahoma_induced_seismicity_data_regional20150318".
 # ============================================================
 
-req_pkgs <- c("httr", "jsonlite", "sf", "dplyr", "lubridate", "data.table", "plotly")
+req_pkgs <- c("httr", "jsonlite", "sf", "dplyr", "lubridate", "data.table", "plotly", "tigris")
 missing <- req_pkgs[!vapply(req_pkgs, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
 if (length(missing) > 0) {
   install.packages(missing, repos = "https://cloud.r-project.org")
@@ -34,6 +35,7 @@ suppressPackageStartupMessages({
   library(lubridate)
   library(data.table)
   library(plotly)
+  library(tigris)
 })
 
 sf::sf_use_s2(FALSE)
@@ -203,8 +205,16 @@ aoi_union_wgs <- sf::st_sf(aoi_id = params$occ_aoi_layer_id, geometry = aoi_unio
 aoi_union_proj <- sf::st_transform(aoi_union_wgs, params$crs_proj)
 
 # Spatial window
-window_proj <- sf::st_buffer(aoi_union_proj, dist = params$buffer_km * 1000)
-window_proj <- sf::st_make_valid(window_proj)
+options(tigris_use_cache = TRUE)
+ok_counties_proj <- tigris::counties(state = "OK", cb = TRUE, year = 2022)
+ok_counties_proj <- sf::st_make_valid(sf::st_transform(
+  ok_counties_proj, params$crs_proj
+))
+ok_boundary_proj <- sf::st_make_valid(sf::st_union(ok_counties_proj))
+window_proj <- sf::st_make_valid(sf::st_intersection(
+  sf::st_buffer(aoi_union_proj, dist = params$buffer_km * 1000),
+  ok_boundary_proj
+))
 window_wgs <- sf::st_transform(window_proj, 4326)
 
 bb <- sf::st_bbox(window_wgs)

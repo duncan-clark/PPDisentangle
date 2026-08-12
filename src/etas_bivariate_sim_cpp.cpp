@@ -28,6 +28,8 @@ using namespace Rcpp;
 //' @param x_min,x_max,y_min,y_max  Spatial bounding box.
 //' @param t_trunc    Temporal truncation (negative to disable).
 //' @param mag_pool   Magnitude pool for resampling.
+//' @param max_generations Maximum offspring generations to simulate. Negative
+//'   values retain the full branching process; one returns immediate children.
 //' @return List with x, y, t, mag, process_id of all offspring.
 // [[Rcpp::export]]
 List sim_etas_bivariate_children_cpp(
@@ -43,7 +45,8 @@ List sim_etas_bivariate_children_cpp(
     double t_min, double t_max,
     double x_min, double x_max, double y_min, double y_max,
     double t_trunc = -1.0,
-    NumericVector mag_pool = NumericVector::create()) {
+    NumericVector mag_pool = NumericVector::create(),
+    int max_generations = -1) {
 
   bool do_trunc = (t_trunc > 0.0);
   bool use_gr = (beta_gr > 0.0);
@@ -83,6 +86,7 @@ List sim_etas_bivariate_children_cpp(
   std::vector<double> q_t = as<std::vector<double>>(parent_t);
   std::vector<double> q_m = as<std::vector<double>>(parent_mag);
   std::vector<int>    q_p = as<std::vector<int>>(parent_process);
+  std::vector<int>    q_generation(parent_process.size(), 0);
 
   std::vector<double> out_x, out_y, out_t, out_m;
   std::vector<int>    out_p;
@@ -100,7 +104,10 @@ List sim_etas_bivariate_children_cpp(
     double pt = q_t[head];
     double pm = q_m[head];
     int    pp = q_p[head];
+    int    parent_generation = q_generation[head];
     head++;
+
+    if (max_generations >= 0 && parent_generation >= max_generations) continue;
 
     double dm = pm - m0;
     double d_parent = D * std::exp(gamma_par * dm);
@@ -145,6 +152,7 @@ List sim_etas_bivariate_children_cpp(
         q_x.push_back(new_x); q_y.push_back(new_y);
         q_t.push_back(new_t); q_m.push_back(new_mag);
         q_p.push_back(child);
+        q_generation.push_back(parent_generation + 1);
 
         out_x.push_back(new_x); out_y.push_back(new_y);
         out_t.push_back(new_t); out_m.push_back(new_mag);

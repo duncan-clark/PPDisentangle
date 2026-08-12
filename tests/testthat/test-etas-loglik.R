@@ -158,6 +158,30 @@ test_that("loglik_etas with precomp matches zero_background_region", {
   expect_equal(ll_zbr, ll_pc, tolerance = 1e-10)
 })
 
+test_that("loglik_etas ignores unsupported filtration history", {
+  horizontal <- spatstat.geom::owin(c(0, 10), c(0, 5))
+  vertical <- spatstat.geom::owin(c(0, 5), c(5, 10))
+  support <- spatstat.geom::union.owin(horizontal, vertical)
+  realiz <- data.frame(
+    x = c(2, 3), y = c(2, 3), t = c(1, 2), mag = c(2.7, 2.8)
+  )
+  empty_history <- realiz[0, , drop = FALSE]
+  unsupported_history <- data.frame(
+    x = 8, y = 8, t = -0.1, mag = 3
+  )
+
+  ll_empty <- loglik_etas(
+    etas_ref_params, realiz, c(0, 10), support,
+    m0 = 2.5, beta_gr = 2.3, history = empty_history
+  )
+  ll_unsupported <- loglik_etas(
+    etas_ref_params, realiz, c(0, 10), support,
+    m0 = 2.5, beta_gr = 2.3, history = unsupported_history
+  )
+
+  expect_equal(ll_unsupported, ll_empty)
+})
+
 # ---- conditional pre-window history ----
 
 test_that("empty ETAS history matches the ordinary likelihood", {

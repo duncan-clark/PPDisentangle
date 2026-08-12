@@ -90,8 +90,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // sim_etas_bivariate_children_cpp
-List sim_etas_bivariate_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, IntegerVector parent_process, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool);
-RcppExport SEXP _PPDisentangle_sim_etas_bivariate_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP parent_processSEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP) {
+List sim_etas_bivariate_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, IntegerVector parent_process, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool, int max_generations);
+RcppExport SEXP _PPDisentangle_sim_etas_bivariate_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP parent_processSEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP, SEXP max_generationsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -123,7 +123,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type y_max(y_maxSEXP);
     Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type mag_pool(mag_poolSEXP);
-    rcpp_result_gen = Rcpp::wrap(sim_etas_bivariate_children_cpp(parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool));
+    Rcpp::traits::input_parameter< int >::type max_generations(max_generationsSEXP);
+    rcpp_result_gen = Rcpp::wrap(sim_etas_bivariate_children_cpp(parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool, max_generations));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -186,8 +187,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // sim_etas_children_cpp
-DataFrame sim_etas_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, double A, double alpha_m, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool);
-RcppExport SEXP _PPDisentangle_sim_etas_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP ASEXP, SEXP alpha_mSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP) {
+DataFrame sim_etas_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, double A, double alpha_m, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool, int max_generations);
+RcppExport SEXP _PPDisentangle_sim_etas_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP ASEXP, SEXP alpha_mSEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP, SEXP max_generationsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -212,7 +213,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type y_max(y_maxSEXP);
     Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type mag_pool(mag_poolSEXP);
-    rcpp_result_gen = Rcpp::wrap(sim_etas_children_cpp(parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool));
+    Rcpp::traits::input_parameter< int >::type max_generations(max_generationsSEXP);
+    rcpp_result_gen = Rcpp::wrap(sim_etas_children_cpp(parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool, max_generations));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -354,10 +356,10 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_PPDisentangle_etas_bivariate_loglik_batch_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_batch_cpp, 30},
     {"_PPDisentangle_etas_bivariate_loglik_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_cpp, 29},
-    {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 28},
+    {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 29},
     {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
     {"_PPDisentangle_etas_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_filtration_cpp, 21},
-    {"_PPDisentangle_sim_etas_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_children_cpp, 21},
+    {"_PPDisentangle_sim_etas_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_children_cpp, 22},
     {"_PPDisentangle_hawkes_loglik_inhom_filtration_batch_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_filtration_batch_cpp, 22},
     {"_PPDisentangle_hawkes_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_cpp, 17},
     {"_PPDisentangle_hawkes_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_hawkes_loglik_inhom_filtration_cpp, 22},

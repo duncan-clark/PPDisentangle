@@ -317,6 +317,11 @@ loglik_etas_bivariate <- function(params,
   if (is.unsorted(realiz$t)) realiz <- realiz[order(realiz$t), ]
   t_idx <- realiz$t >= windowT[1] & realiz$t <= windowT[2]
   if (!all(t_idx)) realiz <- realiz[t_idx, ]
+  if (!all(spatstat.geom::inside.owin(
+    realiz$x, realiz$y, spatstat.geom::as.owin(windowS)
+  ))) {
+    return(-1e15)
+  }
   n <- nrow(realiz)
   if (n == 0) return(-1e15)
 
@@ -1381,37 +1386,62 @@ sim_etas_bivariate <- function(params,
   p_x <- p_x[ord]; p_y <- p_y[ord]; p_t <- p_t[ord]
   p_mag <- p_mag[ord]; p_proc <- p_proc[ord]; p_bg <- p_bg[ord]
 
+  # windowS is the modeled support, not merely its bounding rectangle. Remove
+  # unsupported filtration points before they can generate descendants.
+  supported <- spatstat.geom::inside.owin(p_x, p_y, windowS)
+  p_x <- p_x[supported]; p_y <- p_y[supported]; p_t <- p_t[supported]
+  p_mag <- p_mag[supported]; p_proc <- p_proc[supported]; p_bg <- p_bg[supported]
+
   any_excitation <- max(pv[["A_00"]], pv[["A_11"]], pv[["A_01"]], pv[["A_10"]]) > 1e-10
 
   if (any_excitation && length(p_t) > 0) {
-    children <- sim_etas_bivariate_children_cpp(
-      parent_x = p_x, parent_y = p_y,
-      parent_t = p_t, parent_mag = p_mag,
-      parent_process = as.integer(p_proc),
-      A_00 = pv[["A_00"]], alpha_m_00 = pv[["alpha_m_00"]],
-      A_11 = pv[["A_11"]], alpha_m_11 = pv[["alpha_m_11"]],
-      A_01 = pv[["A_01"]], alpha_m_01 = pv[["alpha_m_01"]],
-      A_10 = pv[["A_10"]], alpha_m_10 = pv[["alpha_m_10"]],
-      cc = pv[["c"]], p = pv[["p"]], D = pv[["D"]],
-      gamma_par = pv[["gamma"]], q = pv[["q"]],
-      m0 = m0, beta_gr = if (use_gr) beta_gr else -1.0,
-      t_min = windowT[1], t_max = windowT[2],
-      x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max,
-      t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
-      mag_pool = pool
+    # Generate one generation at a time so children outside a non-rectangular
+    # window are killed before they can enter the branching queue.
+    generation <- list(
+      x = p_x, y = p_y, t = p_t, mag = p_mag,
+      process_id = as.integer(p_proc)
     )
+    generation_index <- 0L
+    repeat {
+      generation_index <- generation_index + 1L
+      if (generation_index > 10000L) {
+        stop("Bivariate ETAS exceeded 10,000 offspring generations.")
+      }
+      children <- sim_etas_bivariate_children_cpp(
+        parent_x = generation$x, parent_y = generation$y,
+        parent_t = generation$t, parent_mag = generation$mag,
+        parent_process = as.integer(generation$process_id),
+        A_00 = pv[["A_00"]], alpha_m_00 = pv[["alpha_m_00"]],
+        A_11 = pv[["A_11"]], alpha_m_11 = pv[["alpha_m_11"]],
+        A_01 = pv[["A_01"]], alpha_m_01 = pv[["alpha_m_01"]],
+        A_10 = pv[["A_10"]], alpha_m_10 = pv[["alpha_m_10"]],
+        cc = pv[["c"]], p = pv[["p"]], D = pv[["D"]],
+        gamma_par = pv[["gamma"]], q = pv[["q"]],
+        m0 = m0, beta_gr = if (use_gr) beta_gr else -1.0,
+        t_min = windowT[1], t_max = windowT[2],
+        x_min = x_min, x_max = x_max, y_min = y_min, y_max = y_max,
+        t_trunc = if (!is.null(t_trunc)) t_trunc else -1.0,
+        mag_pool = pool,
+        max_generations = 1L
+      )
+      if (length(children$x) < 1L) break
 
-    n_ch <- length(children$x)
-    if (n_ch > 0) {
-      p_x <- c(p_x, children$x);     p_y <- c(p_y, children$y)
-      p_t <- c(p_t, children$t);     p_mag <- c(p_mag, children$mag)
-      p_proc <- c(p_proc, children$process_id)
+      child_supported <- spatstat.geom::inside.owin(
+        children$x, children$y, windowS
+      )
+      if (!any(child_supported)) break
+      generation <- lapply(children, function(x) x[child_supported])
+      n_ch <- length(generation$x)
+      p_x <- c(p_x, generation$x); p_y <- c(p_y, generation$y)
+      p_t <- c(p_t, generation$t); p_mag <- c(p_mag, generation$mag)
+      p_proc <- c(p_proc, generation$process_id)
       p_bg <- c(p_bg, rep(FALSE, n_ch))
     }
   }
 
   # Filter to window
-  valid <- p_t >= windowT[1] & p_t <= windowT[2]
+  valid <- p_t >= windowT[1] & p_t <= windowT[2] &
+    spatstat.geom::inside.owin(p_x, p_y, windowS)
   data.frame(
     x = p_x[valid], y = p_y[valid], t = p_t[valid],
     mag = p_mag[valid], process_id = p_proc[valid],
@@ -1455,11 +1485,12 @@ generate_inhomogeneous_etas_bivariate <- function(
       treated = as.owin(partition[partition_processes == "treated"])
     )
   }
+  support_window <- .etas_union_support(state_spaces, Omega)
 
   result <- sim_etas_bivariate(
     params = etas_bivariate_params,
     windowT = time_window,
-    windowS = Omega,
+    windowS = support_window,
     state_spaces = state_spaces,
     m0 = m0,
     beta_gr = beta_gr,
@@ -1474,10 +1505,24 @@ generate_inhomogeneous_etas_bivariate <- function(
     return(data.table::as.data.table(result))
   }
 
-  tile_idx <- as.integer(tileindex(result$x, result$y, partition))
+  tile_idx <- as.integer(tileindex(
+    result$x, result$y, partition, close.gaps = FALSE
+  ))
+  supported <- !is.na(tile_idx)
+  if (!all(supported)) {
+    result <- result[supported, , drop = FALSE]
+    tile_idx <- tile_idx[supported]
+  }
+  if (nrow(result) == 0L) {
+    result$tile_index <- integer(0)
+    result$location_process <- character(0)
+    result$process <- character(0)
+    return(data.table::as.data.table(result))
+  }
   result$tile_index <- tile_idx
-  result$location_process <- partition_processes[pmin(pmax(tile_idx, 1), length(partition_processes))]
-  result$location_process[is.na(tile_idx)] <- "control"
+  result$location_process <- partition_processes[
+    pmin(pmax(tile_idx, 1), length(partition_processes))
+  ]
   result$process <- ifelse(result$process_id == 0, "control", "treated")
 
   data.table::as.data.table(result)

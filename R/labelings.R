@@ -27,7 +27,7 @@ naive_labeling <- function(pp_data) {
 #' @return pp_data with updated inferred_process
 #' @export
 dumb_labeling <- function(pp_data, partition, tiles_to_thin, expected_points) {
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
   labels <- unique(pp_data$process)
   pp_data$inferred_process <- pp_data$location_process
   if (length(expected_points) == 1) {
@@ -58,7 +58,7 @@ dumb_labeling <- function(pp_data, partition, tiles_to_thin, expected_points) {
 #' @return pp_data with updated inferred_process
 #' @export
 semi_dumb_labeling <- function(pp_data, partition, tiles_to_thin, expected_points, beta = 1) {
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
   labels <- unique(pp_data$process)
   pp_data$inferred_process <- pp_data$location_process
   x_diff <- outer(pp_data$x, pp_data$x, "-")
@@ -125,7 +125,7 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
   control_idx <- partition_process == "control"
   control_tiles <- which(control_idx)
   treated_tiles <- which(treated_idx)
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
   control_inds <- inds[pp_data$inferred_process == "control"]
   treated_inds <- inds[pp_data$inferred_process == "treated"]
 
@@ -143,7 +143,7 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
       filtration = filtration, state_spaces = state_spaces, space_triggering = FALSE, ...
     )
     sim_data <- sim_data[sim_data$t > windowT[1], ]
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_inds)
     if (verbose) {
@@ -210,7 +210,7 @@ simulation_labeling_hawkes_hawkes <- function(pp_data,
       filtration = filtration, state_spaces = state_spaces, space_triggering = FALSE, ...
     )
     sim_data <- sim_data[sim_data$t > windowT[1], ]
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     where_to_thin <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_treated <- length(treated_inds) - length(sim_inds)
     if (verbose) {
@@ -283,7 +283,7 @@ fast_labelling_proposal <- function(pp_data, partition, partition_process, n_thi
   control_idx <- partition_process == "control"
   control_tiles <- which(control_idx)
   treated_tiles <- which(treated_idx)
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
 
   changes <- c(
     sample(which(inds %in% control_tiles), size = n_change_control, replace = FALSE),
@@ -314,7 +314,7 @@ global_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
 
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
   labellings <- lapply(1:n_traversal, function(i) {
     dat <- pp_data
     dat$inferred_process <- dat$location_process
@@ -326,7 +326,7 @@ global_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to
       hawkes_params = list(control = hawkes_params, treated = no_points_hawkes),
       space_triggering = FALSE
     )
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     where_to_thin <- summary(factor(inds, levels = 1:partition$n)) - summary(factor(sim_inds, levels = 1:partition$n))
     probs <- where_to_thin[which(!treated_idx)]
     probs <- probs - min(0, min(probs))
@@ -382,7 +382,7 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
   control_state_space <- as.owin(partition[!treated_idx])
   treated_state_space <- as.owin(partition[treated_idx])
 
-  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition))
+  inds <- as.numeric(tileindex(pp_data$x, pp_data$y, partition, close.gaps = FALSE))
   labellings <- lapply(1:n_traversal, function(i) {
     dat <- pp_data
     dat$inferred_process <- dat$location_process
@@ -394,7 +394,7 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
       hawkes_params = list(control = hawkes_params, treated = no_points_hawkes),
       space_triggering = FALSE
     )
-    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     where_to_thin <- summary(factor(inds, levels = 1:partition$n)) - summary(factor(sim_inds, levels = 1:partition$n))
     probs <- where_to_thin[which(!treated_idx)]
     probs <- probs - min(0, min(probs))
@@ -419,7 +419,7 @@ local_hawkes_likelihood_ratio_labeling <- function(pp_data, partition, tiles_to_
   })
   likelihoods <- sapply(1:n_traversal, function(i) {
     data <- labellings[[i]][labellings[[i]]$inferred_process == "control", ]
-    local_inds <- as.numeric(tileindex(data$x, data$y, partition))
+    local_inds <- as.numeric(tileindex(data$x, data$y, partition, close.gaps = FALSE))
     lik <- sapply(sample(unique(local_inds), min(length(unique(local_inds)), sample_size)), function(ii) {
       dat_local <- data[local_inds == ii, ]
       loglik_hawk_fast(
@@ -510,9 +510,9 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   if (!is.null(points_tile_index) && length(points_tile_index) == n_pts) {
     inds <- as.numeric(points_tile_index)
   } else if (!is.null(partition_mask)) {
-    inds <- as.integer(tileindex(dat$x, dat$y, partition))
+    inds <- as.integer(tileindex(dat$x, dat$y, partition, close.gaps = FALSE))
   } else {
-    inds <- as.numeric(tileindex(dat$x, dat$y, partition))
+    inds <- as.numeric(tileindex(dat$x, dat$y, partition, close.gaps = FALSE))
   }
 
   control_inds <- inds[dat$inferred_process == "control"]
@@ -616,7 +616,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
     sim_inds <- if (!is.null(sim_data$tile_index)) {
       as.numeric(sim_data$tile_index)
     } else {
-      as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+      as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     }
     if ("process_id" %in% names(sim_data)) {
       sim_pid <- as.integer(sim_data$process_id)
@@ -692,7 +692,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                   nrow(sim_data), proc.time()[3] - t_sim_ctrl))
     }
     sim_data <- sim_data[sim_data$t > windowT[1], ]
-    sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition))
+    sim_inds <- if (!is.null(sim_data$tile_index)) as.numeric(sim_data$tile_index) else as.numeric(tileindex(sim_data$x, sim_data$y, partition, close.gaps = FALSE))
     where_to_thin <- tabulate(control_inds, nbins = partition$n) - tabulate(sim_inds, nbins = partition$n)
     thin_control <- length(control_inds) - length(sim_inds)
     proposal_sim_cache_out$control <- list(
@@ -887,7 +887,7 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
                 nrow(sim_data_t), proc.time()[3] - t_sim_treat))
   }
   sim_data_t <- sim_data_t[sim_data_t$t > windowT[1], ]
-  sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition))
+  sim_inds_t <- if (!is.null(sim_data_t$tile_index)) as.numeric(sim_data_t$tile_index) else as.numeric(tileindex(sim_data_t$x, sim_data_t$y, partition, close.gaps = FALSE))
   where_to_thin_t <- tabulate(treated_inds, nbins = partition$n) - tabulate(sim_inds_t, nbins = partition$n)
   proposal_sim_cache_out$treated <- list(
     where_to_thin = where_to_thin_t,
@@ -1609,7 +1609,7 @@ em_style_labelling <- function(pp_data,
     } else if (!is.null(proposal_update_cadence)) {
       if ((i %% proposal_update_cadence) == 0 | i == iter | i == 1) {
         if (verbose) print("Updating labelling proposals")
-        post_inds <- as.numeric(tileindex(post_data$x, post_data$y, partition))
+        post_inds <- as.numeric(tileindex(post_data$x, post_data$y, partition, close.gaps = FALSE))
         pre_for_proposals <- if (
           is_biv_etas ||
           (is_etas && etas_use_filtration_history) ||

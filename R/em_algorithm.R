@@ -473,22 +473,50 @@ adaptive_SEM <- function(pp_data,
           as.integer(proc_col)
         }
       }
-      return(loglik_etas_bivariate_batch(
-        params = biv_par,
-        t = geom0$t - biv_wT[1], x = geom0$x, y = geom0$y, mag = geom0$mag,
-        process_ids = pid_mat,
-        W0s = matrix(W0, nn, K_w), W1s = matrix(W1, nn, K_w),
-        areaS_0 = aS0, areaS_1 = aS1,
-        t_max = biv_wT[2] - biv_wT[1],
-        windowT = biv_wT,
-        treated_background_zero_before = treated_background_zero_before,
-        control_background_everywhere_before = control_background_everywhere_before,
-        control_background_pre_mass_ratio = control_background_pre_mass_ratio,
-        t_trunc = t_trunc, t_already_shifted = TRUE,
-        m0 = dots$m0, beta_gr = dots$beta_gr,
-        max_branching_radius = if (!is.null(dots$max_branching_radius)) dots$max_branching_radius else 0.98,
-        alpha_beta_gap_min = if (!is.null(dots$alpha_beta_gap_min)) dots$alpha_beta_gap_min else 1e-4,
-        enforce_alpha_subcritical = if (!is.null(dots$enforce_alpha_subcritical)) dots$enforce_alpha_subcritical else TRUE
+      # Keep weight scoring under the same kernel constraints as the M-step /
+      # proposal LL (including Oklahoma's relaxed p>1, q>1 regime).
+      biv_weight_extra_names <- intersect(
+        names(dots),
+        c(
+          "m0", "beta_gr", "enforce_finite_trigger_moments",
+          "p_lower_bound", "q_lower_bound", "finite_moment_soft_width",
+          "finite_moment_soft_weight", "finite_moment_soft_power",
+          "enforce_alpha_subcritical", "alpha_beta_gap_min",
+          "alpha_m_lower_bound",
+          "alpha_beta_soft_gap", "alpha_beta_soft_weight",
+          "alpha_beta_soft_power", "max_branching_radius",
+          "stability_barrier_start", "stability_barrier_weight",
+          "stability_barrier_power"
+        )
+      )
+      biv_weight_extra <- dots[biv_weight_extra_names]
+      if (is.null(biv_weight_extra$max_branching_radius)) {
+        biv_weight_extra$max_branching_radius <- 0.98
+      }
+      if (is.null(biv_weight_extra$alpha_beta_gap_min)) {
+        biv_weight_extra$alpha_beta_gap_min <- 1e-4
+      }
+      if (is.null(biv_weight_extra$enforce_alpha_subcritical)) {
+        biv_weight_extra$enforce_alpha_subcritical <- TRUE
+      }
+      return(do.call(
+        loglik_etas_bivariate_batch,
+        c(
+          list(
+            params = biv_par,
+            t = geom0$t - biv_wT[1], x = geom0$x, y = geom0$y, mag = geom0$mag,
+            process_ids = pid_mat,
+            W0s = matrix(W0, nn, K_w), W1s = matrix(W1, nn, K_w),
+            areaS_0 = aS0, areaS_1 = aS1,
+            t_max = biv_wT[2] - biv_wT[1],
+            windowT = biv_wT,
+            treated_background_zero_before = treated_background_zero_before,
+            control_background_everywhere_before = control_background_everywhere_before,
+            control_background_pre_mass_ratio = control_background_pre_mass_ratio,
+            t_trunc = t_trunc, t_already_shifted = TRUE
+          ),
+          biv_weight_extra
+        )
       ))
     }
     if (!is_etas) {
@@ -616,7 +644,9 @@ adaptive_SEM <- function(pp_data,
         baseline_adaptive_labelling$t >= treatment_time, , drop = FALSE
       ]
       baseline_post <- baseline_post[order(baseline_post$t), , drop = FALSE]
-      post_inds <- as.numeric(tileindex(baseline_post$x, baseline_post$y, partition))
+      post_inds <- as.numeric(tileindex(
+        baseline_post$x, baseline_post$y, partition, close.gaps = FALSE
+      ))
       pre_for_proposals <- if (
         is_biv_etas ||
         (is_etas && etas_use_filtration_history) ||

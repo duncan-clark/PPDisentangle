@@ -1326,8 +1326,11 @@ generate_inhomogeneous_hawkes <- function(Omega,
       filt_tile <- if (use_rect_tile_cpp) {
         tile_index_rect_cpp(filtration$x, filtration$y, partition$xgrid, partition$ygrid)
       } else {
-        tileindex(filtration$x, filtration$y, partition)
+        tileindex(filtration$x, filtration$y, partition, close.gaps = FALSE)
       }
+      supported <- !is.na(filt_tile)
+      filtration <- filtration[supported, , drop = FALSE]
+      filt_tile <- filt_tile[supported]
       filtration$location_process <- partition_processes[filt_tile]
     }
     if (is.data.frame(filtration)) {
@@ -1367,8 +1370,17 @@ generate_inhomogeneous_hawkes <- function(Omega,
     tile_idx <- if (use_rect_tile_cpp) {
       tile_index_rect_cpp(new_events$x, new_events$y, partition$xgrid, partition$ygrid)
     } else {
-      as.integer(tileindex(new_events$x, new_events$y, partition))
+      as.integer(tileindex(
+        new_events$x, new_events$y, partition, close.gaps = FALSE
+      ))
     }
+    supported <- !is.na(tile_idx)
+    if (!all(supported)) {
+      new_events <- lapply(new_events, function(x) x[supported])
+      tile_idx <- tile_idx[supported]
+      n_new <- length(new_events$t)
+    }
+    if (n_new == 0L) next
     loc_proc <- partition_processes[tile_idx]
 
     w_vals <- if (has_covariate) {
@@ -1433,7 +1445,11 @@ generate_hawkes_superposition <- function(Omega,
                                           ...) {
   sims <- lapply(unique(partition_processes), function(x) {
     events <- sim_hawkes(hawkes_params[[x]], time_window, Omega, ...)
-    events$tile <- tileindex(events$x, events$y, partition)
+    events$tile <- tileindex(
+      events$x, events$y, partition, close.gaps = FALSE
+    )
+    supported <- !is.na(events$tile)
+    events <- lapply(events, function(x) x[supported])
     events <- as.data.frame(events)
     return(events)
   })

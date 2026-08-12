@@ -2431,7 +2431,7 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
     geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Role),
                linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-    facet_wrap(~Pair, scales = "free_y") +
+    facet_wrap(~Pair, scales = "free") +
     scale_fill_manual(values = c(Naive = "#fdb462", SEM = "#80b1d3")) +
     scale_colour_manual(values = c(Naive = "#e6550d", SEM = "#3182bd")) +
     labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),

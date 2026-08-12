@@ -56,7 +56,7 @@ tau_i <- function(i, partition, treated_partitions, statespace,
     plus_tiles <- if (!is.null(pp$tile_index)) {
       as.integer(pp$tile_index)
     } else {
-      as.integer(tileindex(pp$x, pp$y, partition))
+      as.integer(tileindex(pp$x, pp$y, partition, close.gaps = FALSE))
     }
     plus_total <- plus_total + sum(plus_tiles == i, na.rm = TRUE)
 
@@ -69,7 +69,7 @@ tau_i <- function(i, partition, treated_partitions, statespace,
     minus_tiles <- if (!is.null(pp$tile_index)) {
       as.integer(pp$tile_index)
     } else {
-      as.integer(tileindex(pp$x, pp$y, partition))
+      as.integer(tileindex(pp$x, pp$y, partition, close.gaps = FALSE))
     }
     minus_total <- minus_total + sum(minus_tiles == i, na.rm = TRUE)
   }
@@ -576,7 +576,9 @@ tau_i_etas <- function(i, partition, treated_partitions, statespace,
       etas_params = list(control = control_pp, treated = treated_pp),
       m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool
     )
-    plus_total <- plus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+    plus_total <- plus_total + sum(as.numeric(tileindex(
+      pp$x, pp$y, partition, close.gaps = FALSE
+    )) == i, na.rm = TRUE)
 
     pp <- generate_inhomogeneous_etas(
       Omega = statespace, partition = partition, time_window = windowT,
@@ -584,7 +586,9 @@ tau_i_etas <- function(i, partition, treated_partitions, statespace,
       etas_params = list(control = control_pp, treated = treated_pp),
       m0 = m0, beta_gr = beta_gr, mag_pool = mag_pool
     )
-    minus_total <- minus_total + sum(as.numeric(tileindex(pp$x, pp$y, partition)) == i)
+    minus_total <- minus_total + sum(as.numeric(tileindex(
+      pp$x, pp$y, partition, close.gaps = FALSE
+    )) == i, na.rm = TRUE)
   }
   return(plus_total / n_sim - minus_total / n_sim)
 }

@@ -53,11 +53,7 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
 
   ok_boundary <- sf::st_union(counties_sf)
   ok_boundary <- sf::st_make_valid(ok_boundary)
-  bb <- sf::st_bbox(ok_boundary)
-  win_km <- spatstat.geom::owin(
-    xrange = c(bb["xmin"], bb["xmax"]) / 1000,
-    yrange = c(bb["ymin"], bb["ymax"]) / 1000
-  )
+  win_km <- oklahoma_sf_to_owin_km(ok_boundary)
 
   county_owins <- oklahoma_sf_features_to_owins_km(counties_sf, name_col = "NAME")
   valid_idx <- !vapply(county_owins, is.null, logical(1))

@@ -102,9 +102,11 @@ etas_bivariate_loglik_cpp <- function(t, x, y, mag, process_id, W_val_0, W_val_1
 #' @param x_min,x_max,y_min,y_max  Spatial bounding box.
 #' @param t_trunc    Temporal truncation (negative to disable).
 #' @param mag_pool   Magnitude pool for resampling.
+#' @param max_generations Maximum offspring generations to simulate. Negative
+#'   values retain the full branching process; one returns immediate children.
 #' @return List with x, y, t, mag, process_id of all offspring.
-sim_etas_bivariate_children_cpp <- function(parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0, mag_pool = as.numeric( c())) {
-    .Call(`_PPDisentangle_sim_etas_bivariate_children_cpp`, parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool)
+sim_etas_bivariate_children_cpp <- function(parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0, mag_pool = as.numeric( c()), max_generations = -1L) {
+    .Call(`_PPDisentangle_sim_etas_bivariate_children_cpp`, parent_x, parent_y, parent_t, parent_mag, parent_process, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool, max_generations)
 }
 
 #' ETAS log-likelihood for an inhomogeneous spatio-temporal point process
@@ -232,10 +234,12 @@ etas_loglik_inhom_filtration_cpp <- function(post_t, post_x, post_y, W_val, pare
 #' @param t_trunc   Temporal truncation (negative to disable).
 #' @param mag_pool  Numeric vector of observed magnitudes for resampling.
 #'                  Ignored when \code{beta_gr > 0}.
+#' @param max_generations Maximum offspring generations to simulate. Negative
+#'   values retain the full branching process; one returns immediate children.
 #' @return A \code{DataFrame} with columns \code{x}, \code{y}, \code{t},
 #'   \code{mag} containing all offspring (excluding parents).
-sim_etas_children_cpp <- function(parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0, mag_pool = as.numeric( c())) {
-    .Call(`_PPDisentangle_sim_etas_children_cpp`, parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool)
+sim_etas_children_cpp <- function(parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc = -1.0, mag_pool = as.numeric( c()), max_generations = -1L) {
+    .Call(`_PPDisentangle_sim_etas_children_cpp`, parent_x, parent_y, parent_t, parent_mag, A, alpha_m, cc, p, D, gamma_par, q, m0, beta_gr, t_min, t_max, x_min, x_max, y_min, y_max, t_trunc, mag_pool, max_generations)
 }
 
 #' Batched Hawkes filtration log-likelihood over labellings

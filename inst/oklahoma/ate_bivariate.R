@@ -166,7 +166,7 @@ ate_estim_bivariate <- function(
   lmax_right <- make_bg_lmax(ss_right, ref_right)
 
   sim_one <- function(ss, ref_areas, bg_lmax) {
-    sim_etas_bivariate(
+    out <- sim_etas_bivariate(
       params = params,
       windowT = windowT,
       windowS = windowS,
@@ -179,6 +179,11 @@ ate_estim_bivariate <- function(
       bg_lmax = bg_lmax,
       t_trunc = t_trunc
     )
+    if (nrow(out) > 0L && all(c("x", "y") %in% names(out)) &&
+        !all(spatstat.geom::inside.owin(out$x, out$y, windowS))) {
+      stop("Bivariate ATE simulation produced events outside modeled support.")
+    }
+    out
   }
 
   n_sims_i <- max(1L, as.integer(n_sims))
@@ -315,11 +320,7 @@ oklahoma_build_state_spaces <- function(data_dir, crs_proj = 5070L) {
   counties_sf <- sf::st_transform(counties_sf, crs_proj)
   counties_sf <- sf::st_make_valid(counties_sf)
   ok_boundary <- sf::st_make_valid(sf::st_union(counties_sf))
-  bb <- sf::st_bbox(ok_boundary)
-  win_km <- spatstat.geom::owin(
-    xrange = c(bb["xmin"], bb["xmax"]) / 1000,
-    yrange = c(bb["ymin"], bb["ymax"]) / 1000
-  )
+  win_km <- oklahoma_sf_to_owin_km(ok_boundary)
 
   county_owins <- oklahoma_sf_features_to_owins_km(counties_sf, name_col = "NAME")
   valid_idx <- !vapply(county_owins, is.null, logical(1))

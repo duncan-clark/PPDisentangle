@@ -42,6 +42,8 @@ using namespace Rcpp;
 //' @param t_trunc   Temporal truncation (negative to disable).
 //' @param mag_pool  Numeric vector of observed magnitudes for resampling.
 //'                  Ignored when \code{beta_gr > 0}.
+//' @param max_generations Maximum offspring generations to simulate. Negative
+//'   values retain the full branching process; one returns immediate children.
 //' @return A \code{DataFrame} with columns \code{x}, \code{y}, \code{t},
 //'   \code{mag} containing all offspring (excluding parents).
 // [[Rcpp::export]]
@@ -57,7 +59,8 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
                                 double x_min, double x_max,
                                 double y_min, double y_max,
                                 double t_trunc = -1.0,
-                                NumericVector mag_pool = NumericVector::create()) {
+                                NumericVector mag_pool = NumericVector::create(),
+                                int max_generations = -1) {
 
   bool do_trunc = (t_trunc > 0.0);
   bool use_gr = (beta_gr > 0.0);
@@ -78,6 +81,7 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
   std::vector<double> q_y = as<std::vector<double>>(parent_y);
   std::vector<double> q_t = as<std::vector<double>>(parent_t);
   std::vector<double> q_m = as<std::vector<double>>(parent_mag);
+  std::vector<int> q_generation(parent_t.size(), 0);
 
   // Output: offspring only (not parents)
   std::vector<double> out_x, out_y, out_t, out_m;
@@ -95,7 +99,10 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
     double py = q_y[head];
     double pt = q_t[head];
     double pm = q_m[head];
+    int parent_generation = q_generation[head];
     head++;
+
+    if (max_generations >= 0 && parent_generation >= max_generations) continue;
 
     // Productivity: kappa(m) = A * exp(alpha_m * (m - m0))
     double dm = pm - m0;
@@ -147,6 +154,7 @@ DataFrame sim_etas_children_cpp(NumericVector parent_x,
       q_y.push_back(new_y);
       q_t.push_back(new_t);
       q_m.push_back(new_mag);
+      q_generation.push_back(parent_generation + 1);
 
       out_x.push_back(new_x);
       out_y.push_back(new_y);
