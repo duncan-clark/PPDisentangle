@@ -285,16 +285,19 @@ CD_ONLY <- tolower(trimws(Sys.getenv("OK_CD_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
 AB_ONLY <- tolower(trimws(Sys.getenv("OK_AB_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+# Lean univariate+KDE (public G/H): skip A–F and homogeneous I/J.
+UNIV_KDE_ONLY <- tolower(trimws(Sys.getenv("OK_UNIV_KDE_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
 SKIP_ATE <- tolower(trimws(Sys.getenv("OK_SKIP_ATE", "false"))) %in%
   c("1", "true", "yes", "y")
 # Diagnostic control snapshots do not initialize SEM. Skip them in C/D-only
-# by default; set OK_SKIP_CONTROL_SNAPSHOTS=0 to keep them.
+# and univ-kde-only by default; set OK_SKIP_CONTROL_SNAPSHOTS=0 to keep them.
 SKIP_CONTROL_SNAPSHOTS <- tolower(trimws(Sys.getenv(
   "OK_SKIP_CONTROL_SNAPSHOTS",
-  if (isTRUE(CD_ONLY)) "true" else "false"
+  if (isTRUE(CD_ONLY) || isTRUE(UNIV_KDE_ONLY)) "true" else "false"
 ))) %in% c("1", "true", "yes", "y")
-if (isTRUE(AB_ONLY) && isTRUE(CD_ONLY)) {
-  stop("OK_AB_ONLY and OK_CD_ONLY are mutually exclusive.")
+if (sum(c(isTRUE(AB_ONLY), isTRUE(CD_ONLY), isTRUE(UNIV_KDE_ONLY))) > 1L) {
+  stop("OK_AB_ONLY, OK_CD_ONLY, and OK_UNIV_KDE_ONLY are mutually exclusive.")
 }
 SMOKE_SEM_D_SEEDS <- suppressWarnings(as.integer(Sys.getenv("OK_SMOKE_SEM_D_SEEDS", "0")))
 if (!is.finite(SMOKE_SEM_D_SEEDS) || is.na(SMOKE_SEM_D_SEEDS) || SMOKE_SEM_D_SEEDS < 0L) {
@@ -865,6 +868,8 @@ cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-ma
 cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
 cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("AB-only scope (skip C/D + univ): %s\n", if (isTRUE(AB_ONLY)) "TRUE" else "FALSE"))
+cat(sprintf("Univ-KDE-only scope (skip A–F + homog I/J): %s\n",
+            if (isTRUE(UNIV_KDE_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("Skip ATE evaluation: %s\n", if (isTRUE(SKIP_ATE)) "TRUE" else "FALSE"))
 cat(sprintf("Skip control snapshots: %s\n", if (isTRUE(SKIP_CONTROL_SNAPSHOTS)) "TRUE" else "FALSE"))
 
@@ -2628,7 +2633,7 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
 if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY) && !isTRUE(T_TRUNC_SENS_ONLY)) {
 cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
 fit_jobs_all <- list()
-if (!isTRUE(CD_ONLY)) {
+if (!isTRUE(CD_ONLY) && !isTRUE(UNIV_KDE_ONLY)) {
   fit_jobs_all <- c(
     fit_jobs_all,
     list(
@@ -2637,15 +2642,17 @@ if (!isTRUE(CD_ONLY)) {
     )
   )
 } else {
-  cat("  CD_ONLY: skipping homogeneous Fits A/B; dispatching C/D only.\n")
+  cat(sprintf("  %s: skipping homogeneous Fits A/B.\n",
+              if (isTRUE(UNIV_KDE_ONLY)) "UNIV_KDE_ONLY" else "CD_ONLY"))
 }
-if (!isTRUE(AB_ONLY)) {
+if (!isTRUE(AB_ONLY) && !isTRUE(UNIV_KDE_ONLY)) {
   for (vid in kde_variant_ids) {
     fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "C_kde_naive", variant_id = vid)
     fit_jobs_all[[length(fit_jobs_all) + 1L]] <- list(kind = "D_kde_sem", variant_id = vid)
   }
 } else {
-  cat("  AB_ONLY: skipping KDE Fits C/D; dispatching homogeneous A/B only.\n")
+  cat(sprintf("  %s: skipping KDE Fits C/D.\n",
+              if (isTRUE(UNIV_KDE_ONLY)) "UNIV_KDE_ONLY" else "AB_ONLY"))
 }
 run_all_fit_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
@@ -2696,7 +2703,9 @@ run_all_fit_job <- function(job) {
     elapsed = elapsed
   )
 }
-if (N_CORES > 1L && length(fit_jobs_all) > 1L) {
+if (length(fit_jobs_all) < 1L) {
+  fit_all_out <- list()
+} else if (N_CORES > 1L && length(fit_jobs_all) > 1L) {
   fit_all_out <- run_parallel(
     fit_jobs_all, run_all_fit_job,
     cores = min(length(fit_jobs_all), N_CORES),
@@ -2735,13 +2744,14 @@ add_timing_row(
   detail = "elapsed from unified fit dispatch"
 )
 
-if (isTRUE(CD_ONLY) && is.null(fitB) && is.null(semD)) {
+if ((isTRUE(CD_ONLY) || isTRUE(UNIV_KDE_ONLY)) && is.null(fitB) && is.null(semD)) {
   B_params <- NULL
   B_loglik <- NA_real_
   D_params <- NULL
   D_ctrl <- NULL
   D_treat <- NULL
-  cat("  CD_ONLY: Fit A/B not run (params left NULL).\n")
+  cat(sprintf("  %s: Fit A/B not run (params left NULL).\n",
+              if (isTRUE(UNIV_KDE_ONLY)) "UNIV_KDE_ONLY" else "CD_ONLY"))
 } else {
   B_params <- if (!is.null(fitB) && !is.null(fitB$par)) fitB$par else NULL
   B_loglik <- if (!is.null(fitB)) fitB$value else NA_real_
@@ -2769,6 +2779,11 @@ if (isTRUE(CD_ONLY) && is.null(fitB) && is.null(semD)) {
 
 fitE <- NULL
 semF <- NULL
+E_params <- NULL
+E_loglik <- NA_real_
+F_params <- NULL
+F_ctrl <- NULL
+F_treat <- NULL
 for (vid in kde_variant_ids) {
   spec <- kde_variant_specs[[vid]]
   row_e <- get_fit_out("C_kde_naive", vid)
@@ -2827,12 +2842,12 @@ for (vid in kde_variant_ids) {
     )
     if (!is.null(E_var_params)) {
       cat("  Fit C params:", paste(biv_names, round(E_var_params, 4), sep = "=", collapse = ", "), "\n")
-    } else {
+    } else if (!isTRUE(UNIV_KDE_ONLY)) {
       cat("  Fit C failed; params=NULL and downstream ATE will be skipped.\n")
     }
     if (!is.null(F_var_params)) {
       cat("  Fit D params:", paste(biv_names, round(F_var_params, 4), sep = "=", collapse = ", "), "\n")
-    } else {
+    } else if (!isTRUE(UNIV_KDE_ONLY)) {
       cat("  Fit D failed; params=NULL and downstream ATE will be skipped.\n")
     }
   } else {
@@ -3107,7 +3122,10 @@ fit_l <- function() {
   )
 }
 
-univ_jobs <- c("I", "J", "K", "L")
+univ_jobs <- if (isTRUE(UNIV_KDE_ONLY)) c("I", "J") else c("I", "J", "K", "L")
+if (isTRUE(UNIV_KDE_ONLY)) {
+  cat("  UNIV_KDE_ONLY: running G/H (univ+KDE); skipping homogeneous I/J.\n")
+}
 run_one_univ_job <- function(tag) {
   t0 <- proc.time()[["elapsed"]]
   out_obj <- NULL
@@ -3786,8 +3804,9 @@ ate_univ_both <- function(marg, observed_data, label, bg_lookup = NULL) {
     )
   })
 }
-if (isTRUE(CD_ONLY)) {
-  cat("  CD_ONLY: skipping ATE for homogeneous Fits A/B.\n")
+if (isTRUE(CD_ONLY) || isTRUE(UNIV_KDE_ONLY)) {
+  cat(sprintf("  %s: skipping ATE for homogeneous Fits A/B.\n",
+              if (isTRUE(UNIV_KDE_ONLY)) "UNIV_KDE_ONLY" else "CD_ONLY"))
   ate_B <- NULL
   ate_D <- NULL
 } else {
@@ -3803,17 +3822,26 @@ if (isTRUE(CD_ONLY)) {
   add_timing_row("ate_D", ate_D_elapsed, if (!is.null(ate_D)) "ok" else "failed")
 }
 t_ate_E <- proc.time()[["elapsed"]]
-ate_E <- ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
-                             "Fit C (naive biv+KDE, all-free)",
-                             bg_lookup = KDE_BG_LOOKUP)
+ate_E <- if (isTRUE(UNIV_KDE_ONLY)) {
+  cat("  UNIV_KDE_ONLY: skipping ATE for bivariate KDE Fits C/D.\n")
+  NULL
+} else {
+  ate_biv_or_marginal(E_params, E_marginals, pp_post_bg,
+                      "Fit C (naive biv+KDE, all-free)",
+                      bg_lookup = KDE_BG_LOOKUP)
+}
 ate_E_elapsed <- proc.time()[["elapsed"]] - t_ate_E
-add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else "failed")
+add_timing_row("ate_E", ate_E_elapsed, if (!is.null(ate_E)) "ok" else if (isTRUE(UNIV_KDE_ONLY)) "skipped" else "failed")
 t_ate_F <- proc.time()[["elapsed"]]
-ate_F <- ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
-                             "Fit D (SEM biv+KDE, all-free)",
-                             bg_lookup = KDE_BG_LOOKUP)
+ate_F <- if (isTRUE(UNIV_KDE_ONLY)) {
+  NULL
+} else {
+  ate_biv_or_marginal(F_params, F_marginals, pp_post_sem_F,
+                      "Fit D (SEM biv+KDE, all-free)",
+                      bg_lookup = KDE_BG_LOOKUP)
+}
 ate_F_elapsed <- proc.time()[["elapsed"]] - t_ate_F
-add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else "failed")
+add_timing_row("ate_F", ate_F_elapsed, if (!is.null(ate_F)) "ok" else if (isTRUE(UNIV_KDE_ONLY)) "skipped" else "failed")
 
 # Keep kde_variant_fits$E/F$all_free$ate aligned with the canonical bivariate
 # estimands. fits_named$C/D are built from these lists, so a later marginal
@@ -4367,6 +4395,7 @@ results_pre_sensitivity <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     CD_ONLY = CD_ONLY,
+    UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
@@ -4961,6 +4990,7 @@ results_pre_bootstrap <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     CD_ONLY = CD_ONLY,
+    UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
@@ -6308,6 +6338,7 @@ results <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     CD_ONLY = CD_ONLY,
+    UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
