@@ -1226,6 +1226,112 @@ em_style_labelling <- function(pp_data,
     biv_log_transform <- TRUE
     biv_ll_extra_opt <- biv_ll_extra
   }
+  # Univariate ETAS: mirror the bivariate soft-barrier / interior-init stack
+  # for SEM M-steps. Proposal scoring keeps the hard eta cap; Nelder-Mead uses
+  # a soft barrier + log-scale params, with near-cap restart and 1D polish.
+  univ_eta_max <- 0.98
+  univ_gap_min <- 1e-4
+  univ_beta_eff <- NA_real_
+  univ_hard_subcritical <- !isFALSE(dots$hard_subcritical)
+  univ_soft_barrier <- TRUE
+  univ_log_transform <- TRUE
+  univ_init_eta_cap <- 0.98 * 0.9
+  univ_near_cap_frac <- 0.99
+  univ_alpha_lo <- 0
+  univ_ll_extra <- list()
+  univ_ll_extra_opt <- list()
+  if (is_etas) {
+    univ_m0 <- suppressWarnings(as.numeric(dots$m0))
+    if (length(univ_m0) != 1L || !is.finite(univ_m0) || is.na(univ_m0)) {
+      univ_m0 <- min(pp_data$mag, na.rm = TRUE)
+    }
+    univ_beta_eff <- .etas_resolve_beta_gr(
+      dots$beta_gr,
+      realiz = pp_data,
+      m0 = univ_m0
+    )
+    if (!is.finite(univ_beta_eff) || is.na(univ_beta_eff) || univ_beta_eff <= 0) {
+      stop("Univariate SEM labelling requires a finite positive beta_gr.")
+    }
+    univ_gap_min <- suppressWarnings(as.numeric(dots$alpha_beta_gap_min))
+    if (length(univ_gap_min) != 1L || !is.finite(univ_gap_min) ||
+        is.na(univ_gap_min) || univ_gap_min < 0) {
+      univ_gap_min <- 1e-4
+    }
+    univ_eta_max <- suppressWarnings(as.numeric(dots$max_branching_ratio))
+    if (length(univ_eta_max) != 1L || !is.finite(univ_eta_max) ||
+        is.na(univ_eta_max) || univ_eta_max <= 0) {
+      univ_eta_max <- 0.98
+    }
+    univ_alpha_lo <- suppressWarnings(as.numeric(dots$alpha_m_lower_bound))
+    if (length(univ_alpha_lo) != 1L || is.na(univ_alpha_lo)) univ_alpha_lo <- 0
+    univ_init_margin <- suppressWarnings(as.numeric(dots$init_branching_margin))
+    if (length(univ_init_margin) != 1L || !is.finite(univ_init_margin) ||
+        univ_init_margin <= 0 || univ_init_margin > 1) {
+      univ_init_margin <- 0.9
+    }
+    univ_init_eta_cap <- univ_eta_max * univ_init_margin
+    univ_soft_barrier <- !isFALSE(dots$soft_branching_barrier)
+    univ_log_transform <- !isFALSE(dots$log_transform)
+    univ_near_cap_frac <- suppressWarnings(as.numeric(dots$near_cap_frac))
+    if (length(univ_near_cap_frac) != 1L || !is.finite(univ_near_cap_frac) ||
+        univ_near_cap_frac <= 0 || univ_near_cap_frac > 1) {
+      univ_near_cap_frac <- 0.99
+    }
+    univ_ll_extra_names <- intersect(
+      names(dots),
+      c(
+        "enforce_finite_trigger_moments", "p_lower_bound", "q_lower_bound",
+        "finite_moment_soft_width", "finite_moment_soft_weight",
+        "finite_moment_soft_power", "enforce_alpha_subcritical",
+        "alpha_m_lower_bound",
+        "alpha_beta_soft_gap", "alpha_beta_soft_weight",
+        "alpha_beta_soft_power", "stability_barrier_start",
+        "stability_barrier_weight", "stability_barrier_power"
+      )
+    )
+    univ_ll_extra <- dots[univ_ll_extra_names]
+    univ_ll_extra$m0 <- univ_m0
+    univ_ll_extra$beta_gr <- univ_beta_eff
+    univ_ll_extra$alpha_beta_gap_min <- univ_gap_min
+    univ_ll_extra$max_branching_ratio <- univ_eta_max
+    univ_ll_extra$alpha_m_lower_bound <- univ_alpha_lo
+    univ_barrier_ctrl <- .etas_soft_barrier_controls(
+      univ_eta_max,
+      start = dots$stability_barrier_start,
+      weight = if (!is.null(dots$stability_barrier_weight) &&
+                   is.finite(suppressWarnings(as.numeric(dots$stability_barrier_weight))) &&
+                   as.numeric(dots$stability_barrier_weight) > 0) {
+        dots$stability_barrier_weight
+      } else {
+        5000
+      },
+      power = dots$stability_barrier_power
+    )
+    univ_ll_extra_opt <- univ_ll_extra
+    if (univ_soft_barrier) {
+      univ_ll_extra_opt$max_branching_ratio <- Inf
+      univ_ll_extra_opt$stability_barrier_start <- univ_barrier_ctrl$stability_barrier_start
+      univ_ll_extra_opt$stability_barrier_weight <- univ_barrier_ctrl$stability_barrier_weight
+      univ_ll_extra_opt$stability_barrier_power <- univ_barrier_ctrl$stability_barrier_power
+    }
+    if (univ_hard_subcritical) {
+      hawkes_params_control <- as.list(.etas_project_subcritical(
+        hawkes_params_control,
+        beta_gr = univ_beta_eff,
+        gap_min = univ_gap_min,
+        eta_max = univ_init_eta_cap,
+        alpha_m_lower_bound = univ_alpha_lo
+      ))
+      hawkes_params_treated <- as.list(.etas_project_subcritical(
+        hawkes_params_treated,
+        beta_gr = univ_beta_eff,
+        gap_min = univ_gap_min,
+        eta_max = univ_init_eta_cap,
+        alpha_m_lower_bound = univ_alpha_lo
+      ))
+    }
+  }
   hawkes_kernel <- normalize_hawkes_kernel(dots$kernel, hawkes_params_control)
   hawkes_spatial_kernel <- normalize_hawkes_spatial_kernel(dots$spatial_kernel, hawkes_params_control)
   hawkes_spatial_q <- if (!is.null(dots$spatial_q)) dots$spatial_q else hawkes_params_control$spatial_q
@@ -1442,17 +1548,25 @@ em_style_labelling <- function(pp_data,
   }
   etas_conditional_loglik <- function(params_vec, post_realiz,
                                       zero_background_region, pre_hist,
-                                      precomp = NULL) {
-    loglik_etas(
+                                      precomp = NULL,
+                                      ll_extra = NULL) {
+    # Default scoring uses the hard eta cap (univ_ll_extra). M-step optim
+    # passes univ_ll_extra_opt (soft barrier, Inf hard cap).
+    extra <- if (!is.null(ll_extra)) ll_extra else univ_ll_extra
+    ll_args <- list(
       params = params_vec,
       realiz = post_realiz,
       windowT = time_window,
       windowS = statespace,
       zero_background_region = zero_background_region,
       history = if (etas_use_filtration_history) pre_hist else NULL,
-      precomp = precomp,
-      ...
+      precomp = precomp
     )
+    if (!is.null(dots$t_trunc)) ll_args$t_trunc <- dots$t_trunc
+    if (!is.null(dots$background_rate_var)) {
+      ll_args$background_rate_var <- dots$background_rate_var
+    }
+    do.call(loglik_etas, c(ll_args, extra))
   }
 
   fits <- list()
@@ -2117,6 +2231,159 @@ em_style_labelling <- function(pp_data,
             as.numeric(unlist(as_hawkes_params(full_par, hawkes_kernel, hawkes_spatial_kernel, hawkes_spatial_q, hawkes_spatial_d)[all_names]))
           }
           names(full_vec) <- all_names
+          if (is_etas) {
+            if (univ_hard_subcritical) {
+              full_vec <- .etas_project_subcritical(
+                full_vec,
+                beta_gr = univ_beta_eff,
+                gap_min = univ_gap_min,
+                eta_max = univ_init_eta_cap,
+                alpha_m_lower_bound = univ_alpha_lo
+              )
+            }
+            free_names <- all_names[free_idx]
+            alpha_free_pos <- if (univ_hard_subcritical) {
+              which(free_names == "alpha_m")
+            } else {
+              integer(0)
+            }
+            log_free_pos <- if (univ_log_transform) {
+              which(free_names %in% c("mu", "A", "c", "D"))
+            } else {
+              integer(0)
+            }
+            to_optim <- function(natural_free) {
+              optim_free <- natural_free
+              if (length(log_free_pos)) {
+                optim_free[log_free_pos] <- log(pmax(
+                  as.numeric(natural_free[log_free_pos]), 1e-12
+                ))
+              }
+              if (length(alpha_free_pos)) {
+                slack <- pmax(
+                  univ_beta_eff - univ_gap_min - natural_free[alpha_free_pos],
+                  1e-12
+                )
+                optim_free[alpha_free_pos] <- log(slack)
+              }
+              optim_free
+            }
+            from_optim <- function(optim_free) {
+              natural_free <- optim_free
+              if (length(log_free_pos)) {
+                natural_free[log_free_pos] <- exp(optim_free[log_free_pos])
+              }
+              if (length(alpha_free_pos)) {
+                natural_free[alpha_free_pos] <-
+                  univ_beta_eff - univ_gap_min - exp(optim_free[alpha_free_pos])
+              }
+              natural_free
+            }
+            run_nm <- function(start_natural) {
+              if (length(free_idx) == 0L) {
+                return(list(
+                  res = list(par = numeric(0), convergence = 0),
+                  out_par = start_natural
+                ))
+              }
+              opt_start <- to_optim(start_natural[free_idx])
+              wrap_fn <- function(optim_free) {
+                p8 <- start_natural
+                p8[free_idx] <- from_optim(optim_free)
+                obj_fn(p8)
+              }
+              res_local <- tryCatch(
+                optim(
+                  par = opt_start, fn = wrap_fn, method = "Nelder-Mead",
+                  control = list(fnscale = -1, trace = 0, maxit = sem_outer_maxit)
+                ),
+                error = function(e) {
+                  cat("  error fitting", label, ":", e$message, "\n")
+                  list(par = opt_start, convergence = -99)
+                }
+              )
+              out_local <- start_natural
+              out_local[free_idx] <- from_optim(res_local$par)
+              list(res = res_local, out_par = out_local)
+            }
+            nm1 <- run_nm(full_vec)
+            res <- nm1$res
+            out_par <- nm1$out_par
+            if (univ_hard_subcritical) {
+              out_par <- .etas_project_subcritical(
+                out_par,
+                beta_gr = univ_beta_eff,
+                gap_min = univ_gap_min,
+                eta_max = univ_eta_max,
+                alpha_m_lower_bound = univ_alpha_lo
+              )
+            }
+            if ("A" %in% free_names) {
+              br1 <- .etas_univ_branching_ratio(out_par, univ_beta_eff)
+              near_cap <- is.finite(br1) && br1 >= (univ_eta_max * univ_near_cap_frac)
+              distrust <- !is.null(res$convergence) &&
+                (res$convergence != 0L || near_cap)
+              if (near_cap || distrust) {
+                restart_eta <- min(0.70, univ_init_eta_cap)
+                restart_start <- .etas_scale_to_target_eta(
+                  out_par, univ_beta_eff, restart_eta
+                )
+                restart_start <- .etas_project_subcritical(
+                  restart_start,
+                  beta_gr = univ_beta_eff,
+                  gap_min = univ_gap_min,
+                  eta_max = univ_init_eta_cap,
+                  alpha_m_lower_bound = univ_alpha_lo
+                )
+                nm2 <- run_nm(restart_start)
+                out2 <- nm2$out_par
+                if (univ_hard_subcritical) {
+                  out2 <- .etas_project_subcritical(
+                    out2,
+                    beta_gr = univ_beta_eff,
+                    gap_min = univ_gap_min,
+                    eta_max = univ_eta_max,
+                    alpha_m_lower_bound = univ_alpha_lo
+                  )
+                }
+                if (is.finite(obj_fn(out2)) && obj_fn(out2) > obj_fn(out_par) + 1e-8) {
+                  res <- nm2$res
+                  out_par <- out2
+                }
+              }
+              polish_hi <- univ_eta_max * (1 - 1e-6)
+              polish_obj <- function(eta) {
+                q <- .etas_scale_to_target_eta(out_par, univ_beta_eff, eta)
+                obj_fn(q)
+              }
+              polish <- tryCatch(
+                stats::optimize(polish_obj, interval = c(0.05, polish_hi), maximum = TRUE),
+                error = function(e) NULL
+              )
+              if (!is.null(polish) && is.finite(polish$objective) &&
+                  polish$objective > obj_fn(out_par) + 1e-8) {
+                out_par <- .etas_scale_to_target_eta(
+                  out_par, univ_beta_eff, polish$maximum
+                )
+                if (univ_hard_subcritical) {
+                  out_par <- .etas_project_subcritical(
+                    out_par,
+                    beta_gr = univ_beta_eff,
+                    gap_min = univ_gap_min,
+                    eta_max = univ_eta_max,
+                    alpha_m_lower_bound = univ_alpha_lo
+                  )
+                }
+              }
+            }
+            res$par <- out_par
+            res$branching_ratio <- .etas_univ_branching_ratio(
+              out_par, univ_beta_eff
+            )
+            par_list <- as.list(as.numeric(out_par))
+            names(par_list) <- all_names
+            return(list(fit = res, par_list = par_list))
+          }
           if (length(fixed_idx) > 0) {
             free_par <- full_vec[free_idx]
             wrap_fn <- function(fp, ...) {
@@ -2150,7 +2417,8 @@ em_style_labelling <- function(pp_data,
                 params_vec = params,
                 post_realiz = mml_post_treated,
                 zero_background_region = control_state_space,
-                pre_hist = select_pre_history_by_label("treated")
+                pre_hist = select_pre_history_by_label("treated"),
+                ll_extra = univ_ll_extra_opt
               )
             } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(
@@ -2173,7 +2441,8 @@ em_style_labelling <- function(pp_data,
                 params_vec = params,
                 post_realiz = mml_post_control,
                 zero_background_region = treated_state_space,
-                pre_hist = select_pre_history_by_label("control")
+                pre_hist = select_pre_history_by_label("control"),
+                ll_extra = univ_ll_extra_opt
               )
             } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(
@@ -2203,7 +2472,8 @@ em_style_labelling <- function(pp_data,
                 params_vec = params,
                 post_realiz = mml_post_treated,
                 zero_background_region = control_state_space,
-                pre_hist = select_pre_history_by_label("treated")
+                pre_hist = select_pre_history_by_label("treated"),
+                ll_extra = univ_ll_extra_opt
               )
             } else if (hawkes_use_filtration_history) {
               hawkes_conditional_loglik(

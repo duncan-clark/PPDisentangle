@@ -178,19 +178,19 @@ if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_IN
 }
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
 SEM_CHANGE_FACTOR <- 0.01
-SEM_CHANGE_FACTOR_MIN_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MIN_MULT", "0.2")))
+SEM_CHANGE_FACTOR_MIN_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MIN_MULT", "1.0")))
 if (!is.finite(SEM_CHANGE_FACTOR_MIN_MULT) || is.na(SEM_CHANGE_FACTOR_MIN_MULT) || SEM_CHANGE_FACTOR_MIN_MULT <= 0) {
-  SEM_CHANGE_FACTOR_MIN_MULT <- 0.2
+  SEM_CHANGE_FACTOR_MIN_MULT <- 1.0
 }
-SEM_CHANGE_FACTOR_MAX_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MAX_MULT", "2.0")))
+SEM_CHANGE_FACTOR_MAX_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MAX_MULT", "5.0")))
 if (!is.finite(SEM_CHANGE_FACTOR_MAX_MULT) || is.na(SEM_CHANGE_FACTOR_MAX_MULT) || SEM_CHANGE_FACTOR_MAX_MULT < SEM_CHANGE_FACTOR_MIN_MULT) {
-  SEM_CHANGE_FACTOR_MAX_MULT <- max(2.0, SEM_CHANGE_FACTOR_MIN_MULT)
+  SEM_CHANGE_FACTOR_MAX_MULT <- max(5.0, SEM_CHANGE_FACTOR_MIN_MULT)
 }
 SEM_OPTIM_METHOD <- tolower(trimws(Sys.getenv("OK_SEM_OPTIM_METHOD", "sample_weighted")))
 if (!SEM_OPTIM_METHOD %in% c("max", "sample_weighted")) SEM_OPTIM_METHOD <- "sample_weighted"
-SEM_SELECTION_TEMPERATURE <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_SELECTION_TEMPERATURE", "0.08")))
+SEM_SELECTION_TEMPERATURE <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_SELECTION_TEMPERATURE", "0.2")))
 if (!is.finite(SEM_SELECTION_TEMPERATURE) || is.na(SEM_SELECTION_TEMPERATURE) || SEM_SELECTION_TEMPERATURE <= 0) {
-  SEM_SELECTION_TEMPERATURE <- 0.08
+  SEM_SELECTION_TEMPERATURE <- 0.2
 }
 SEM_MAX_RELABEL_STEP_FRAC <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_MAX_RELABEL_STEP_FRAC", "0.05")))
 if (!is.finite(SEM_MAX_RELABEL_STEP_FRAC) || is.na(SEM_MAX_RELABEL_STEP_FRAC) || SEM_MAX_RELABEL_STEP_FRAC <= 0) {
@@ -1613,6 +1613,9 @@ run_sem_fit <- function(pp_data_in,
       max_branching_ratio = ETAS_BRANCHING_MAX,
       max_branching_radius = ETAS_BRANCHING_MAX,
       hard_subcritical = TRUE,
+      soft_branching_barrier = TRUE,
+      log_transform = TRUE,
+      init_branching_margin = 0.9,
       etas_bivariate_params = if (identical(model_type_in, "etas_bivariate")) init_params_sem else NULL,
       background_rate_var = background_rate_var_in,
       etas_use_filtration_history = TRUE,
