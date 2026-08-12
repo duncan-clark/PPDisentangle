@@ -66,6 +66,10 @@ test_that("em_style_labelling updates etas_bivariate_params after cadence refits
   )
   expect_true(!is.null(res$etas_bivariate_params))
   expect_true(length(res$fits) >= 1L)
+  expect_equal(
+    as.integer(res$etas_bivariate_convergence),
+    as.integer(res$fits[[length(res$fits)]]$convergence)
+  )
   last_fit_par <- res$fits[[length(res$fits)]]$par
   expect_equal(
     unname(as.numeric(res$etas_bivariate_params[names(last_fit_par)])),

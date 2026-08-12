@@ -2584,6 +2584,20 @@ em_style_labelling <- function(pp_data,
     retained_starting_trace = retained_starting_trace,
     class_results = class_results[seq_len(class_results_n)], fits = fits,
     etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
+    etas_bivariate_convergence = if (is_biv_etas && length(fits) > 0L) {
+      suppressWarnings(as.integer(fits[[length(fits)]]$convergence)[1L])
+    } else if (is_biv_etas) {
+      NA_integer_
+    } else {
+      NULL
+    },
+    etas_bivariate_value = if (is_biv_etas && length(fits) > 0L) {
+      suppressWarnings(as.numeric(fits[[length(fits)]]$value)[1L])
+    } else if (is_biv_etas) {
+      NA_real_
+    } else {
+      NULL
+    },
     bivariate_stability = if (is_biv_etas && !is.null(biv_etas_params)) {
       list(
         beta_gr = biv_beta_eff,

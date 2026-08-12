@@ -56,6 +56,62 @@
   0.5 * (a + d + sqrt(disc))
 }
 
+#' Whether a bivariate ETAS parameter vector is complete, finite, and
+#' strictly inside the configured spectral-radius margin.
+#' @keywords internal
+.etas_biv_params_ok <- function(params, beta_gr, rho_max = 0.98,
+                                required_names = .etas_bivariate_par_names) {
+  if (is.null(params)) return(FALSE)
+  pv <- if (is.list(params)) unlist(params) else params
+  if (is.null(names(pv)) || !all(required_names %in% names(pv))) return(FALSE)
+  vals <- suppressWarnings(as.numeric(pv[required_names]))
+  if (length(vals) != length(required_names) || !all(is.finite(vals))) {
+    return(FALSE)
+  }
+  rho_max <- suppressWarnings(as.numeric(rho_max)[1L])
+  if (!is.finite(rho_max) || rho_max <= 0) rho_max <- 0.98
+  rho <- .etas_biv_spectral_radius(pv, beta_gr)
+  is.finite(rho) && rho < rho_max
+}
+
+#' Whether a naive \code{fit_etas_bivariate} result is usable.
+#'
+#' Requires optimizer \code{convergence == 0}, a finite objective, a complete
+#' finite parameter vector, and spectral radius strictly below \code{rho_max}.
+#' Finite parameters after a failed Nelder-Mead run are not a successful fit.
+#' @keywords internal
+.etas_biv_fit_ok <- function(fit, beta_gr, rho_max = 0.98,
+                             required_names = .etas_bivariate_par_names) {
+  if (is.null(fit) || is.null(fit$par)) return(FALSE)
+  if (is.null(fit$convergence) || as.integer(fit$convergence)[1L] != 0L) {
+    return(FALSE)
+  }
+  val <- suppressWarnings(as.numeric(fit$value)[1L])
+  if (!is.finite(val)) return(FALSE)
+  .etas_biv_params_ok(fit$par, beta_gr, rho_max, required_names)
+}
+
+#' Whether a bivariate SEM result is usable.
+#'
+#' Requires a complete finite subcritical parameter vector and last inner /
+#' outer Nelder-Mead \code{convergence == 0}. Finite parameters after a failed
+#' M-step are not a successful SEM fit. Missing convergence fails closed.
+#' @keywords internal
+.etas_biv_sem_ok <- function(sem, beta_gr, rho_max = 0.98,
+                             required_names = .etas_bivariate_par_names) {
+  if (is.null(sem)) return(FALSE)
+  if (!.etas_biv_params_ok(
+    sem$etas_bivariate_params, beta_gr, rho_max, required_names
+  )) {
+    return(FALSE)
+  }
+  conv <- suppressWarnings(as.integer(sem$etas_bivariate_convergence)[1L])
+  if (length(conv) != 1L || is.na(conv) || conv != 0L) return(FALSE)
+  val <- suppressWarnings(as.numeric(sem$etas_bivariate_value)[1L])
+  if (length(val) == 1L && !is.na(val) && !is.finite(val)) return(FALSE)
+  TRUE
+}
+
 #' Project bivariate ETAS params into a hard-subcritical set
 #'
 #' Clamps each \code{alpha_m_*} into

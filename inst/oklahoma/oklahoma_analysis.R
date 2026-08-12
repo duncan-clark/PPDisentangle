@@ -221,16 +221,23 @@ SEM_TEMPORAL_WEIGHT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_TEMPORAL_W
 if (!is.finite(SEM_TEMPORAL_WEIGHT) || is.na(SEM_TEMPORAL_WEIGHT)) SEM_TEMPORAL_WEIGHT <- 0
 SEM_TEMPORAL_WEIGHT <- min(max(SEM_TEMPORAL_WEIGHT, 0), 1)
 SEM_TEMPORAL_SCALE_DAYS <- 15
-SEM_T_TRUNC_DAYS_USER <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "")))
-if (!is.finite(SEM_T_TRUNC_DAYS_USER) || is.na(SEM_T_TRUNC_DAYS_USER) || SEM_T_TRUNC_DAYS_USER <= 0) {
-  SEM_T_TRUNC_DAYS_USER <- NA_real_
+SEM_T_TRUNC_RAW <- trimws(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "90"))
+if (!nzchar(SEM_T_TRUNC_RAW)) {
+  stop("OK_SEM_T_TRUNC_DAYS is empty; auto t_trunc is disabled. Set a positive number of days (typically 90).")
 }
+SEM_T_TRUNC_DAYS <- suppressWarnings(as.numeric(SEM_T_TRUNC_RAW))
+if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
+  stop(sprintf(
+    "OK_SEM_T_TRUNC_DAYS must be a positive number of days (got %s). Auto t_trunc is disabled.",
+    SEM_T_TRUNC_RAW
+  ))
+}
+SEM_T_TRUNC_SOURCE <- if (nzchar(trimws(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "")))) "env" else "default_90"
+# Kept only for saved-config / report compatibility; auto t_trunc is disabled.
 SEM_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_REL", "0.05")))
 if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 0 || SEM_T_TRUNC_REL >= 1) {
   SEM_T_TRUNC_REL <- 0.05
 }
-SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
-SEM_T_TRUNC_SOURCE <- if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER)) "env" else "auto_from_kde_holdout"
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 5000
 SEM_OUTER_MAXIT_BIV   <- 5000
@@ -830,12 +837,8 @@ if (isTRUE(T_TRUNC_SENS_ONLY)) {
   }
 }
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
-sem_t_trunc_banner <- if (is.finite(SEM_T_TRUNC_DAYS) && !is.na(SEM_T_TRUNC_DAYS) && SEM_T_TRUNC_DAYS > 0) {
-  as.character(signif(SEM_T_TRUNC_DAYS, 4))
-} else {
-  sprintf("auto(from pre-50 estimate, rel=%.3f)", SEM_T_TRUNC_REL)
-}
-cat(sprintf("SEM proposal/event t_trunc (days): %s\n", sem_t_trunc_banner))
+cat(sprintf("SEM proposal/event t_trunc (days): %s (source=%s)\n",
+            as.character(signif(SEM_T_TRUNC_DAYS, 4)), SEM_T_TRUNC_SOURCE))
 cat(sprintf("SEM temporal relabel weight: %.3f\n", SEM_TEMPORAL_WEIGHT))
 cat(sprintf("B/D SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
@@ -1119,6 +1122,7 @@ estimate_structural_init <- function() {
         p_lower_bound = ETAS_P_LOWER_BOUND,
         q_lower_bound = ETAS_Q_LOWER_BOUND,
         max_branching_ratio = ETAS_BRANCHING_MAX,
+        t_trunc = SEM_T_TRUNC_DAYS,
         maxit = VANILLA_MAXIT,
         fixed_params = with_gamma_fixed(NULL),
         zero_background_region = treated_ss
@@ -1182,6 +1186,7 @@ estimate_pre_full_etas_init <- function() {
         p_lower_bound = ETAS_P_LOWER_BOUND,
         q_lower_bound = ETAS_Q_LOWER_BOUND,
         max_branching_ratio = ETAS_BRANCHING_MAX,
+        t_trunc = SEM_T_TRUNC_DAYS,
         maxit = VANILLA_MAXIT,
         # Pre-treatment everywhere is control: do not carve out the eventual
         # treated counties from the background support.
@@ -1211,29 +1216,6 @@ estimate_pre_full_etas_init <- function() {
 }
 PRE_CTRL_BOOT_PARAMS <- estimate_pre_full_etas_init()
 
-compute_temporal_trunc_from_pre <- function(c_param, p_param, rel_level = SEM_T_TRUNC_REL) {
-  c_param <- suppressWarnings(as.numeric(c_param))
-  p_param <- suppressWarnings(as.numeric(p_param))
-  rel_level <- suppressWarnings(as.numeric(rel_level))
-  if (!is.finite(c_param) || !is.finite(p_param) || !is.finite(rel_level) ||
-      c_param <= 0 || p_param <= 0 || rel_level <= 0 || rel_level >= 1) {
-    return(NULL)
-  }
-  # Solve ((t + c) / c)^(-p) = rel_level for t.
-  t_cut <- c_param * ((rel_level)^(-1 / p_param) - 1)
-  if (!is.finite(t_cut) || t_cut <= 0) return(NULL)
-  as.numeric(t_cut)
-}
-# Auto t_trunc is resolved after the KDE-holdout (pre50) control snapshot so
-# it uses the same first-50% pre sample as the KDE background fit.
-if (is.finite(SEM_T_TRUNC_DAYS_USER) && !is.na(SEM_T_TRUNC_DAYS_USER) && SEM_T_TRUNC_DAYS_USER > 0) {
-  SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS_USER
-  SEM_T_TRUNC_SOURCE <- "env"
-} else {
-  SEM_T_TRUNC_DAYS <- NA_real_
-  SEM_T_TRUNC_SOURCE <- "auto_from_kde_holdout_pending"
-}
-
 cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
             STRUCT_INIT$gamma, STRUCT_INIT$q))
@@ -1241,7 +1223,7 @@ cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=
             PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
-cat(sprintf("  SEM t_trunc pending resolution from %s\n", SEM_T_TRUNC_SOURCE))
+cat(sprintf("  SEM t_trunc: %.4f days (source=%s)\n", SEM_T_TRUNC_DAYS, SEM_T_TRUNC_SOURCE))
 
 apply_pre_init_etas <- function(start_par, preserve = c("A", "mu")) {
   # Keep caller-provided productivity/background starts for multistart diversity;
@@ -1353,6 +1335,7 @@ fit_control_snapshot <- function(df, label, window_end) {
         p_lower_bound = ETAS_P_LOWER_BOUND,
         q_lower_bound = ETAS_Q_LOWER_BOUND,
         max_branching_ratio = ETAS_BRANCHING_MAX,
+        t_trunc = SEM_T_TRUNC_DAYS,
         maxit = VANILLA_MAXIT,
         fixed_params = with_gamma_fixed(NULL)
       ),
@@ -1406,32 +1389,6 @@ for (nm in names(control_snapshot_fits)) {
               if (!is.null(csp$alpha_m)) as.character(signif(csp$alpha_m, 4)) else "NA"))
 }
 
-# Resolve auto t_trunc from the same first-50% pre holdout used for KDE
-# (control_snapshot_fits$pre50), falling back to structural init if needed.
-if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
-  holdout_par <- control_snapshot_fits$pre50$params
-  if (is.null(holdout_par) ||
-      !is.finite(suppressWarnings(as.numeric(holdout_par$c))) ||
-      !is.finite(suppressWarnings(as.numeric(holdout_par$p)))) {
-    holdout_par <- STRUCT_INIT
-    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_struct_init_fallback(rel=%.3f)", SEM_T_TRUNC_REL)
-  } else {
-    SEM_T_TRUNC_SOURCE <- sprintf("auto_from_kde_holdout_pre50(rel=%.3f)", SEM_T_TRUNC_REL)
-  }
-  SEM_T_TRUNC_DAYS <- compute_temporal_trunc_from_pre(
-    holdout_par$c, holdout_par$p, SEM_T_TRUNC_REL
-  )
-  if (is.null(SEM_T_TRUNC_DAYS)) {
-    SEM_T_TRUNC_SOURCE <- "none"
-  }
-}
-cat(sprintf("  SEM t_trunc resolved from %s: %s days\n",
-            SEM_T_TRUNC_SOURCE,
-            if (is.null(SEM_T_TRUNC_DAYS) || !is.finite(SEM_T_TRUNC_DAYS)) {
-              "none"
-            } else {
-              as.character(signif(SEM_T_TRUNC_DAYS, 5))
-            }))
 if (length(T_TRUNC_SENS_DAYS) > 0L) {
   cat(sprintf("  Fit D t_trunc sensitivity grid (days): %s\n",
               paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
@@ -1507,6 +1464,7 @@ fit_best_indep <- function(realiz, zbr, starts, maxit) {
                p_lower_bound = ETAS_P_LOWER_BOUND,
                q_lower_bound = ETAS_Q_LOWER_BOUND,
                max_branching_ratio = ETAS_BRANCHING_MAX,
+               t_trunc = SEM_T_TRUNC_DAYS,
                log_transform = TRUE,
                soft_branching_barrier = TRUE,
                polish_productivity = TRUE,
@@ -1559,11 +1517,19 @@ cat("\n--- Fit A: Naive bivariate ETAS ---\n")
 biv_init <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 biv_names <- names(biv_init)
 valid_biv_params <- function(x) {
-  if (is.null(x) || is.null(names(x)) || !all(biv_names %in% names(x))) {
-    return(FALSE)
-  }
-  vals <- suppressWarnings(as.numeric(x[biv_names]))
-  length(vals) == length(biv_names) && all(is.finite(vals))
+  PPDisentangle:::.etas_biv_params_ok(
+    x, BETA_GR, ETAS_BRANCHING_MAX, biv_names
+  )
+}
+valid_biv_fit <- function(fit) {
+  PPDisentangle:::.etas_biv_fit_ok(
+    fit, BETA_GR, ETAS_BRANCHING_MAX, biv_names
+  )
+}
+valid_biv_sem <- function(sem) {
+  PPDisentangle:::.etas_biv_sem_ok(
+    sem, BETA_GR, ETAS_BRANCHING_MAX, biv_names
+  )
 }
 fit_b <- function() {
   tryCatch({
@@ -2668,9 +2634,9 @@ run_all_fit_job <- function(job) {
     )
   }
   complete <- if (kind %in% c("A_hom_naive", "C_kde_naive")) {
-    !is.null(out) && valid_biv_params(out$par)
+    valid_biv_fit(out)
   } else {
-    !is.null(out) && valid_biv_params(out$etas_bivariate_params)
+    valid_biv_sem(out)
   }
   if (!isTRUE(complete)) out <- NULL
   elapsed <- proc.time()[["elapsed"]] - t0
@@ -2739,7 +2705,7 @@ if (isTRUE(CD_ONLY) && is.null(fitB) && is.null(semD)) {
   } else {
     cat("  Fit A failed; params=NULL and downstream ATE will be skipped.\n")
   }
-  if (!is.null(semD)) {
+  if (!is.null(semD) && valid_biv_sem(semD)) {
     D_params <- semD$etas_bivariate_params
     D_ctrl <- semD$hawkes_params_control
     D_treat <- semD$hawkes_params_treated
@@ -2764,11 +2730,15 @@ for (vid in kde_variant_ids) {
   row_f <- get_fit_out("D_kde_sem", vid)
   fitE_var <- if (!is.null(row_e)) row_e$obj else NULL
   semF_var <- if (!is.null(row_f)) row_f$obj else NULL
-  E_var_params <- if (!is.null(fitE_var) && !is.null(fitE_var$par)) fitE_var$par else NULL
-  E_var_loglik <- if (!is.null(fitE_var)) fitE_var$value else NA_real_
-  F_var_params <- if (!is.null(semF_var)) semF_var$etas_bivariate_params else NULL
-  F_var_ctrl <- if (!is.null(semF_var)) semF_var$hawkes_params_control else NULL
-  F_var_treat <- if (!is.null(semF_var)) semF_var$hawkes_params_treated else NULL
+  E_var_params <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
+  E_var_loglik <- if (valid_biv_fit(fitE_var)) fitE_var$value else NA_real_
+  F_var_params <- if (valid_biv_sem(semF_var)) {
+    semF_var$etas_bivariate_params
+  } else {
+    NULL
+  }
+  F_var_ctrl <- if (valid_biv_sem(semF_var)) semF_var$hawkes_params_control else NULL
+  F_var_treat <- if (valid_biv_sem(semF_var)) semF_var$hawkes_params_treated else NULL
 
   kde_variant_fits$E[[vid]] <- list(
     id = spec$id,
@@ -3243,8 +3213,8 @@ run_kde_bandwidth_fit <- function(spec) {
     cat(sprintf("  [BW %s] Fit C error: %s\n", bw_label, e$message))
     NULL
   })
-  E_params_local <- if (!is.null(fitE_local) && valid_biv_params(fitE_local$par)) fitE_local$par else NULL
-  E_loglik_local <- if (!is.null(fitE_local)) fitE_local$value else NA_real_
+  E_params_local <- if (valid_biv_fit(fitE_local)) fitE_local$par else NULL
+  E_loglik_local <- if (valid_biv_fit(fitE_local)) fitE_local$value else NA_real_
 
   semF_local <- tryCatch({
     run_sem_fit(
@@ -3266,8 +3236,7 @@ run_kde_bandwidth_fit <- function(spec) {
     cat(sprintf("  [BW %s] Fit D error: %s\n", bw_label, e$message))
     NULL
   })
-  F_params_local <- if (!is.null(semF_local) &&
-                        valid_biv_params(semF_local$etas_bivariate_params)) {
+  F_params_local <- if (valid_biv_sem(semF_local)) {
     semF_local$etas_bivariate_params
   } else {
     NULL
@@ -3496,7 +3465,7 @@ run_biv_for_partition <- function(part_info) {
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
-  E_params_p <- if (!is.null(fitE_p) && valid_biv_params(fitE_p$par)) fitE_p$par else NULL
+  E_params_p <- if (valid_biv_fit(fitE_p)) fitE_p$par else NULL
 
   # SEM bivariate + KDE background
   biv_init_sem_p <- biv_init_p
@@ -3516,8 +3485,7 @@ run_biv_for_partition <- function(part_info) {
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom SEM error: %s\n", label, e$message)); NULL })
 
-  F_params_p <- if (!is.null(semF_p) &&
-                    valid_biv_params(semF_p$etas_bivariate_params)) {
+  F_params_p <- if (valid_biv_sem(semF_p)) {
     semF_p$etas_bivariate_params
   } else {
     NULL
@@ -3914,6 +3882,7 @@ if (exists("t_ate_L", inherits = FALSE)) {
     trunc_from_patch <- suppressWarnings(as.numeric(boot_patch$config$SEM_T_TRUNC_DAYS))
     if (length(trunc_from_patch) == 1L && is.finite(trunc_from_patch) && trunc_from_patch > 0) {
       SEM_T_TRUNC_DAYS <- trunc_from_patch
+      SEM_T_TRUNC_SOURCE <- "patch"
       cat(sprintf("  Using SEM_T_TRUNC_DAYS=%.4f from patch config\n", SEM_T_TRUNC_DAYS))
     }
     cat(sprintf(
@@ -3925,7 +3894,7 @@ if (exists("t_ate_L", inherits = FALSE)) {
   } else if (isTRUE(T_TRUNC_SENS_ONLY)) {
     cat("\n--- T_TRUNC_SENS_ONLY: skipped Steps 4-6 (county fits / main ATEs); will run Fit D t_trunc sensitivity only ---\n")
     trunc_patch <- readRDS(normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = TRUE))
-    # Keep auto t_trunc source from live KDE holdout, but adopt patch CRN base if present.
+    # Adopt patch CRN base if present; t_trunc is already pinned (auto disabled).
     crn_from_patch <- suppressWarnings(as.integer(trunc_patch$config$ATE_CRN_BASE))
     if (length(crn_from_patch) == 1L && is.finite(crn_from_patch) && !is.na(crn_from_patch)) {
       OK_ATE_CRN_BASE <- crn_from_patch
@@ -3999,7 +3968,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       ),
       error = function(e) NULL
     )
-    E_params_var <- if (!is.null(fitE_var) && valid_biv_params(fitE_var$par)) fitE_var$par else NULL
+    E_params_var <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
     E_marg_var <- extract_marginals(E_params_var)
     ate_E_var <- if (is.null(E_marg_var)) NULL else tryCatch(
       ate_estim_fast(
@@ -4031,8 +4000,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       ),
       error = function(e) NULL
     )
-    F_params_var <- if (!is.null(semF_var) &&
-                        valid_biv_params(semF_var$etas_bivariate_params)) {
+    F_params_var <- if (valid_biv_sem(semF_var)) {
       semF_var$etas_bivariate_params
     } else {
       NULL
@@ -4529,7 +4497,7 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
       cat(sprintf("    [smoke_d:%s] SEM error: %s\n", rng_label, e$message))
       NULL
     })
-    params_local <- if (!is.null(sem_local)) sem_local$etas_bivariate_params else NULL
+    params_local <- if (valid_biv_sem(sem_local)) sem_local$etas_bivariate_params else NULL
     rho_local <- if (!is.null(params_local)) {
       tryCatch(
         PPDisentangle:::.etas_biv_spectral_radius(params_local, BETA_GR),
@@ -4667,7 +4635,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
       cat(sprintf("    [t_trunc_sens:%s] SEM error: %s\n", label, e$message))
       NULL
     })
-    params_local <- if (!is.null(sem_local)) sem_local$etas_bivariate_params else NULL
+    params_local <- if (valid_biv_sem(sem_local)) sem_local$etas_bivariate_params else NULL
     rho_local <- if (!is.null(params_local)) {
       tryCatch(
         PPDisentangle:::.etas_biv_spectral_radius(params_local, BETA_GR),
@@ -5442,8 +5410,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
               maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
               t_trunc = SEM_T_TRUNC_DAYS
             )
-            if (is.null(fit_c_boot) || !valid_biv_params(fit_c_boot$par)) {
-              stop("Bivariate naive refit returned no parameters.")
+            if (!valid_biv_fit(fit_c_boot)) {
+              stop("Bivariate naive refit did not converge to a usable fit.")
             }
             c_params_boot <- fit_c_boot$par
           } else {
@@ -5555,8 +5523,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           )
           if (is.null(sem_boot)) stop("SEM refit returned NULL.")
           if (isTRUE(OK_ATE_BIVARIATE)) {
-            if (!valid_biv_params(sem_boot$etas_bivariate_params)) {
-              stop("Bivariate SEM refit returned no parameters.")
+            if (!valid_biv_sem(sem_boot)) {
+              stop("Bivariate SEM refit did not converge to a usable fit.")
             }
             d_params_boot <- sem_boot$etas_bivariate_params
           } else {

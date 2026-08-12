@@ -124,6 +124,83 @@ test_that("bivariate likelihood and fit enforce the supplied GR radius", {
   expect_equal(fit$branching_radius, rho)
 })
 
+test_that("naive bivariate fit objects require convergence and subcritical rho", {
+  stable <- c(
+    mu_0 = 1, mu_1 = 1,
+    A_00 = 0.1, alpha_m_00 = 0.5,
+    A_11 = 0.1, alpha_m_11 = 0.5,
+    A_01 = 0.01, alpha_m_01 = 0.5,
+    A_10 = 0.01, alpha_m_10 = 0.5,
+    c = 0.1, p = 2.1, D = 1, gamma = 0.5, q = 1.6
+  )
+  explosive <- stable
+  explosive[["A_00"]] <- 1.2
+
+  expect_true(PPDisentangle:::.etas_biv_params_ok(stable, 2.3, 0.98))
+  expect_false(PPDisentangle:::.etas_biv_params_ok(explosive, 2.3, 0.98))
+  expect_false(PPDisentangle:::.etas_biv_params_ok(unname(stable), 2.3, 0.98))
+  expect_false(PPDisentangle:::.etas_biv_params_ok(NULL, 2.3, 0.98))
+
+  good_fit <- list(
+    par = stable, value = -12.3, convergence = 0L, branching_radius = 0.2
+  )
+  expect_true(PPDisentangle:::.etas_biv_fit_ok(good_fit, 2.3, 0.98))
+
+  nonconverged <- good_fit
+  nonconverged$convergence <- 1L
+  expect_false(PPDisentangle:::.etas_biv_fit_ok(nonconverged, 2.3, 0.98))
+
+  missing_conv <- good_fit
+  missing_conv$convergence <- NULL
+  expect_false(PPDisentangle:::.etas_biv_fit_ok(missing_conv, 2.3, 0.98))
+
+  bad_value <- good_fit
+  bad_value$value <- NA_real_
+  expect_false(PPDisentangle:::.etas_biv_fit_ok(bad_value, 2.3, 0.98))
+
+  explosive_fit <- good_fit
+  explosive_fit$par <- explosive
+  expect_false(PPDisentangle:::.etas_biv_fit_ok(explosive_fit, 2.3, 0.98))
+})
+
+test_that("bivariate SEM objects require last NM convergence and subcritical rho", {
+  stable <- c(
+    mu_0 = 1, mu_1 = 1,
+    A_00 = 0.1, alpha_m_00 = 0.5,
+    A_11 = 0.1, alpha_m_11 = 0.5,
+    A_01 = 0.01, alpha_m_01 = 0.5,
+    A_10 = 0.01, alpha_m_10 = 0.5,
+    c = 0.1, p = 2.1, D = 1, gamma = 0.5, q = 1.6
+  )
+  explosive <- stable
+  explosive[["A_00"]] <- 1.2
+
+  good_sem <- list(
+    etas_bivariate_params = stable,
+    etas_bivariate_convergence = 0L,
+    etas_bivariate_value = -20
+  )
+  expect_true(PPDisentangle:::.etas_biv_sem_ok(good_sem, 2.3, 0.98))
+
+  nonconverged <- good_sem
+  nonconverged$etas_bivariate_convergence <- 1L
+  expect_false(PPDisentangle:::.etas_biv_sem_ok(nonconverged, 2.3, 0.98))
+
+  missing_conv <- good_sem
+  missing_conv$etas_bivariate_convergence <- NULL
+  expect_false(PPDisentangle:::.etas_biv_sem_ok(missing_conv, 2.3, 0.98))
+
+  na_conv <- good_sem
+  na_conv$etas_bivariate_convergence <- NA_integer_
+  expect_false(PPDisentangle:::.etas_biv_sem_ok(na_conv, 2.3, 0.98))
+
+  explosive_sem <- good_sem
+  explosive_sem$etas_bivariate_params <- explosive
+  expect_false(PPDisentangle:::.etas_biv_sem_ok(explosive_sem, 2.3, 0.98))
+
+  expect_false(PPDisentangle:::.etas_biv_sem_ok(NULL, 2.3, 0.98))
+})
+
 test_that("bivariate simulator supports matched inhomogeneous backgrounds", {
   set.seed(409)
   win <- spatstat.geom::owin(c(0, 10), c(0, 10))

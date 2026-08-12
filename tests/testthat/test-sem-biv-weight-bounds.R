@@ -119,6 +119,13 @@ test_that("SEM bivariate weights keep relaxed p/q constraints from dots", {
     use_pre_history_for_biv = TRUE
   )
   expect_true(!is.null(res$etas_bivariate_params))
+  expect_true("etas_bivariate_convergence" %in% names(res))
+  sem_ok <- PPDisentangle:::.etas_biv_sem_ok(res, 1.5, 0.98)
+  conv0 <- isTRUE(as.integer(res$etas_bivariate_convergence)[1L] == 0L)
+  params_ok <- PPDisentangle:::.etas_biv_params_ok(
+    res$etas_bivariate_params, 1.5, 0.98
+  )
+  expect_identical(sem_ok, conv0 && params_ok)
   p_hat <- as.numeric(res$etas_bivariate_params[["p"]])
   q_hat <- as.numeric(res$etas_bivariate_params[["q"]])
   expect_true(is.finite(p_hat) && p_hat > 1)

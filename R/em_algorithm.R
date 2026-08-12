@@ -302,6 +302,8 @@ adaptive_SEM <- function(pp_data,
       class_results = result$class_results,
       fits = result$fits,
       etas_bivariate_params = result$etas_bivariate_params,
+      etas_bivariate_convergence = result$etas_bivariate_convergence,
+      etas_bivariate_value = result$etas_bivariate_value,
       time_taken = t_adapt_end - t_adapt_start
     ))
   }
@@ -312,6 +314,7 @@ adaptive_SEM <- function(pp_data,
   adaptive_counter <- 0
   adaptive_history <- list()
   baseline_adaptive_labelling <- NULL
+  last_biv_optim <- NULL
 
   pre <- as.data.frame(starting_data) %>% dplyr::filter(.data$t < treatment_time)
   post <- as.data.frame(starting_data) %>% dplyr::filter(.data$t >= treatment_time)
@@ -622,6 +625,32 @@ adaptive_SEM <- function(pp_data,
       t_params <- adapt$treated_par
       if (is_biv_etas && !is.null(adapt$etas_bivariate_params)) {
         dots$etas_bivariate_params <- adapt$etas_bivariate_params
+        last_inner <- if (is.list(adapt$fits) && length(adapt$fits) > 0L) {
+          adapt$fits[[length(adapt$fits)]]
+        } else {
+          NULL
+        }
+        last_biv_optim <- list(
+          convergence = if (!is.null(adapt$etas_bivariate_convergence)) {
+            adapt$etas_bivariate_convergence
+          } else if (!is.null(last_inner$convergence)) {
+            last_inner$convergence
+          } else {
+            NA_integer_
+          },
+          value = if (!is.null(adapt$etas_bivariate_value)) {
+            adapt$etas_bivariate_value
+          } else if (!is.null(last_inner$value)) {
+            last_inner$value
+          } else {
+            NA_real_
+          },
+          branching_radius = if (!is.null(last_inner$branching_radius)) {
+            last_inner$branching_radius
+          } else {
+            NA_real_
+          }
+        )
       }
       adaptive_counter <- 1
       adaptive_history[[1]] <- list(
@@ -1080,6 +1109,15 @@ adaptive_SEM <- function(pp_data,
         biv_par, etas_beta_eff
       )
       dots$etas_bivariate_params <- biv_par
+      last_biv_optim <- list(
+        convergence = if (!is.null(biv_res$convergence)) {
+          as.integer(biv_res$convergence)[1L]
+        } else {
+          NA_integer_
+        },
+        value = suppressWarnings(as.numeric(biv_res$value)[1L]),
+        branching_radius = biv_res$branching_radius
+      )
 
       # Extract marginal params for downstream compatibility
       t_params[[length(t_params) + 1]] <- as.list(c(
@@ -1448,6 +1486,16 @@ adaptive_SEM <- function(pp_data,
   )
   if (is_biv_etas && !is.null(dots$etas_bivariate_params)) {
     result$etas_bivariate_params <- dots$etas_bivariate_params
+    result$etas_bivariate_convergence <- if (!is.null(last_biv_optim)) {
+      suppressWarnings(as.integer(last_biv_optim$convergence)[1L])
+    } else {
+      NA_integer_
+    }
+    result$etas_bivariate_value <- if (!is.null(last_biv_optim)) {
+      suppressWarnings(as.numeric(last_biv_optim$value)[1L])
+    } else {
+      NA_real_
+    }
     result$stability <- list(
       law = "bivariate",
       beta_gr = etas_beta_eff,

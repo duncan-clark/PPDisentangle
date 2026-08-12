@@ -164,7 +164,7 @@ settings_df <- data.frame(
   Setting = c(
     "SEM t_trunc (days)",
     "SEM t_trunc source",
-    "SEM t_trunc rel (auto)",
+    "SEM t_trunc rel (unused)",
     "BETA_GR",
     "ETAS_M0",
     "SEM_INNER_ITER",

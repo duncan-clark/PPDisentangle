@@ -724,7 +724,7 @@ trunc_df <- data.frame(
   Setting = c(
     "SEM t_trunc (days)",
     "SEM t_trunc source",
-    "Auto truncation relative level",
+    "Legacy auto-trunc rel level (unused)",
     "Structural c (Omori offset)",
     "Structural p (temporal exponent)",
     "Structural q (spatial exponent)",
