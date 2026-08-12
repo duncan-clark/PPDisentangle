@@ -182,6 +182,7 @@ settings_df <- data.frame(
     "ATE_CONTRAST",
     "BOOT_N_REPS / boot_reps",
     "KDE_VARIANT_MODE",
+    "KDE_BW_METHOD",
     "RUN_SENSITIVITY",
     "RUN_T_TRUNC_SENSITIVITY"
   ),
@@ -205,6 +206,7 @@ settings_df <- data.frame(
     scalar_chr(cfg$ATE_CONTRAST),
     paste(scalar_chr(cfg$BOOT_N_REPS), scalar_chr(cfg$BOOT_REPS), sep = " / "),
     scalar_chr(cfg$KDE_VARIANT_MODE),
+    scalar_chr(cfg$KDE_BW_METHOD %||% (results$kde_info$bw_method %||% "diggle2")),
     scalar_chr(cfg$RUN_SENSITIVITY),
     scalar_chr(cfg$RUN_T_TRUNC_SENSITIVITY)
   ),
@@ -213,6 +215,65 @@ settings_df <- data.frame(
 kable(settings_df, align = "lc",
       caption = "Primary estimation / ATE settings for this C/D run.") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+# KDE background
+
+```{r tbl-kde}
+kde <- results$kde_info
+if (is.null(kde)) {
+  cat("KDE summary was not stored in this results file.\n")
+} else {
+  bw_xy <- kde$bw_sigma_xy
+  bw_xy_txt <- if (!is.null(bw_xy) && length(bw_xy) >= 2L &&
+                   all(is.finite(as.numeric(bw_xy)))) {
+    sprintf("%.3f x %.3f", as.numeric(bw_xy[[1]]), as.numeric(bw_xy[[2]]))
+  } else {
+    "N/A"
+  }
+  kde_df <- data.frame(
+    Setting = c(
+      "Method",
+      "Bandwidth label",
+      "Bandwidth (km, scalar / geometric mean)",
+      "Bandwidth xy (km)",
+      "Diggle CV (km)",
+      "2 x Diggle (km)",
+      "Scott iso (km)",
+      "Training events (held-out pre)"
+    ),
+    Value = c(
+      scalar_chr(kde$bw_method %||% "diggle2"),
+      scalar_chr(kde$bw_label %||% NA),
+      fmt_num(kde$bw_sigma, 3),
+      bw_xy_txt,
+      fmt_num(kde$bw_diggle, 3),
+      fmt_num(if (!is.null(kde$bw_diggle)) 2 * safe_num(kde$bw_diggle) else NA, 3),
+      fmt_num(kde$bw_scott_iso, 3),
+      scalar_chr(kde$n_training)
+    ),
+    stringsAsFactors = FALSE
+  )
+  kable(kde_df, align = "lc",
+        caption = "KDE background-rate bandwidth (held-out first 50% of pre-treatment events).") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
+```
+
+```{r fig-kde-bg}
+#| label: fig-kde-bg
+#| fig-cap: "Estimated inhomogeneous background rate (KDE) from held-out pre-treatment events."
+#| fig-height: 6
+bg_plot <- NULL
+if (!is.null(results$plots) && !is.null(results$plots$background_rate_kde)) {
+  bg_plot <- results$plots$background_rate_kde
+}
+if (inherits(bg_plot, "gg") || inherits(bg_plot, "ggplot")) {
+  print(bg_plot)
+} else {
+  plot.new()
+  text(0.5, 0.5, "KDE background-rate plot was not stored in this results file.")
+}
 ```
 
 # Fit C / D ATEs

@@ -104,6 +104,7 @@ path_rel_to <- function(path, start) {
   if (length(rel_parts) < 1L) "." else paste(rel_parts, collapse = "/")
 }
 analysis_plots <- list()
+kde_info <- NULL
 store_analysis_plot <- function(name, plot_obj) {
   if (is.null(plot_obj)) return(invisible(NULL))
   analysis_plots[[name]] <<- plot_obj
@@ -314,6 +315,22 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
+# Background KDE bandwidth. Default remains 2 * bw.diggle (publication).
+# "scott" uses spatstat::bw.scott (anisotropic); "scott-iso" uses bw.scott.iso.
+KDE_BW_METHOD_RAW <- tolower(trimws(Sys.getenv("OK_KDE_BW_METHOD", "diggle2")))
+KDE_BW_METHOD <- switch(
+  KDE_BW_METHOD_RAW,
+  "scott" =, "bw.scott" =, "scott_aniso" = "scott",
+  "scott-iso" =, "scott_iso" =, "bw.scott.iso" = "scott-iso",
+  "diggle" =, "bw.diggle" = "diggle",
+  "diggle2" =, "2diggle" =, "2*diggle" =, "digglex2" = "diggle2",
+  NA_character_
+)
+if (!nzchar(KDE_BW_METHOD_RAW)) KDE_BW_METHOD <- "diggle2"
+if (is.na(KDE_BW_METHOD)) {
+  stop("OK_KDE_BW_METHOD must be one of: diggle2 (default), diggle, scott, scott-iso; got: ",
+       KDE_BW_METHOD_RAW)
+}
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 DF_VERBOSE <- tolower(Sys.getenv("OK_DF_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
 SEM_WORKER_LOGS <- tolower(Sys.getenv("OK_SEM_WORKER_LOGS", "true")) %in% c("1", "true", "yes", "y")
@@ -865,7 +882,8 @@ cat(sprintf("B/D SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
 cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-main-log: %s\n",
             SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
-cat(sprintf("KDE variant mode: %s\n", KDE_VARIANT_MODE))
+cat(sprintf("KDE variant mode: %s | bandwidth method: %s\n",
+            KDE_VARIANT_MODE, KDE_BW_METHOD))
 cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("AB-only scope (skip C/D + univ): %s\n", if (isTRUE(AB_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("Univ-KDE-only scope (skip A–F + homog I/J): %s\n",
@@ -1830,12 +1848,47 @@ cat(sprintf("  Held-out pre-treatment events for KDE: %d\n",
 kde_training <- pp_pre_holdout_ctrl
 X_bg <- ppp(x = kde_training$x, y = kde_training$y, window = win_km)
 bw_diggle <- as.numeric(suppressWarnings(bw.diggle(X_bg)))
-bw_sigma <- 2 * bw_diggle
+if (!is.finite(bw_diggle) || bw_diggle <= 0) {
+  stop("bw.diggle failed; cannot form the KDE background.")
+}
+bw_scott_xy <- tryCatch(as.numeric(bw.scott(X_bg)), error = function(e) c(NA_real_, NA_real_))
+bw_scott_iso <- tryCatch({
+  if (exists("bw.scott.iso", mode = "function")) {
+    as.numeric(bw.scott.iso(X_bg))
+  } else {
+    sqrt(prod(bw_scott_xy))
+  }
+}, error = function(e) sqrt(prod(bw_scott_xy)))
+if (identical(KDE_BW_METHOD, "scott")) {
+  if (length(bw_scott_xy) < 2L || any(!is.finite(bw_scott_xy)) || any(bw_scott_xy <= 0)) {
+    stop("bw.scott failed; cannot form the Scott KDE background.")
+  }
+  bw_sigma <- bw_scott_xy
+  kde_bw_label <- sprintf("Scott anisotropic (%.2f x %.2f km)", bw_sigma[[1]], bw_sigma[[2]])
+} else if (identical(KDE_BW_METHOD, "scott-iso")) {
+  if (!is.finite(bw_scott_iso) || bw_scott_iso <= 0) {
+    stop("bw.scott.iso failed; cannot form the isotropic Scott KDE background.")
+  }
+  bw_sigma <- bw_scott_iso
+  kde_bw_label <- sprintf("Scott isotropic (%.2f km)", bw_sigma)
+} else if (identical(KDE_BW_METHOD, "diggle")) {
+  bw_sigma <- bw_diggle
+  kde_bw_label <- sprintf("Diggle CV (%.2f km)", bw_sigma)
+} else {
+  bw_sigma <- 2 * bw_diggle
+  kde_bw_label <- sprintf("2 x Diggle CV (%.2f km)", bw_sigma)
+}
+bw_sigma_xy <- as.numeric(bw_sigma)
+bw_sigma_scalar <- if (length(bw_sigma_xy) == 1L) {
+  bw_sigma_xy[[1]]
+} else {
+  sqrt(prod(bw_sigma_xy))
+}
 lambda_im <- density(X_bg, sigma = bw_sigma, edge = TRUE, at = "pixels")
 min_nz <- min(lambda_im$v[lambda_im$v > 0], na.rm = TRUE)
 lambda_im$v[lambda_im$v <= 0] <- min_nz
-cat(sprintf("  KDE bandwidth: %.2f km (from %d held-out training events)\n",
-            as.numeric(bw_sigma), n_pre_holdout_ctrl))
+cat(sprintf("  KDE bandwidth [%s]: %s (from %d held-out training events; 2*diggle=%.2f km)\n",
+            KDE_BW_METHOD, kde_bw_label, n_pre_holdout_ctrl, 2 * bw_diggle))
 
 # Full-domain / control-region background mass ratio. Pre-treatment the
 # control background covers the whole domain (density-continuous), so each
@@ -1885,6 +1938,21 @@ if (!is.finite(trigger_range_km) || trigger_range_km <= 0) {
   trigger_range_km <- STRUCT_DEFAULTS$D
 }
 cat(sprintf("  Estimated triggering range (Q90 NN distance): %.2f km\n", trigger_range_km))
+
+kde_info <- list(
+  bw_method = KDE_BW_METHOD,
+  bw_label = kde_bw_label,
+  bw_sigma = as.numeric(bw_sigma_scalar),
+  bw_sigma_xy = as.numeric(bw_sigma_xy),
+  bw_diggle = as.numeric(bw_diggle),
+  bw_scott_xy = as.numeric(bw_scott_xy),
+  bw_scott_iso = as.numeric(bw_scott_iso),
+  n_training = n_pre_holdout_ctrl,
+  n_pre_ctrl_holdout = n_pre_holdout_ctrl,
+  n_pre_holdout = nrow(pp_pre_holdout),
+  n_pre_used = nrow(pp_pre),
+  trigger_range_km = trigger_range_km
+)
 
 normalize_bg_weights <- function(df_sub, win_sub, covariate_im, mark_name = "W") {
   if (nrow(df_sub) == 0) return(list(new_df = df_sub, norm = 0))
@@ -1944,7 +2012,7 @@ tryCatch({
     scale_fill_viridis_c(name = "KDE rate", option = "C") +
     coord_equal() +
     labs(title = "Inhomogeneous Background Rate (KDE)",
-         subtitle = "Estimated from held-out first 50% of pre-treatment events",
+         subtitle = paste0("Held-out first 50% of pre-treatment events; ", kde_bw_label),
          x = "X (km)", y = "Y (km)") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"),
@@ -4329,13 +4397,7 @@ results_pre_sensitivity <- list(
   kde_bandwidth_sensitivity = NULL,
   t_trunc_sensitivity = NULL,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
-  kde_info = list(
-    bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
-    n_pre_ctrl_holdout = n_pre_holdout_ctrl,
-    n_pre_holdout = nrow(pp_pre_holdout),
-    n_pre_used = nrow(pp_pre),
-    trigger_range_km = trigger_range_km
-  ),
+  kde_info = kde_info,
   control_snapshot_fits = control_snapshot_fits,
   sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
@@ -4394,6 +4456,7 @@ results_pre_sensitivity <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    KDE_BW_METHOD = KDE_BW_METHOD,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -4921,13 +4984,7 @@ results_pre_bootstrap <- list(
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
   t_trunc_sensitivity = t_trunc_sensitivity,
   pp_data = list(pp_pre = pp_pre, pp_pre_holdout = pp_pre_holdout, pp_post = pp_post),
-  kde_info = list(
-    bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
-    n_pre_ctrl_holdout = n_pre_holdout_ctrl,
-    n_pre_holdout = nrow(pp_pre_holdout),
-    n_pre_used = nrow(pp_pre),
-    trigger_range_km = trigger_range_km
-  ),
+  kde_info = kde_info,
   control_snapshot_fits = control_snapshot_fits,
   sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
@@ -4989,6 +5046,7 @@ results_pre_bootstrap <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    KDE_BW_METHOD = KDE_BW_METHOD,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -6273,11 +6331,7 @@ results <- list(
   ate_partitions = ate_partitions,
   kde_bandwidth_sensitivity = kde_bandwidth_sensitivity,
   t_trunc_sensitivity = t_trunc_sensitivity,
-  kde_info = list(bw_sigma = as.numeric(bw_sigma), n_training = n_pre_holdout_ctrl,
-                  n_pre_ctrl_holdout = n_pre_holdout_ctrl,
-                  n_pre_holdout = nrow(pp_pre_holdout),
-                  n_pre_used = nrow(pp_pre),
-                  trigger_range_km = trigger_range_km),
+  kde_info = kde_info,
   control_snapshot_fits = control_snapshot_fits,
   sem_pilot_tuning = sem_pilot_tuning,
   plots = analysis_plots,
@@ -6337,6 +6391,7 @@ results <- list(
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
+    KDE_BW_METHOD = KDE_BW_METHOD,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,

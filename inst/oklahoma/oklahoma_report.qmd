@@ -870,7 +870,7 @@ if (is.null(kde)) {
                 "Bandwidth (km)", "Estimated triggering range (km)", "Method"),
     Value = c(kde$n_training, kde_holdout, kde_used,
               fmt_scaled_num(kde$bw_sigma), fmt_scaled_num(kde$trigger_range_km),
-              "Diggle cross-validation"))
+              if (!is.null(kde$bw_label)) kde$bw_label else if (!is.null(kde$bw_method)) kde$bw_method else "2 x Diggle CV"))
 }
 kable(kde_df, align = "lc",
       caption = "KDE background rate estimation details.") |>
@@ -2420,26 +2420,32 @@ if (!is.null(biv_sim) && nrow(biv_sim) > 0) {
     all(c("Naive", "SEM") %in% unique(x))
   }, logical(1))
   biv_sim <- biv_sim[biv_sim$Pair %in% names(pair_ok)[pair_ok], , drop = FALSE]
-  biv_sim$Role <- factor(biv_sim$Role, levels = c("Naive", "SEM"))
-  biv_sim$Pair <- factor(
-    biv_sim$Pair,
-    levels = c("Homogeneous (A/B)", "KDE all-free (C/D)", "KDE struct-fixed (E/F)")
-  )
-  biv_means <- aggregate(TotalATE ~ Pair + Role, biv_sim, mean)
-  ggplot(biv_sim, aes(x = TotalATE, fill = Role)) +
-    geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
-    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
-    geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Role),
-               linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-    facet_wrap(~Pair, scales = "free") +
-    scale_fill_manual(values = c(Naive = "#fdb462", SEM = "#80b1d3")) +
-    scale_colour_manual(values = c(Naive = "#e6550d", SEM = "#3182bd")) +
-    labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
-         y = "Simulation count",
-         title = "All-or-Nothing Total Saved: Naive vs SEM by Model Family") +
-    theme_minimal(base_size = 13) +
-    theme(legend.position = "top",
-          plot.title = element_text(hjust = 0.5, face = "bold"))
+  if (nrow(biv_sim) < 1L) {
+    cat("Bivariate A–F ATE simulations are not in this results file.\n")
+  } else {
+    biv_sim$Role <- factor(biv_sim$Role, levels = c("Naive", "SEM"))
+    biv_sim$Pair <- factor(
+      biv_sim$Pair,
+      levels = c("Homogeneous (A/B)", "KDE all-free (C/D)", "KDE struct-fixed (E/F)")
+    )
+    biv_means <- aggregate(TotalATE ~ Pair + Role, biv_sim, mean)
+    ggplot(biv_sim, aes(x = TotalATE, fill = Role)) +
+      geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_vline(data = biv_means, aes(xintercept = TotalATE, colour = Role),
+                 linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
+      facet_wrap(~Pair, scales = "free") +
+      scale_fill_manual(values = c(Naive = "#fdb462", SEM = "#80b1d3")) +
+      scale_colour_manual(values = c(Naive = "#e6550d", SEM = "#3182bd")) +
+      labs(x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
+           y = "Simulation count",
+           title = "All-or-Nothing Total Saved: Naive vs SEM by Model Family") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position = "top",
+            plot.title = element_text(hjust = 0.5, face = "bold"))
+  }
+} else {
+  cat("Bivariate A–F ATE simulations are not in this results file.\n")
 }
 ```
 
