@@ -750,21 +750,33 @@ kable(trunc_df, align = "lc",
   kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
 ```
 
+The truncation-horizon grid below refits **Fit C** (naive bivariate + KDE) and
+**Fit D** (SEM bivariate + KDE) at each `t_trunc`, then recomputes the
+bivariate all-or-nothing contrast. Fit C is a single MLE so it is cheap
+relative to SEM. Older results files that only stored Fit D still render
+the D columns.
+
 ```{r prep-t-trunc-sensitivity}
 #| label: prep-t-trunc-sensitivity
 #| include: false
 trunc_sens <- results$t_trunc_sensitivity
 trunc_sens_df <- NULL
+trunc_sens_plot_df <- NULL
+trunc_sens_has_c <- FALSE
 trunc_sens_main_ttr <- suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS))
 if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
   rows <- lapply(trunc_sens, function(x) {
     if (is.null(x)) return(NULL)
     data.frame(
       t_trunc_days = suppressWarnings(as.numeric(x$t_trunc_days)),
-      status = as.character(x$status %||% NA_character_),
-      mean_saved = suppressWarnings(as.numeric(x$ate_mean_saved)),
-      sd_saved = suppressWarnings(as.numeric(x$ate_sd_saved)),
-      n_sims = suppressWarnings(as.integer(x$ate_n_sims)),
+      C_status = as.character(x$C_status %||% NA_character_),
+      D_status = as.character(x$D_status %||% x$status %||% NA_character_),
+      C_mean_saved = suppressWarnings(as.numeric(x$C_ate_mean_saved)),
+      C_sd_saved = suppressWarnings(as.numeric(x$C_ate_sd_saved)),
+      C_n_sims = suppressWarnings(as.integer(x$C_ate_n_sims)),
+      D_mean_saved = suppressWarnings(as.numeric(x$ate_mean_saved)),
+      D_sd_saved = suppressWarnings(as.numeric(x$ate_sd_saved)),
+      D_n_sims = suppressWarnings(as.integer(x$ate_n_sims)),
       n_relabel = suppressWarnings(as.integer(x$n_relabel)),
       elapsed_min = suppressWarnings(as.numeric(x$elapsed_sec)) / 60,
       stringsAsFactors = FALSE
@@ -773,6 +785,30 @@ if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
   trunc_sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
   if (!is.null(trunc_sens_df) && nrow(trunc_sens_df) >= 1L) {
     trunc_sens_df <- trunc_sens_df[order(trunc_sens_df$t_trunc_days), , drop = FALSE]
+    trunc_sens_has_c <- any(is.finite(trunc_sens_df$C_mean_saved) |
+                              (!is.na(trunc_sens_df$C_status) & nzchar(trunc_sens_df$C_status)))
+    plot_rows <- list(
+      data.frame(
+        t_trunc_days = trunc_sens_df$t_trunc_days,
+        Fit = "D: SEM biv+KDE",
+        mean_saved = trunc_sens_df$D_mean_saved,
+        sd_saved = trunc_sens_df$D_sd_saved,
+        stringsAsFactors = FALSE
+      )
+    )
+    if (isTRUE(trunc_sens_has_c)) {
+      plot_rows <- c(
+        list(data.frame(
+          t_trunc_days = trunc_sens_df$t_trunc_days,
+          Fit = "C: Naive biv+KDE",
+          mean_saved = trunc_sens_df$C_mean_saved,
+          sd_saved = trunc_sens_df$C_sd_saved,
+          stringsAsFactors = FALSE
+        )),
+        plot_rows
+      )
+    }
+    trunc_sens_plot_df <- do.call(rbind, plot_rows)
   } else {
     trunc_sens_df <- NULL
   }
@@ -782,58 +818,77 @@ if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
 ```{r tbl-t-trunc-sensitivity}
 #| label: tbl-t-trunc-sensitivity
 if (is.null(trunc_sens_df)) {
-  cat("No Fit D t_trunc sensitivity grid was saved in this results file.\n")
+  cat("No Fit C/D t_trunc sensitivity grid was saved in this results file.\n")
 } else {
-  # Plain-text caption: nested LaTeX in kable captions can drop HTML tables.
-  cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
+  cap <- if (isTRUE(trunc_sens_has_c)) {
+    "Fit C (naive biv+KDE) and Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
+  } else {
+    "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
+  }
   if (is.finite(trunc_sens_main_ttr)) {
     cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3f days.", trunc_sens_main_ttr))
   }
-  knitr::kable(
+  tbl <- if (isTRUE(trunc_sens_has_c)) {
     trunc_sens_df |>
       transmute(
         `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
-        Status = status,
-        `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
-        `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
-        `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
+        `C status` = ifelse(is.na(C_status) | !nzchar(C_status), "NA", C_status),
+        `C mean saved` = ifelse(is.finite(C_mean_saved), sprintf("%.1f", C_mean_saved), "NA"),
+        `C SD` = ifelse(is.finite(C_sd_saved), sprintf("%.1f", C_sd_saved), "NA"),
+        `D status` = ifelse(is.na(D_status) | !nzchar(D_status), "NA", D_status),
+        `D mean saved` = ifelse(is.finite(D_mean_saved), sprintf("%.1f", D_mean_saved), "NA"),
+        `D SD` = ifelse(is.finite(D_sd_saved), sprintf("%.1f", D_sd_saved), "NA"),
         Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA"),
         `Elapsed (min)` = ifelse(is.finite(elapsed_min), sprintf("%.1f", elapsed_min), "NA")
-      ),
-    align = "lcccccc",
-    caption = cap,
-    row.names = FALSE
-  ) |>
+      )
+  } else {
+    trunc_sens_df |>
+      transmute(
+        `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
+        Status = D_status,
+        `Mean saved` = ifelse(is.finite(D_mean_saved), sprintf("%.1f", D_mean_saved), "NA"),
+        `SD saved` = ifelse(is.finite(D_sd_saved), sprintf("%.1f", D_sd_saved), "NA"),
+        `ATE sims` = ifelse(is.finite(D_n_sims), as.character(D_n_sims), "NA"),
+        Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA"),
+        `Elapsed (min)` = ifelse(is.finite(elapsed_min), sprintf("%.1f", elapsed_min), "NA")
+      )
+  }
+  knitr::kable(tbl, align = "lcccccccc", caption = cap, row.names = FALSE) |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
 }
 ```
 
 ```{r fig-t-trunc-sensitivity}
 #| label: fig-t-trunc-sensitivity
-#| fig-cap: "Fit D all-or-nothing ATE versus temporal truncation horizon."
-if (!is.null(trunc_sens_df) &&
+#| fig-cap: "Fit C/D all-or-nothing ATE versus temporal truncation horizon."
+if (!is.null(trunc_sens_plot_df) &&
     requireNamespace("ggplot2", quietly = TRUE) &&
-    sum(is.finite(trunc_sens_df$mean_saved)) >= 2L) {
+    sum(is.finite(trunc_sens_plot_df$mean_saved)) >= 2L) {
   p_trunc <- ggplot2::ggplot(
-    trunc_sens_df[is.finite(trunc_sens_df$mean_saved), , drop = FALSE],
-    ggplot2::aes(x = t_trunc_days, y = mean_saved)
+    trunc_sens_plot_df[is.finite(trunc_sens_plot_df$mean_saved), , drop = FALSE],
+    ggplot2::aes(x = t_trunc_days, y = mean_saved, colour = Fit)
   ) +
-    ggplot2::geom_line(linewidth = 0.8, colour = "#1b9e77") +
-    ggplot2::geom_point(size = 2.4, colour = "#1b9e77") +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 2.4) +
     ggplot2::geom_errorbar(
       ggplot2::aes(
         ymin = mean_saved - sd_saved,
         ymax = mean_saved + sd_saved
       ),
-      width = 0.4, colour = "#1b9e77", alpha = 0.7,
+      width = 0.4, alpha = 0.7,
       na.rm = TRUE
     ) +
-    ggplot2::labs(
-      title = "Fit D ATE vs temporal truncation",
-      x = expression(t[trunc]~"(days)"),
-      y = "Mean saved events (AoN)"
+    ggplot2::scale_colour_manual(
+      values = c("C: Naive biv+KDE" = "#fdb462", "D: SEM biv+KDE" = "#80b1d3")
     ) +
-    ggplot2::theme_minimal()
+    ggplot2::labs(
+      title = "Fit C/D ATE vs temporal truncation",
+      x = expression(t[trunc]~"(days)"),
+      y = "Mean saved events (AoN)",
+      colour = NULL
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "top")
   if (is.finite(trunc_sens_main_ttr)) {
     p_trunc <- p_trunc +
       ggplot2::geom_vline(
@@ -924,37 +979,59 @@ if (inherits(bg_plot, "gg") || inherits(bg_plot, "ggplot")) {
 
 ## KDE bandwidth sensitivity
 
-Fit D (SEM bivariate + KDE) is refit on an isotropic Gaussian bandwidth grid
-at the same temporal truncation as the main run. Saved events use the
-bivariate all-or-nothing contrast.
+Fit C (naive bivariate + KDE) and Fit D (SEM bivariate + KDE) are refit on an
+isotropic Gaussian bandwidth grid at the same temporal truncation as the main
+run. Saved events use the bivariate all-or-nothing contrast.
 
 ```{r prep-kde-bw-sensitivity}
 #| label: prep-kde-bw-sensitivity
 #| include: false
 bw_sens <- results$kde_bandwidth_sensitivity
 bw_sens_df <- NULL
+bw_sens_plot_df <- NULL
+bw_sens_has_c <- FALSE
+ate_saved_from_obj <- function(ate_obj) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim$total_saved)) {
+    return(list(mean = NA_real_, sd = NA_real_, n = NA_integer_))
+  }
+  saved <- suppressWarnings(as.numeric(ate_obj$all_nothing_sim$total_saved))
+  saved <- saved[is.finite(saved)]
+  list(
+    mean = if (length(saved) > 0L) mean(saved) else NA_real_,
+    sd = if (length(saved) > 1L) stats::sd(saved) else NA_real_,
+    n = as.integer(length(saved))
+  )
+}
 if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
   rows <- lapply(bw_sens, function(x) {
     if (is.null(x)) return(NULL)
-    mean_saved <- suppressWarnings(as.numeric(x$ate_mean_saved))
-    sd_saved <- suppressWarnings(as.numeric(x$ate_sd_saved))
-    n_sims <- suppressWarnings(as.integer(x$ate_n_sims))
-    if (!is.finite(mean_saved) && !is.null(x$ate_F) &&
-        !is.null(x$ate_F$all_nothing_sim$total_saved)) {
-      saved <- suppressWarnings(as.numeric(x$ate_F$all_nothing_sim$total_saved))
-      saved <- saved[is.finite(saved)]
-      if (length(saved) > 0L) {
-        mean_saved <- mean(saved)
-        sd_saved <- if (length(saved) > 1L) stats::sd(saved) else NA_real_
-        n_sims <- length(saved)
-      }
+    d_mean <- suppressWarnings(as.numeric(x$ate_mean_saved))
+    d_sd <- suppressWarnings(as.numeric(x$ate_sd_saved))
+    d_n <- suppressWarnings(as.integer(x$ate_n_sims))
+    if (!is.finite(d_mean)) {
+      d_stats <- ate_saved_from_obj(x$ate_F)
+      d_mean <- d_stats$mean
+      d_sd <- d_stats$sd
+      d_n <- d_stats$n
+    }
+    c_mean <- suppressWarnings(as.numeric(x$C_ate_mean_saved))
+    c_sd <- suppressWarnings(as.numeric(x$C_ate_sd_saved))
+    c_n <- suppressWarnings(as.integer(x$C_ate_n_sims))
+    if (!is.finite(c_mean)) {
+      c_stats <- ate_saved_from_obj(x$ate_E)
+      c_mean <- c_stats$mean
+      c_sd <- c_stats$sd
+      c_n <- c_stats$n
     }
     data.frame(
       label = as.character(x$label %||% NA_character_),
       sigma_km = suppressWarnings(as.numeric(x$sigma)),
-      mean_saved = mean_saved,
-      sd_saved = sd_saved,
-      n_sims = n_sims,
+      C_mean_saved = c_mean,
+      C_sd_saved = c_sd,
+      C_n_sims = c_n,
+      D_mean_saved = d_mean,
+      D_sd_saved = d_sd,
+      D_n_sims = d_n,
       n_relabel = suppressWarnings(as.integer(x$n_relabel)),
       stringsAsFactors = FALSE
     )
@@ -962,6 +1039,29 @@ if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
   bw_sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
   if (!is.null(bw_sens_df) && nrow(bw_sens_df) >= 1L) {
     bw_sens_df <- bw_sens_df[order(bw_sens_df$sigma_km, bw_sens_df$label), , drop = FALSE]
+    bw_sens_has_c <- any(is.finite(bw_sens_df$C_mean_saved))
+    plot_rows <- list(
+      data.frame(
+        sigma_km = bw_sens_df$sigma_km,
+        Fit = "D: SEM biv+KDE",
+        mean_saved = bw_sens_df$D_mean_saved,
+        sd_saved = bw_sens_df$D_sd_saved,
+        stringsAsFactors = FALSE
+      )
+    )
+    if (isTRUE(bw_sens_has_c)) {
+      plot_rows <- c(
+        list(data.frame(
+          sigma_km = bw_sens_df$sigma_km,
+          Fit = "C: Naive biv+KDE",
+          mean_saved = bw_sens_df$C_mean_saved,
+          sd_saved = bw_sens_df$C_sd_saved,
+          stringsAsFactors = FALSE
+        )),
+        plot_rows
+      )
+    }
+    bw_sens_plot_df <- do.call(rbind, plot_rows)
   } else {
     bw_sens_df <- NULL
   }
@@ -971,56 +1071,74 @@ if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
 ```{r tbl-kde-bw-sensitivity}
 #| label: tbl-kde-bw-sensitivity
 if (is.null(bw_sens_df)) {
-  cat("No Fit D KDE bandwidth sensitivity grid was saved in this results file.\n")
+  cat("No Fit C/D KDE bandwidth sensitivity grid was saved in this results file.\n")
 } else {
-  cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs isotropic KDE bandwidth."
+  cap <- if (isTRUE(bw_sens_has_c)) {
+    "Fit C (naive biv+KDE) and Fit D (SEM biv+KDE) all-or-nothing ATE vs isotropic KDE bandwidth."
+  } else {
+    "Fit D (SEM biv+KDE) all-or-nothing ATE vs isotropic KDE bandwidth."
+  }
   if (is.finite(suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS)))) {
     cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3g days.", as.numeric(cfg$SEM_T_TRUNC_DAYS)))
   }
-  knitr::kable(
+  tbl <- if (isTRUE(bw_sens_has_c)) {
     bw_sens_df |>
       transmute(
         Bandwidth = label,
         `sigma (km)` = ifelse(is.finite(sigma_km), sprintf("%.3g", sigma_km), "NA"),
-        `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
-        `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
-        `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
+        `C mean saved` = ifelse(is.finite(C_mean_saved), sprintf("%.1f", C_mean_saved), "NA"),
+        `C SD` = ifelse(is.finite(C_sd_saved), sprintf("%.1f", C_sd_saved), "NA"),
+        `D mean saved` = ifelse(is.finite(D_mean_saved), sprintf("%.1f", D_mean_saved), "NA"),
+        `D SD` = ifelse(is.finite(D_sd_saved), sprintf("%.1f", D_sd_saved), "NA"),
         Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA")
-      ),
-    align = "lccccc",
-    caption = cap,
-    row.names = FALSE
-  ) |>
+      )
+  } else {
+    bw_sens_df |>
+      transmute(
+        Bandwidth = label,
+        `sigma (km)` = ifelse(is.finite(sigma_km), sprintf("%.3g", sigma_km), "NA"),
+        `Mean saved` = ifelse(is.finite(D_mean_saved), sprintf("%.1f", D_mean_saved), "NA"),
+        `SD saved` = ifelse(is.finite(D_sd_saved), sprintf("%.1f", D_sd_saved), "NA"),
+        `ATE sims` = ifelse(is.finite(D_n_sims), as.character(D_n_sims), "NA"),
+        Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA")
+      )
+  }
+  knitr::kable(tbl, align = "lcccccc", caption = cap, row.names = FALSE) |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
 }
 ```
 
 ```{r fig-kde-bw-sensitivity}
 #| label: fig-kde-bw-sensitivity
-#| fig-cap: "Fit D all-or-nothing ATE versus isotropic KDE bandwidth."
-if (!is.null(bw_sens_df) &&
+#| fig-cap: "Fit C/D all-or-nothing ATE versus isotropic KDE bandwidth."
+if (!is.null(bw_sens_plot_df) &&
     requireNamespace("ggplot2", quietly = TRUE) &&
-    sum(is.finite(bw_sens_df$mean_saved) & is.finite(bw_sens_df$sigma_km)) >= 2L) {
+    sum(is.finite(bw_sens_plot_df$mean_saved) & is.finite(bw_sens_plot_df$sigma_km)) >= 2L) {
   p_bw <- ggplot2::ggplot(
-    bw_sens_df[is.finite(bw_sens_df$mean_saved) & is.finite(bw_sens_df$sigma_km), , drop = FALSE],
-    ggplot2::aes(x = sigma_km, y = mean_saved)
+    bw_sens_plot_df[is.finite(bw_sens_plot_df$mean_saved) & is.finite(bw_sens_plot_df$sigma_km), , drop = FALSE],
+    ggplot2::aes(x = sigma_km, y = mean_saved, colour = Fit)
   ) +
-    ggplot2::geom_line(linewidth = 0.8, colour = "#d95f02") +
-    ggplot2::geom_point(size = 2.4, colour = "#d95f02") +
+    ggplot2::geom_line(linewidth = 0.8) +
+    ggplot2::geom_point(size = 2.4) +
     ggplot2::geom_errorbar(
       ggplot2::aes(
         ymin = mean_saved - sd_saved,
         ymax = mean_saved + sd_saved
       ),
-      width = 0.2, colour = "#d95f02", alpha = 0.7,
+      width = 0.2, alpha = 0.7,
       na.rm = TRUE
     ) +
-    ggplot2::labs(
-      title = "Fit D ATE vs KDE bandwidth",
-      x = "Isotropic bandwidth (km)",
-      y = "Mean saved events (AoN)"
+    ggplot2::scale_colour_manual(
+      values = c("C: Naive biv+KDE" = "#fdb462", "D: SEM biv+KDE" = "#80b1d3")
     ) +
-    ggplot2::theme_minimal()
+    ggplot2::labs(
+      title = "Fit C/D ATE vs KDE bandwidth",
+      x = "Isotropic bandwidth (km)",
+      y = "Mean saved events (AoN)",
+      colour = NULL
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "top")
   print(p_bw)
 }
 ```

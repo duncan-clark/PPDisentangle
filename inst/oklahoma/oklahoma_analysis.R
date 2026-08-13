@@ -270,7 +270,7 @@ KDE_BW_SENS_KM <- if (nzchar(KDE_BW_SENS_KM_RAW)) {
   numeric(0)
 }
 KDE_BW_SENS_KM <- sort(unique(KDE_BW_SENS_KM[is.finite(KDE_BW_SENS_KM) & KDE_BW_SENS_KM > 0]))
-# Fit-D temporal-truncation sensitivity (independent of bandwidth/partition sens).
+# Fit C/D temporal-truncation sensitivity (independent of bandwidth/partition sens).
 T_TRUNC_SENS_DAYS_RAW <- trimws(Sys.getenv("OK_T_TRUNC_SENS_DAYS", "1,5,7,10,14,21"))
 T_TRUNC_SENS_DAYS <- suppressWarnings(as.numeric(unlist(strsplit(T_TRUNC_SENS_DAYS_RAW, "[,;|\\s]+"))))
 T_TRUNC_SENS_DAYS <- sort(unique(T_TRUNC_SENS_DAYS[is.finite(T_TRUNC_SENS_DAYS) & T_TRUNC_SENS_DAYS > 0]))
@@ -1474,7 +1474,7 @@ for (nm in names(control_snapshot_fits)) {
 }
 
 if (length(T_TRUNC_SENS_DAYS) > 0L) {
-  cat(sprintf("  Fit D t_trunc sensitivity grid (days): %s | SEM inner=%d\n",
+  cat(sprintf("  Fit C/D t_trunc sensitivity grid (days): %s | SEM inner=%d\n",
               paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", "),
               as.integer(SENS_SEM_INNER_ITER)))
 }
@@ -1930,8 +1930,12 @@ cat(sprintf("  Control-background pre-treatment KDE mass ratio: %.3f\n",
 # region, but evaluable over the whole domain. Used by simulation-based
 # estimands (ATE counterfactuals, bootstrap world sims) so simulated
 # backgrounds follow the fitted KDE field instead of a uniform density.
-make_kde_bg_lookup <- function(ref_win) {
-  cov_in_window <- lambda_im[ref_win, drop = FALSE]
+make_kde_bg_lookup <- function(ref_win, covariate_im = lambda_im) {
+  # Bind the image in this frame. PSOCK workers do not inherit .GlobalEnv, so
+  # nested lookups of lambda_im fail with "object 'lambda_im' not found"
+  # (job 8469262 t_trunc ATE).
+  force(covariate_im)
+  cov_in_window <- covariate_im[ref_win, drop = FALSE]
   total_mass <- spatstat.geom::integral.im(cov_in_window)
   target_area <- spatstat.geom::area(ref_win)
   if (!is.finite(total_mass) || total_mass <= 0 ||
@@ -1939,9 +1943,11 @@ make_kde_bg_lookup <- function(ref_win) {
     stop("Cannot normalize KDE background lookup on a state space.")
   }
   norm_factor <- target_area / total_mass
+  im_local <- covariate_im
   force(norm_factor)
+  force(im_local)
   function(x, y) {
-    vals <- spatstat.geom::interp.im(lambda_im, x, y)
+    vals <- spatstat.geom::interp.im(im_local, x, y)
     vals[!is.finite(vals) | vals < 0] <- 0
     vals * norm_factor
   }
@@ -4080,7 +4086,7 @@ if (exists("t_ate_L", inherits = FALSE)) {
     ))
     rm(boot_patch)
   } else if (isTRUE(T_TRUNC_SENS_ONLY)) {
-    cat("\n--- T_TRUNC_SENS_ONLY: skipped Steps 4-6 (county fits / main ATEs); will run Fit D t_trunc sensitivity only ---\n")
+    cat("\n--- T_TRUNC_SENS_ONLY: skipped Steps 4-6 (county fits / main ATEs); will run Fit C/D t_trunc sensitivity only ---\n")
     trunc_patch <- readRDS(normalizePath(T_TRUNC_SENS_PATCH_FILE, winslash = "/", mustWork = TRUE))
     # Adopt patch CRN base if present; t_trunc is already pinned (auto disabled).
     crn_from_patch <- suppressWarnings(as.integer(trunc_patch$config$ATE_CRN_BASE))
@@ -4568,12 +4574,25 @@ cat("  Stage meaning: MAIN-FIT ATE stage is complete; now computing sensitivity 
 
 # ATE sensitivity by KDE bandwidth (county only, inhomogeneous C/D all_free)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
-  if (is.null(kf) || is.null(kf$F_params)) return(NULL)
+  if (is.null(kf) || (is.null(kf$E_params) && is.null(kf$F_params))) return(NULL)
+  ate_saved_stats <- function(ate_obj) {
+    sim_saved <- if (!is.null(ate_obj) && !is.null(ate_obj$all_nothing_sim$total_saved)) {
+      suppressWarnings(as.numeric(ate_obj$all_nothing_sim$total_saved))
+    } else {
+      numeric(0)
+    }
+    sim_saved <- sim_saved[is.finite(sim_saved)]
+    list(
+      mean = if (length(sim_saved) > 0L) mean(sim_saved) else NA_real_,
+      sd = if (length(sim_saved) > 1L) stats::sd(sim_saved) else NA_real_,
+      n = length(sim_saved)
+    )
+  }
   ate_E <- if (!is.null(kf$E_params)) {
     tryCatch(
       ate_biv_or_marginal(
         kf$E_params, extract_marginals(kf$E_params), kf$pp_post_bg,
-        sprintf("BW %s naive biv+KDE", kf$label),
+        sprintf("BW %s Fit C naive biv+KDE", kf$label),
         bg_lookup = KDE_BG_LOOKUP
       ),
       error = function(e) NULL
@@ -4581,19 +4600,20 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
   } else {
     NULL
   }
-  ate_F <- tryCatch(
-    ate_biv_or_marginal(
-      kf$F_params, extract_marginals(kf$F_params), kf$pp_post_sem,
-      sprintf("BW %s SEM biv+KDE", kf$label),
-      bg_lookup = KDE_BG_LOOKUP
-    ),
-    error = function(e) NULL
-  )
-  sim_saved <- if (!is.null(ate_F) && !is.null(ate_F$all_nothing_sim$total_saved)) {
-    suppressWarnings(as.numeric(ate_F$all_nothing_sim$total_saved))
+  ate_F <- if (!is.null(kf$F_params)) {
+    tryCatch(
+      ate_biv_or_marginal(
+        kf$F_params, extract_marginals(kf$F_params), kf$pp_post_sem,
+        sprintf("BW %s Fit D SEM biv+KDE", kf$label),
+        bg_lookup = KDE_BG_LOOKUP
+      ),
+      error = function(e) NULL
+    )
   } else {
-    numeric(0)
+    NULL
   }
+  stats_E <- ate_saved_stats(ate_E)
+  stats_F <- ate_saved_stats(ate_F)
   list(
     label = kf$label,
     multiplier = kf$multiplier,
@@ -4603,9 +4623,13 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
     n_relabel = kf$n_relabel,
     ate_E = ate_E,
     ate_F = ate_F,
-    ate_mean_saved = if (length(sim_saved) > 0L) mean(sim_saved, na.rm = TRUE) else NA_real_,
-    ate_sd_saved = if (length(sim_saved) > 1L) stats::sd(sim_saved, na.rm = TRUE) else NA_real_,
-    ate_n_sims = length(sim_saved[!is.na(sim_saved)])
+    C_ate_mean_saved = stats_E$mean,
+    C_ate_sd_saved = stats_E$sd,
+    C_ate_n_sims = stats_E$n,
+    # Legacy names remain Fit D so older reports still read D.
+    ate_mean_saved = stats_F$mean,
+    ate_sd_saved = stats_F$sd,
+    ate_n_sims = stats_F$n
   )
 })
 kde_bandwidth_sensitivity <- Filter(Negate(is.null), kde_bandwidth_sensitivity)
@@ -4668,7 +4692,7 @@ ate_partitions <- Filter(Negate(is.null), ate_partitions)
 }
 
 # ============================================================================
-# 7a2. Fit D temporal-truncation sensitivity (ATE vs t_trunc)
+# 7a2. Fit C/D temporal-truncation sensitivity (ATE vs t_trunc)
 #      Optional: multi-seed smoke at fixed t_trunc (no ATE) when OK_SMOKE_SEM_D_SEEDS > 0
 # ============================================================================
 smoke_sem_d <- NULL
@@ -4809,11 +4833,11 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
   quit(save = "no", status = 0)
 }
 
-cat("\n--- Step 7a2: Fit D t_trunc sensitivity ---\n")
+cat("\n--- Step 7a2: Fit C/D t_trunc sensitivity ---\n")
 if (length(T_TRUNC_SENS_DAYS) < 1L) {
-  cat("  Skipping Fit D t_trunc sensitivity (empty grid / disabled).\n")
+  cat("  Skipping Fit C/D t_trunc sensitivity (empty grid / disabled).\n")
 } else {
-  cat(sprintf("  Refitting SEM Fit D + AoN ATE at t_trunc days: %s\n",
+  cat(sprintf("  Refitting Fit C (naive) and Fit D (SEM) + AoN ATE at t_trunc days: %s\n",
               paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
   biv_init_trunc <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   run_t_trunc_sens_job <- function(t_trunc_val) {
@@ -4821,6 +4845,107 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
     label <- sprintf("t_trunc=%.4g", t_trunc_val)
     cat(sprintf("    [t_trunc_sens:%s] start pid=%d mem=%s\n",
                 label, Sys.getpid(), mem_snapshot()))
+    cap_tol <- 1e-4
+    rho_of <- function(params) {
+      if (is.null(params)) return(NA_real_)
+      tryCatch(
+        PPDisentangle:::.etas_biv_spectral_radius(params, BETA_GR),
+        error = function(e) NA_real_
+      )
+    }
+    is_explosive_rho <- function(params, rho_val) {
+      !is.null(params) && (
+        !is.finite(rho_val) ||
+          rho_val >= 1 ||
+          rho_val >= (ETAS_BRANCHING_MAX - cap_tol)
+      )
+    }
+    ate_at_trunc <- function(params, fit_label) {
+      ate_estim_bivariate(
+        biv_params = params,
+        windowT = windowT_ate,
+        windowS = win_km,
+        state_spaces_obs = state_spaces,
+        label = fit_label,
+        n_sims = ATE_N_SIMS,
+        n_cores = 1L,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        t_trunc = t_trunc_val,
+        n_tiles = partition$n,
+        crn_base_seed = ate_crn_base_seed,
+        use_crn = OK_ATE_USE_CRN,
+        crn_pair = OK_ATE_CRN_PAIR,
+        quiet = TRUE,
+        contrast = "all_or_nothing",
+        covariate_lookup = KDE_BG_LOOKUP
+      )
+    }
+    saved_stats <- function(ate_obj) {
+      sim_saved <- if (!is.null(ate_obj) && !is.null(ate_obj$all_nothing_sim$total_saved)) {
+        suppressWarnings(as.numeric(ate_obj$all_nothing_sim$total_saved))
+      } else {
+        numeric(0)
+      }
+      sim_saved <- sim_saved[is.finite(sim_saved)]
+      list(
+        mean = if (length(sim_saved) > 0L) mean(sim_saved) else NA_real_,
+        sd = if (length(sim_saved) > 1L) stats::sd(sim_saved) else NA_real_,
+        n = length(sim_saved)
+      )
+    }
+    status_of <- function(params, is_explosive, n_sims) {
+      if (isTRUE(is_explosive)) {
+        "explosive"
+      } else if (!is.null(params) && n_sims > 0L) {
+        "ok"
+      } else {
+        "failed"
+      }
+    }
+
+    fitC_local <- tryCatch({
+      fit_etas_bivariate(
+        params_init = biv_init_trunc, realiz = pp_all_bg,
+        windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
+        control_state_space = control_ss, treated_state_space = treated_ss,
+        background_rate_var = "W",
+        treated_background_zero_before = 0,
+        control_background_everywhere_before = 0,
+        control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
+        beta_gr = BETA_GR,
+        enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
+        p_lower_bound = ETAS_P_LOWER_BOUND,
+        q_lower_bound = ETAS_Q_LOWER_BOUND,
+        max_branching_radius = ETAS_BRANCHING_MAX,
+        maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+        t_trunc = t_trunc_val
+      )
+    }, error = function(e) {
+      cat(sprintf("    [t_trunc_sens:%s] Fit C error: %s\n", label, e$message))
+      NULL
+    })
+    c_params_local <- if (valid_biv_fit(fitC_local)) fitC_local$par else NULL
+    c_rho_local <- rho_of(c_params_local)
+    c_explosive <- is_explosive_rho(c_params_local, c_rho_local)
+    ate_c_local <- NULL
+    if (!is.null(c_params_local) && !isTRUE(c_explosive)) {
+      ate_c_local <- tryCatch({
+        ate_at_trunc(c_params_local, sprintf("Fit C t_trunc %.4g", t_trunc_val))
+      }, error = function(e) {
+        cat(sprintf("    [t_trunc_sens:%s] Fit C ATE error: %s\n", label, e$message))
+        NULL
+      })
+    } else if (isTRUE(c_explosive)) {
+      cat(sprintf(
+        "    [t_trunc_sens:%s] discarding explosive/near-critical Fit C (rho=%s, margin=%.3f)\n",
+        label, format(c_rho_local, digits = 6), ETAS_BRANCHING_MAX
+      ))
+    }
+    c_saved <- saved_stats(ate_c_local)
+    c_status_local <- status_of(c_params_local, c_explosive, c_saved$n)
+
     sem_local <- tryCatch({
       run_sem_fit(
         pp_data_in = pp_all_bg,
@@ -4843,77 +4968,42 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
       NULL
     })
     params_local <- if (valid_biv_sem(sem_local)) sem_local$etas_bivariate_params else NULL
-    rho_local <- if (!is.null(params_local)) {
-      tryCatch(
-        PPDisentangle:::.etas_biv_spectral_radius(params_local, BETA_GR),
-        error = function(e) NA_real_
-      )
-    } else {
-      NA_real_
-    }
+    rho_local <- rho_of(params_local)
     # Match bootstrap/INSTRUCTIONS explosive filter (rho >= 1), and also discard
     # hard-cap landings (projected just below ETAS_BRANCHING_MAX) as unstable.
-    cap_tol <- 1e-4
-    is_explosive <- !is.null(params_local) && (
-      !is.finite(rho_local) ||
-        rho_local >= 1 ||
-        rho_local >= (ETAS_BRANCHING_MAX - cap_tol)
-    )
+    is_explosive <- is_explosive_rho(params_local, rho_local)
     ate_local <- NULL
     if (!is.null(params_local) && !isTRUE(is_explosive)) {
       ate_local <- tryCatch({
-        ate_estim_bivariate(
-          biv_params = params_local,
-          windowT = windowT_ate,
-          windowS = win_km,
-          state_spaces_obs = state_spaces,
-          label = sprintf("Fit D t_trunc %.4g", t_trunc_val),
-          n_sims = ATE_N_SIMS,
-          n_cores = 1L,
-          m0 = ETAS_M0,
-          beta_gr = BETA_GR,
-          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-          t_trunc = t_trunc_val,
-          n_tiles = partition$n,
-          crn_base_seed = ate_crn_base_seed,
-          use_crn = OK_ATE_USE_CRN,
-          crn_pair = OK_ATE_CRN_PAIR,
-          quiet = TRUE,
-          contrast = "all_or_nothing",
-          covariate_lookup = KDE_BG_LOOKUP
-        )
+        ate_at_trunc(params_local, sprintf("Fit D t_trunc %.4g", t_trunc_val))
       }, error = function(e) {
-        cat(sprintf("    [t_trunc_sens:%s] ATE error: %s\n", label, e$message))
+        cat(sprintf("    [t_trunc_sens:%s] Fit D ATE error: %s\n", label, e$message))
         NULL
       })
     } else if (isTRUE(is_explosive)) {
       cat(sprintf(
-        "    [t_trunc_sens:%s] discarding explosive/near-critical fit (rho=%s, margin=%.3f)\n",
+        "    [t_trunc_sens:%s] discarding explosive/near-critical Fit D (rho=%s, margin=%.3f)\n",
         label, format(rho_local, digits = 6), ETAS_BRANCHING_MAX
       ))
     }
-    sim_saved <- if (!is.null(ate_local) && !is.null(ate_local$all_nothing_sim$total_saved)) {
-      suppressWarnings(as.numeric(ate_local$all_nothing_sim$total_saved))
-    } else {
-      numeric(0)
-    }
-    status_local <- if (isTRUE(is_explosive)) {
-      "explosive"
-    } else if (!is.null(params_local) && length(sim_saved) > 0L) {
-      "ok"
-    } else {
-      "failed"
-    }
+    d_saved <- saved_stats(ate_local)
+    status_local <- status_of(params_local, is_explosive, d_saved$n)
     elapsed <- proc.time()[["elapsed"]] - t0
-    cat(sprintf("    [t_trunc_sens:%s] done in %.1fs status=%s rho=%s mem=%s\n",
-                label, elapsed, status_local,
-                format(rho_local, digits = 6), mem_snapshot()))
+    cat(sprintf(
+      "    [t_trunc_sens:%s] done in %.1fs C=%s rhoC=%s D=%s rhoD=%s mem=%s\n",
+      label, elapsed, c_status_local, format(c_rho_local, digits = 6),
+      status_local, format(rho_local, digits = 6), mem_snapshot()
+    ))
     list(
       t_trunc_days = as.numeric(t_trunc_val),
       status = status_local,
+      C_status = c_status_local,
+      D_status = status_local,
       elapsed_sec = as.numeric(elapsed),
       params = if (identical(status_local, "ok")) params_local else NULL,
+      C_params = if (identical(c_status_local, "ok")) c_params_local else NULL,
       rho = as.numeric(rho_local),
+      C_rho = as.numeric(c_rho_local),
       branching_metric = as.numeric(rho_local),
       n_relabel = if (!is.null(sem_local) && !is.null(sem_local$adaptive$adaptive_labelling)) {
         lp <- sem_local$adaptive$adaptive_labelling
@@ -4922,10 +5012,14 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
       } else {
         NA_integer_
       },
-      ate_mean_saved = if (length(sim_saved) > 0L) mean(sim_saved, na.rm = TRUE) else NA_real_,
-      ate_sd_saved = if (length(sim_saved) > 1L) stats::sd(sim_saved, na.rm = TRUE) else NA_real_,
-      ate_n_sims = length(sim_saved[!is.na(sim_saved)]),
+      C_ate_mean_saved = c_saved$mean,
+      C_ate_sd_saved = c_saved$sd,
+      C_ate_n_sims = c_saved$n,
+      ate_mean_saved = d_saved$mean,
+      ate_sd_saved = d_saved$sd,
+      ate_n_sims = d_saved$n,
       ate = if (isTRUE(TRIM_SENS_OBJECTS)) NULL else ate_local,
+      C_ate = if (isTRUE(TRIM_SENS_OBJECTS)) NULL else ate_c_local,
       sem = if (isTRUE(TRIM_SENS_OBJECTS)) NULL else sem_local
     )
   }
@@ -4942,8 +5036,12 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   names(t_trunc_sensitivity) <- sprintf("t_trunc_%.4g", T_TRUNC_SENS_DAYS)
   sens_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "ok"), logical(1)))
   sens_explosive <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "explosive"), logical(1)))
-  cat(sprintf("  Fit D t_trunc sensitivity complete: %d/%d ok, %d explosive/near-critical discarded\n",
-              as.integer(sens_ok), length(t_trunc_sensitivity), as.integer(sens_explosive)))
+  sens_c_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$C_status, "ok"), logical(1)))
+  cat(sprintf(
+    "  Fit C/D t_trunc sensitivity complete: C %d/%d ok | D %d/%d ok, %d D explosive/near-critical discarded\n",
+    as.integer(sens_c_ok), length(t_trunc_sensitivity),
+    as.integer(sens_ok), length(t_trunc_sensitivity), as.integer(sens_explosive)
+  ))
 }
 
 if (isTRUE(T_TRUNC_SENS_ONLY)) {
@@ -5182,6 +5280,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
   t_bootstrap <- proc.time()[["elapsed"]]
   cat(sprintf("\n--- Step 8: Parametric bootstrap ATEs (targets=%s, reps=%d, scope=%s, outer cores=%d, boot SEM inner=%d) ---\n",
               paste(boot_targets_run, collapse = ","), BOOT_N_REPS, BOOT_REFIT_SCOPE, BOOT_OUTER_CORES, BOOT_SEM_INNER_ITER))
+
+  # R's default connection limit is 128. The reusable ATE PSOCK pool already
+  # holds ATE_SIM_CORES sockets; opening BOOT_OUTER_CORES more workers on top
+  # of that hits "all connections are in use" (job 8469262: 64+64).
+  stop_ate_psock_pool()
+  cat("  Closed reusable ATE PSOCK pool before bootstrap outer workers.\n")
 
   if (BOOT_REFIT_SCOPE == "full") {
     cat("  Full scope selected: for current targets (C/D), this runs per-replicate refits before ATE estimation.\n")
