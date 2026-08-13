@@ -257,6 +257,19 @@ if (!is.na(env_sem_outer_maxit_biv) && env_sem_outer_maxit_biv > 0L) {
 SEM_WARMSTART_FIXED <- tolower(Sys.getenv("OK_SEM_WARMSTART_FIXED", "false")) %in% c("1", "true", "yes", "y")
 # Optional speed mode for proof-of-concept runs.
 RUN_SENSITIVITY <- tolower(Sys.getenv("OK_RUN_SENSITIVITY", "true")) %in% c("1", "true", "yes", "y")
+# Partition grids/AOI are independent of KDE bandwidth sensitivity.
+RUN_PARTITION_SENSITIVITY <- tolower(Sys.getenv(
+  "OK_RUN_PARTITION_SENSITIVITY",
+  if (RUN_SENSITIVITY) "true" else "false"
+)) %in% c("1", "true", "yes", "y")
+# Absolute-km KDE bandwidth grid for Fit C/D (empty => Diggle multipliers when RUN_SENSITIVITY).
+KDE_BW_SENS_KM_RAW <- trimws(Sys.getenv("OK_KDE_BW_SENS_KM", ""))
+KDE_BW_SENS_KM <- if (nzchar(KDE_BW_SENS_KM_RAW)) {
+  suppressWarnings(as.numeric(unlist(strsplit(KDE_BW_SENS_KM_RAW, "[,;|\\s]+"))))
+} else {
+  numeric(0)
+}
+KDE_BW_SENS_KM <- sort(unique(KDE_BW_SENS_KM[is.finite(KDE_BW_SENS_KM) & KDE_BW_SENS_KM > 0]))
 # Fit-D temporal-truncation sensitivity (independent of bandwidth/partition sens).
 T_TRUNC_SENS_DAYS_RAW <- trimws(Sys.getenv("OK_T_TRUNC_SENS_DAYS", "1,5,7,10,14,21"))
 T_TRUNC_SENS_DAYS <- suppressWarnings(as.numeric(unlist(strsplit(T_TRUNC_SENS_DAYS_RAW, "[,;|\\s]+"))))
@@ -884,6 +897,13 @@ cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-ma
             SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
 cat(sprintf("KDE variant mode: %s | bandwidth method: %s\n",
             KDE_VARIANT_MODE, KDE_BW_METHOD))
+if (length(KDE_BW_SENS_KM) > 0L) {
+  cat(sprintf("KDE bandwidth sensitivity (km): %s | SEM inner=%d\n",
+              paste(signif(KDE_BW_SENS_KM, 4), collapse = ", "),
+              as.integer(SENS_SEM_INNER_ITER)))
+}
+cat(sprintf("Partition sensitivity: %s\n",
+            if (isTRUE(RUN_PARTITION_SENSITIVITY)) "TRUE" else "FALSE"))
 cat(sprintf("CD-only scope (skip A/B + univ): %s\n", if (isTRUE(CD_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("AB-only scope (skip C/D + univ): %s\n", if (isTRUE(AB_ONLY)) "TRUE" else "FALSE"))
 cat(sprintf("Univ-KDE-only scope (skip A–F + homog I/J): %s\n",
@@ -1454,8 +1474,9 @@ for (nm in names(control_snapshot_fits)) {
 }
 
 if (length(T_TRUNC_SENS_DAYS) > 0L) {
-  cat(sprintf("  Fit D t_trunc sensitivity grid (days): %s\n",
-              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
+  cat(sprintf("  Fit D t_trunc sensitivity grid (days): %s | SEM inner=%d\n",
+              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", "),
+              as.integer(SENS_SEM_INNER_ITER)))
 }
 
 # ============================================================================
@@ -3296,7 +3317,18 @@ pp_post_sem_L <- pp_post_sem_L[pp_post_sem_L$t >= 0, , drop = FALSE]
 # 4K. KDE bandwidth sensitivity (county partition, inhomogeneous C/D = all_free)
 # ============================================================================
 cat("\n--- Step 4K: KDE bandwidth sensitivity (county, inhom C/D all_free) ---\n")
-if (RUN_SENSITIVITY) {
+if (length(KDE_BW_SENS_KM) > 0L) {
+  kde_bandwidth_specs <- lapply(KDE_BW_SENS_KM, function(km) {
+    list(
+      label = sprintf("%gkm", km),
+      multiplier = NA_real_,
+      sigma_km = as.numeric(km)
+    )
+  })
+  cat(sprintf("  Absolute-km bandwidth grid: %s (SEM inner=%d, t_trunc=%.4g days)\n",
+              paste(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), collapse = ", "),
+              as.integer(SENS_SEM_INNER_ITER), as.numeric(SEM_T_TRUNC_DAYS)))
+} else if (RUN_SENSITIVITY) {
   kde_bandwidth_specs <- list(
     list(label = "diggle", multiplier = 1),
     list(label = "digglex2", multiplier = 2),
@@ -3311,8 +3343,13 @@ if (RUN_SENSITIVITY) {
 run_kde_bandwidth_fit <- function(spec) {
   bw_label <- spec$label
   bw_mult <- spec$multiplier
-  sigma_local <- bw_mult * bw_diggle
-  cat(sprintf("  [BW %s] start (sigma=%.3f km)\n", bw_label, sigma_local))
+  sigma_local <- if (!is.null(spec$sigma_km) && is.finite(spec$sigma_km) && spec$sigma_km > 0) {
+    as.numeric(spec$sigma_km)
+  } else {
+    bw_mult * bw_diggle
+  }
+  cat(sprintf("  [BW %s] start (sigma=%.3f km, SEM inner=%d)\n",
+              bw_label, sigma_local, as.integer(SENS_SEM_INNER_ITER)))
 
   lambda_local <- density(X_bg, sigma = sigma_local, edge = TRUE, at = "pixels")
   min_nz_local <- min(lambda_local$v[lambda_local$v > 0], na.rm = TRUE)
@@ -3358,8 +3395,7 @@ run_kde_bandwidth_fit <- function(spec) {
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
       control_background_pre_mass_ratio_in = mass_ratio_local,
-      # Match main Fit D (not SENS_SEM_INNER_ITER) so digglex2 reproduces D when sigma matches.
-      sem_inner_iter_in = SEM_INNER_ITER,
+      sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("BW %s Fit D", bw_label),
       sem_rng_label_in = OK_BW_SEM_RNG_LABEL
@@ -3511,8 +3547,11 @@ all_partitions <- c(
   list(aoi_region = aoi_scheme)
 )
 
-if (!RUN_SENSITIVITY) {
+if (!RUN_SENSITIVITY || !RUN_PARTITION_SENSITIVITY) {
   all_partitions <- list()
+  if (RUN_SENSITIVITY && !RUN_PARTITION_SENSITIVITY) {
+    cat("  Partition sensitivity disabled: skipping county/grid/AOI refits.\n")
+  }
 }
 cat(sprintf("  Total partition schemes scheduled: %d\n", length(all_partitions)))
 
@@ -4430,6 +4469,7 @@ results_pre_sensitivity <- list(
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
+    SENS_SEM_INNER_ITER = SENS_SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
@@ -4457,6 +4497,8 @@ results_pre_sensitivity <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    KDE_BW_SENS_KM = KDE_BW_SENS_KM,
+    RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -4523,9 +4565,32 @@ cat("  Stage meaning: MAIN-FIT ATE stage is complete; now computing sensitivity 
 
 # ATE sensitivity by KDE bandwidth (county only, inhomogeneous C/D all_free)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
-  if (is.null(kf) || is.null(kf$E_params) || is.null(kf$F_params)) return(NULL)
-  em <- extract_marginals(kf$E_params)
-  fm <- extract_marginals(kf$F_params)
+  if (is.null(kf) || is.null(kf$F_params)) return(NULL)
+  ate_E <- if (!is.null(kf$E_params)) {
+    tryCatch(
+      ate_biv_or_marginal(
+        kf$E_params, extract_marginals(kf$E_params), kf$pp_post_bg,
+        sprintf("BW %s naive biv+KDE", kf$label),
+        bg_lookup = KDE_BG_LOOKUP
+      ),
+      error = function(e) NULL
+    )
+  } else {
+    NULL
+  }
+  ate_F <- tryCatch(
+    ate_biv_or_marginal(
+      kf$F_params, extract_marginals(kf$F_params), kf$pp_post_sem,
+      sprintf("BW %s SEM biv+KDE", kf$label),
+      bg_lookup = KDE_BG_LOOKUP
+    ),
+    error = function(e) NULL
+  )
+  sim_saved <- if (!is.null(ate_F) && !is.null(ate_F$all_nothing_sim$total_saved)) {
+    suppressWarnings(as.numeric(ate_F$all_nothing_sim$total_saved))
+  } else {
+    numeric(0)
+  }
   list(
     label = kf$label,
     multiplier = kf$multiplier,
@@ -4533,22 +4598,11 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
     E_params = kf$E_params,
     F_params = kf$F_params,
     n_relabel = kf$n_relabel,
-    ate_E = tryCatch(
-      ate_estim_fast(em$ctrl, em$treat, kf$pp_post_bg,
-                     sprintf("BW %s naive biv+KDE", kf$label),
-                     phase = "sensitivity",
-                     n_tiles_used = partition$n,
-                     treated_idx_used = treated_idx),
-      error = function(e) NULL
-    ),
-    ate_F = tryCatch(
-      ate_estim_fast(fm$ctrl, fm$treat, kf$pp_post_sem,
-                     sprintf("BW %s SEM biv+KDE", kf$label),
-                     phase = "sensitivity",
-                     n_tiles_used = partition$n,
-                     treated_idx_used = treated_idx),
-      error = function(e) NULL
-    )
+    ate_E = ate_E,
+    ate_F = ate_F,
+    ate_mean_saved = if (length(sim_saved) > 0L) mean(sim_saved, na.rm = TRUE) else NA_real_,
+    ate_sd_saved = if (length(sim_saved) > 1L) stats::sd(sim_saved, na.rm = TRUE) else NA_real_,
+    ate_n_sims = length(sim_saved[!is.na(sim_saved)])
   )
 })
 kde_bandwidth_sensitivity <- Filter(Negate(is.null), kde_bandwidth_sensitivity)
@@ -4767,7 +4821,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
         background_rate_var_in = "W",
         control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
         sem_t_trunc_in = t_trunc_val,
-        sem_inner_iter_in = SEM_INNER_ITER,
+        sem_inner_iter_in = SENS_SEM_INNER_ITER,
         verbose_in = FALSE,
         # Hold SEM RNG fixed across the trunc grid; vary only t_trunc.
         sem_rng_label_in = OK_BW_SEM_RNG_LABEL,
@@ -4868,7 +4922,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   t_trunc_sensitivity <- if (N_CORES > 1L && length(trunc_jobs) > 1L) {
     run_parallel(
       trunc_jobs, run_t_trunc_sens_job,
-      cores = min(length(trunc_jobs), max(1L, min(N_CORES, 6L))),
+      cores = min(length(trunc_jobs), max(1L, N_CORES)),
       label = "t_trunc_sens"
     )
   } else {
@@ -5020,6 +5074,7 @@ results_pre_bootstrap <- list(
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
+    SENS_SEM_INNER_ITER = SENS_SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
@@ -5047,6 +5102,8 @@ results_pre_bootstrap <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    KDE_BW_SENS_KM = KDE_BW_SENS_KM,
+    RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,
@@ -6365,6 +6422,7 @@ results <- list(
     GAMMA_FIXED = GAMMA_FIXED,
     FIXED_STRUCTURAL = FIXED_STRUCTURAL,
     SEM_N_ITER = SEM_N_ITER, SEM_INNER_ITER = SEM_INNER_ITER,
+    SENS_SEM_INNER_ITER = SENS_SEM_INNER_ITER,
     SEM_INNER_PROPS = SEM_INNER_PROPS,
     SEM_N_LABELLINGS = SEM_N_LABELLINGS,
     SEM_OUTER_MAXIT = SEM_OUTER_MAXIT,
@@ -6392,6 +6450,8 @@ results <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    KDE_BW_SENS_KM = KDE_BW_SENS_KM,
+    RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
     UNIV_KDE_ONLY = UNIV_KDE_ONLY,
     RUN_KDE_PROFILE_SWEEP = RUN_KDE_PROFILE_SWEEP,

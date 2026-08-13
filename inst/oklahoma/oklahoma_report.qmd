@@ -880,8 +880,8 @@ kable(kde_df, align = "lc",
 Only the **second 50%** of pre-treatment events are used for
 estimation/carryover in both homogeneous and inhomogeneous SEM fits.
 The **first 50%** is held out for fairness; in the inhomogeneous case,
-its control events are used to estimate the KDE background via
-`bw.diggle`.
+its control events are used to estimate the KDE background
+(`r if (!is.null(kde) && !is.null(kde$bw_label)) kde$bw_label else if (!is.null(kde) && !is.null(kde$bw_method)) kde$bw_method else "configured bandwidth method"`).
 
 ```{r fig-kde-bg}
 #| label: fig-kde-bg
@@ -919,6 +919,109 @@ if (inherits(bg_plot, "gg") || inherits(bg_plot, "ggplot")) {
     plot.new()
     text(0.5, 0.5, "KDE background-rate plot unavailable in this results file.")
   }
+}
+```
+
+## KDE bandwidth sensitivity
+
+Fit D (SEM bivariate + KDE) is refit on an isotropic Gaussian bandwidth grid
+at the same temporal truncation as the main run. Saved events use the
+bivariate all-or-nothing contrast.
+
+```{r prep-kde-bw-sensitivity}
+#| label: prep-kde-bw-sensitivity
+#| include: false
+bw_sens <- results$kde_bandwidth_sensitivity
+bw_sens_df <- NULL
+if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
+  rows <- lapply(bw_sens, function(x) {
+    if (is.null(x)) return(NULL)
+    mean_saved <- suppressWarnings(as.numeric(x$ate_mean_saved))
+    sd_saved <- suppressWarnings(as.numeric(x$ate_sd_saved))
+    n_sims <- suppressWarnings(as.integer(x$ate_n_sims))
+    if (!is.finite(mean_saved) && !is.null(x$ate_F) &&
+        !is.null(x$ate_F$all_nothing_sim$total_saved)) {
+      saved <- suppressWarnings(as.numeric(x$ate_F$all_nothing_sim$total_saved))
+      saved <- saved[is.finite(saved)]
+      if (length(saved) > 0L) {
+        mean_saved <- mean(saved)
+        sd_saved <- if (length(saved) > 1L) stats::sd(saved) else NA_real_
+        n_sims <- length(saved)
+      }
+    }
+    data.frame(
+      label = as.character(x$label %||% NA_character_),
+      sigma_km = suppressWarnings(as.numeric(x$sigma)),
+      mean_saved = mean_saved,
+      sd_saved = sd_saved,
+      n_sims = n_sims,
+      n_relabel = suppressWarnings(as.integer(x$n_relabel)),
+      stringsAsFactors = FALSE
+    )
+  })
+  bw_sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+  if (!is.null(bw_sens_df) && nrow(bw_sens_df) >= 1L) {
+    bw_sens_df <- bw_sens_df[order(bw_sens_df$sigma_km, bw_sens_df$label), , drop = FALSE]
+  } else {
+    bw_sens_df <- NULL
+  }
+}
+```
+
+```{r tbl-kde-bw-sensitivity}
+#| label: tbl-kde-bw-sensitivity
+if (is.null(bw_sens_df)) {
+  cat("No Fit D KDE bandwidth sensitivity grid was saved in this results file.\n")
+} else {
+  cap <- "Fit D (SEM biv+KDE) all-or-nothing ATE vs isotropic KDE bandwidth."
+  if (is.finite(suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS)))) {
+    cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3g days.", as.numeric(cfg$SEM_T_TRUNC_DAYS)))
+  }
+  knitr::kable(
+    bw_sens_df |>
+      transmute(
+        Bandwidth = label,
+        `sigma (km)` = ifelse(is.finite(sigma_km), sprintf("%.3g", sigma_km), "NA"),
+        `Mean saved` = ifelse(is.finite(mean_saved), sprintf("%.1f", mean_saved), "NA"),
+        `SD saved` = ifelse(is.finite(sd_saved), sprintf("%.1f", sd_saved), "NA"),
+        `ATE sims` = ifelse(is.finite(n_sims), as.character(n_sims), "NA"),
+        Relabels = ifelse(is.finite(n_relabel), as.character(n_relabel), "NA")
+      ),
+    align = "lccccc",
+    caption = cap,
+    row.names = FALSE
+  ) |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
+```
+
+```{r fig-kde-bw-sensitivity}
+#| label: fig-kde-bw-sensitivity
+#| fig-cap: "Fit D all-or-nothing ATE versus isotropic KDE bandwidth."
+if (!is.null(bw_sens_df) &&
+    requireNamespace("ggplot2", quietly = TRUE) &&
+    sum(is.finite(bw_sens_df$mean_saved) & is.finite(bw_sens_df$sigma_km)) >= 2L) {
+  p_bw <- ggplot2::ggplot(
+    bw_sens_df[is.finite(bw_sens_df$mean_saved) & is.finite(bw_sens_df$sigma_km), , drop = FALSE],
+    ggplot2::aes(x = sigma_km, y = mean_saved)
+  ) +
+    ggplot2::geom_line(linewidth = 0.8, colour = "#d95f02") +
+    ggplot2::geom_point(size = 2.4, colour = "#d95f02") +
+    ggplot2::geom_errorbar(
+      ggplot2::aes(
+        ymin = mean_saved - sd_saved,
+        ymax = mean_saved + sd_saved
+      ),
+      width = 0.2, colour = "#d95f02", alpha = 0.7,
+      na.rm = TRUE
+    ) +
+    ggplot2::labs(
+      title = "Fit D ATE vs KDE bandwidth",
+      x = "Isotropic bandwidth (km)",
+      y = "Mean saved events (AoN)"
+    ) +
+    ggplot2::theme_minimal()
+  print(p_bw)
 }
 ```
 
