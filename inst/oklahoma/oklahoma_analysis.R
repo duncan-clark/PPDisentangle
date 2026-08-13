@@ -3858,7 +3858,10 @@ ate_with_both_contrasts <- function(compute_one) {
   primary
 }
 ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
-                                bg_lookup = NULL) {
+                                bg_lookup = NULL,
+                                state_spaces_in = state_spaces,
+                                n_tiles_in = partition$n,
+                                filtration_history_in = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL) {
   if (isTRUE(SKIP_ATE)) {
     cat(sprintf("    SKIP_ATE: not evaluating ATE for %s.\n", label))
     return(NULL)
@@ -3873,15 +3876,15 @@ ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
         biv_params = biv_params,
         windowT = windowT_ate,
         windowS = win_km,
-        state_spaces_obs = state_spaces,
+        state_spaces_obs = state_spaces_in,
         label = label,
         n_sims = ATE_N_SIMS,
         n_cores = ATE_SIM_CORES,
         m0 = ETAS_M0,
         beta_gr = BETA_GR,
-        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        filtration_history = filtration_history_in,
         t_trunc = SEM_T_TRUNC_DAYS,
-        n_tiles = partition$n,
+        n_tiles = n_tiles_in,
         crn_base_seed = ate_crn_base_seed,
         use_crn = OK_ATE_USE_CRN,
         crn_pair = OK_ATE_CRN_PAIR,
@@ -4607,45 +4610,53 @@ kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
 })
 kde_bandwidth_sensitivity <- Filter(Negate(is.null), kde_bandwidth_sensitivity)
 
-# ATE for alternative partitions
+# ATE for alternative partitions (C/D all-free, bivariate AoN)
 ate_partitions <- lapply(partition_results, function(pr) {
-  if (pr$label == "county") return(NULL)
-  if (is.null(pr$E_params) || is.null(pr$F_params)) return(NULL)
-  em <- extract_marginals(pr$E_params)
-  fm <- extract_marginals(pr$F_params)
+  if (is.null(pr) || identical(pr$label, "county")) return(NULL)
+  if (is.null(pr$E_params) && is.null(pr$F_params)) return(NULL)
   part_info <- all_partitions[[pr$label]]
-  pp_post_part <- assign_to_partition(pp_post[, c("x", "y", "t", "mag")], part_info)
-  pp_post_part_bg <- rbind(
-    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "control", ],
-                         part_info$state_spaces$control, lambda_im)$new_df,
-    normalize_bg_weights(pp_post_part[pp_post_part$location_process == "treated", ],
-                         part_info$state_spaces$treated, lambda_im)$new_df
+  if (is.null(part_info)) return(NULL)
+  n_tiles_p <- if (!is.null(pr$n_tiles)) pr$n_tiles else part_info$partition$n
+  bg_lookup_p <- list(
+    control = make_kde_bg_lookup(part_info$state_spaces$control),
+    treated = make_kde_bg_lookup(part_info$state_spaces$treated)
   )
-  pp_post_part_bg <- pp_post_part_bg[order(pp_post_part_bg$t), ]
-  pp_post_sem_part <- if (!is.null(pr$pp_post_sem)) {
-    pr$pp_post_sem
-  } else if (!is.null(pr$semF) && !is.null(pr$semF$adaptive$adaptive_labelling)) {
-    pr$semF$adaptive$adaptive_labelling
+  pp_pre_part <- if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) {
+    assign_to_partition(pp_pre[, c("x", "y", "t", "mag")], part_info)
   } else {
-    pp_post_part_bg
+    NULL
   }
-  pp_post_sem_part <- pp_post_sem_part[pp_post_sem_part$t >= 0, ]
-  list(
-    ate_E = tryCatch(
-      ate_estim_fast(em$ctrl, em$treat, pp_post_part_bg,
-                     sprintf("%s naive biv+KDE", pr$label),
-                     phase = "sensitivity",
-                     n_tiles_used = pr$n_tiles,
-                     treated_idx_used = part_info$treated_idx),
-      error = function(e) NULL),
-      ate_F = tryCatch(
-      ate_estim_fast(fm$ctrl, fm$treat, pp_post_sem_part,
-                     sprintf("%s SEM biv+KDE", pr$label),
-                     phase = "sensitivity",
-                     n_tiles_used = pr$n_tiles,
-                     treated_idx_used = part_info$treated_idx),
-      error = function(e) NULL)
-  )
+  ate_E <- if (!is.null(pr$E_params)) {
+    tryCatch(
+      ate_biv_or_marginal(
+        pr$E_params, extract_marginals(pr$E_params), NULL,
+        sprintf("%s naive biv+KDE", pr$label),
+        bg_lookup = bg_lookup_p,
+        state_spaces_in = part_info$state_spaces,
+        n_tiles_in = n_tiles_p,
+        filtration_history_in = pp_pre_part
+      ),
+      error = function(e) NULL
+    )
+  } else {
+    NULL
+  }
+  ate_F <- if (!is.null(pr$F_params)) {
+    tryCatch(
+      ate_biv_or_marginal(
+        pr$F_params, extract_marginals(pr$F_params), NULL,
+        sprintf("%s SEM biv+KDE", pr$label),
+        bg_lookup = bg_lookup_p,
+        state_spaces_in = part_info$state_spaces,
+        n_tiles_in = n_tiles_p,
+        filtration_history_in = pp_pre_part
+      ),
+      error = function(e) NULL
+    )
+  } else {
+    NULL
+  }
+  list(ate_E = ate_E, ate_F = ate_F)
 })
 ate_partitions <- Filter(Negate(is.null), ate_partitions)
 } else {
