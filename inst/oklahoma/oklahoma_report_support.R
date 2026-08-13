@@ -123,3 +123,65 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
   )
   list(counties = counties, pp_data = pp_data, meta = meta, post_end_days = post_end_days)
 }
+
+oklahoma_report_grid_partition <- function(diameter, win, aoi_owin, label, max_tiles = 5000L) {
+  nx <- max(2L, ceiling(diff(win$xrange) / diameter))
+  ny <- max(2L, ceiling(diff(win$yrange) / diameter))
+  if ((nx * ny) > max_tiles) {
+    shrink <- sqrt((nx * ny) / max_tiles)
+    nx <- max(2L, ceiling(nx / shrink))
+    ny <- max(2L, ceiling(ny / shrink))
+  }
+  grid_part <- spatstat.geom::quadrats(win, nx = nx, ny = ny)
+  n_tiles <- grid_part$n
+  grid_procs <- character(n_tiles)
+  tile_list <- spatstat.geom::tiles(grid_part)
+  for (i in seq_len(n_tiles)) {
+    tile_cent <- c(mean(tile_list[[i]]$xrange), mean(tile_list[[i]]$yrange))
+    grid_procs[i] <- if (spatstat.geom::inside.owin(tile_cent[1], tile_cent[2], aoi_owin)) {
+      "treated"
+    } else {
+      "control"
+    }
+  }
+  names(grid_procs) <- spatstat.geom::tilenames(grid_part)
+  list(partition = grid_part, processes = grid_procs, label = label)
+}
+
+oklahoma_report_tess_rects <- function(tess_obj, processes) {
+  tile_list <- spatstat.geom::tiles(tess_obj)
+  nms <- names(tile_list)
+  do.call(rbind, lapply(seq_along(tile_list), function(i) {
+    ow <- tile_list[[i]]
+    nm <- if (!is.null(nms) && length(nms) >= i) nms[[i]] else as.character(i)
+    data.frame(
+      xmin = ow$xrange[1], xmax = ow$xrange[2],
+      ymin = ow$yrange[1], ymax = ow$yrange[2],
+      treatment = unname(processes[[nm]]),
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+
+oklahoma_report_plot_partition_pp <- function(base_map, pp_pre, pp_post) {
+  p1 <- base_map +
+    ggplot2::geom_point(
+      data = pp_pre, ggplot2::aes(x = x, y = y, alpha = t),
+      colour = "#2166ac", size = 0.8
+    ) +
+    ggplot2::scale_alpha_continuous(range = c(0.15, 0.8), guide = "none") +
+    ggplot2::labs(title = "Pre-treatment", x = "X (km)", y = "Y (km)")
+  p2 <- base_map +
+    ggplot2::geom_point(
+      data = pp_post,
+      ggplot2::aes(x = x, y = y, colour = Process, alpha = t),
+      size = 0.8
+    ) +
+    ggplot2::scale_colour_manual(
+      values = c(control = "#2166ac", treated = "#b2182b"),
+      guide = "none"
+    ) +
+    ggplot2::scale_alpha_continuous(range = c(0.3, 1), guide = "none") +
+    ggplot2::labs(title = "Post-treatment", x = "X (km)", y = "Y (km)")
+  gridExtra::grid.arrange(p1, p2, ncol = 2)
+}

@@ -759,26 +759,37 @@ the D columns.
 ```{r prep-t-trunc-sensitivity}
 #| label: prep-t-trunc-sensitivity
 #| include: false
+one_num <- function(x) {
+  v <- suppressWarnings(as.numeric(unlist(x, use.names = FALSE)))
+  if (length(v) < 1L) NA_real_ else v[[1]]
+}
+one_int <- function(x) {
+  v <- suppressWarnings(as.integer(unlist(x, use.names = FALSE)))
+  if (length(v) < 1L) NA_integer_ else v[[1]]
+}
+one_chr <- function(x) {
+  if (is.null(x) || length(unlist(x, use.names = FALSE)) < 1L) NA_character_ else as.character(unlist(x, use.names = FALSE)[[1]])
+}
 trunc_sens <- results$t_trunc_sensitivity
 trunc_sens_df <- NULL
 trunc_sens_plot_df <- NULL
 trunc_sens_has_c <- FALSE
-trunc_sens_main_ttr <- suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS))
+trunc_sens_main_ttr <- one_num(cfg$SEM_T_TRUNC_DAYS)
 if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
   rows <- lapply(trunc_sens, function(x) {
     if (is.null(x)) return(NULL)
     data.frame(
-      t_trunc_days = suppressWarnings(as.numeric(x$t_trunc_days)),
-      C_status = as.character(x$C_status %||% NA_character_),
-      D_status = as.character(x$D_status %||% x$status %||% NA_character_),
-      C_mean_saved = suppressWarnings(as.numeric(x$C_ate_mean_saved)),
-      C_sd_saved = suppressWarnings(as.numeric(x$C_ate_sd_saved)),
-      C_n_sims = suppressWarnings(as.integer(x$C_ate_n_sims)),
-      D_mean_saved = suppressWarnings(as.numeric(x$ate_mean_saved)),
-      D_sd_saved = suppressWarnings(as.numeric(x$ate_sd_saved)),
-      D_n_sims = suppressWarnings(as.integer(x$ate_n_sims)),
-      n_relabel = suppressWarnings(as.integer(x$n_relabel)),
-      elapsed_min = suppressWarnings(as.numeric(x$elapsed_sec)) / 60,
+      t_trunc_days = one_num(x$t_trunc_days),
+      C_status = one_chr(x$C_status),
+      D_status = one_chr(x$D_status %||% x$status),
+      C_mean_saved = one_num(x$C_ate_mean_saved),
+      C_sd_saved = one_num(x$C_ate_sd_saved),
+      C_n_sims = one_int(x$C_ate_n_sims),
+      D_mean_saved = one_num(x$ate_mean_saved),
+      D_sd_saved = one_num(x$ate_sd_saved),
+      D_n_sims = one_int(x$ate_n_sims),
+      n_relabel = one_int(x$n_relabel),
+      elapsed_min = one_num(x$elapsed_sec) / 60,
       stringsAsFactors = FALSE
     )
   })
@@ -1005,18 +1016,18 @@ ate_saved_from_obj <- function(ate_obj) {
 if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
   rows <- lapply(bw_sens, function(x) {
     if (is.null(x)) return(NULL)
-    d_mean <- suppressWarnings(as.numeric(x$ate_mean_saved))
-    d_sd <- suppressWarnings(as.numeric(x$ate_sd_saved))
-    d_n <- suppressWarnings(as.integer(x$ate_n_sims))
+    d_mean <- one_num(x$ate_mean_saved)
+    d_sd <- one_num(x$ate_sd_saved)
+    d_n <- one_int(x$ate_n_sims)
     if (!is.finite(d_mean)) {
       d_stats <- ate_saved_from_obj(x$ate_F)
       d_mean <- d_stats$mean
       d_sd <- d_stats$sd
       d_n <- d_stats$n
     }
-    c_mean <- suppressWarnings(as.numeric(x$C_ate_mean_saved))
-    c_sd <- suppressWarnings(as.numeric(x$C_ate_sd_saved))
-    c_n <- suppressWarnings(as.integer(x$C_ate_n_sims))
+    c_mean <- one_num(x$C_ate_mean_saved)
+    c_sd <- one_num(x$C_ate_sd_saved)
+    c_n <- one_int(x$C_ate_n_sims)
     if (!is.finite(c_mean)) {
       c_stats <- ate_saved_from_obj(x$ate_E)
       c_mean <- c_stats$mean
@@ -1024,15 +1035,15 @@ if (!is.null(bw_sens) && length(bw_sens) >= 1L) {
       c_n <- c_stats$n
     }
     data.frame(
-      label = as.character(x$label %||% NA_character_),
-      sigma_km = suppressWarnings(as.numeric(x$sigma)),
+      label = one_chr(x$label),
+      sigma_km = one_num(x$sigma),
       C_mean_saved = c_mean,
       C_sd_saved = c_sd,
       C_n_sims = c_n,
       D_mean_saved = d_mean,
       D_sd_saved = d_sd,
       D_n_sims = d_n,
-      n_relabel = suppressWarnings(as.integer(x$n_relabel)),
+      n_relabel = one_int(x$n_relabel),
       stringsAsFactors = FALSE
     )
   })
@@ -3064,27 +3075,206 @@ sensitivity to spatial resolution:
   everything else is control (2 tiles total).
 
 For each partition, both the naive bivariate + KDE (C-type, all-free)
-and SEM bivariate + KDE (D-type, all-free) models are fitted.
+and SEM bivariate + KDE (D-type, all-free) models are fitted. The maps
+below use the same pre/post overlay as the county point-pattern figure.
 
-```{r fig-partition-all}
-#| label: fig-partition-all
-#| fig-cap: "Partition maps for all partition schemes evaluated in the run."
-partition_ids <- names(results$partition_results)
-partition_plot_files <- character(0)
-partition_plot_labels <- character(0)
-for (pid in partition_ids) {
-  pfile <- resolve_plot_file(paste0("partition_map_", pid, ".png"))
-  if (file.exists(pfile)) {
-    partition_plot_files <- c(partition_plot_files, pfile)
-    partition_plot_labels <- c(partition_plot_labels, format_partition_label(pid))
+```{r prep-partition-overlays}
+#| label: prep-partition-overlays
+#| include: false
+geom_path <- file.path(SCRIPT_DIR, "oklahoma_geometry.R")
+if (file.exists(geom_path) && !exists("oklahoma_sf_to_owin_km", mode = "function")) {
+  source(geom_path, local = FALSE)
+}
+support_path <- file.path(SCRIPT_DIR, "oklahoma_report_support.R")
+if (file.exists(support_path) && !exists("oklahoma_report_plot_partition_pp", mode = "function")) {
+  source(support_path, local = FALSE)
+}
+
+partition_overlay_specs <- list()
+partition_overlay_caps <- character(0)
+pr_overlay <- results$partition_results
+if (!is.null(pr_overlay) && length(pr_overlay) >= 1L &&
+    exists("oklahoma_sf_to_owin_km", mode = "function") &&
+    exists("oklahoma_report_plot_partition_pp", mode = "function") &&
+    exists("counties_km") && exists("aoi_sf") && exists("counties_sf")) {
+  xs <- c(pp_pre$x, pp_post$x)
+  ys <- c(pp_pre$y, pp_post$y)
+  xs <- xs[is.finite(xs)]
+  ys <- ys[is.finite(ys)]
+  if (length(xs) > 0L && length(ys) > 0L) {
+    xlims_part <- range(xs, na.rm = TRUE)
+    ylims_part <- range(ys, na.rm = TRUE)
+  } else {
+    bb_map <- sf::st_bbox(counties_km)
+    xlims_part <- as.numeric(bb_map[c("xmin", "xmax")])
+    ylims_part <- as.numeric(bb_map[c("ymin", "ymax")])
+  }
+  theme_part <- ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
+      legend.position = "none"
+    )
+  fill_vals <- c(control = "#deebf7", treated = "#fc9272")
+
+  ok_boundary <- sf::st_union(counties_sf)
+  ok_boundary <- sf::st_make_valid(ok_boundary)
+  win_km_part <- oklahoma_sf_to_owin_km(ok_boundary)
+  aoi_union_part <- sf::st_union(sf::st_make_valid(aoi_sf))
+  aoi_owin_part <- tryCatch(
+    oklahoma_sf_to_owin_km(aoi_union_part),
+    error = function(e) NULL
+  )
+  aoi_km <- aoi_sf
+  sf::st_geometry(aoi_km) <- sf::st_geometry(aoi_sf) / 1000
+  sf::st_crs(aoi_km) <- NA
+
+  trigger_km <- suppressWarnings(as.numeric(results$kde_info$trigger_range_km))
+  if (!is.finite(trigger_km) || trigger_km <= 0) {
+    trigger_km <- suppressWarnings(as.numeric(cfg$spatial_scale_D))
+  }
+  grid_mults <- suppressWarnings(as.numeric(unlist(cfg$grid_multipliers)))
+  if (length(grid_mults) < 1L || !any(is.finite(grid_mults))) {
+    grid_mults <- c(1.0, 2.0, 5.0)
+  }
+  test_mode <- isTRUE(cfg$TEST_MODE)
+  grid_max_tiles <- if (isTRUE(test_mode)) c(2000L, 1600L, 1200L) else c(5000L, 3000L, 1500L)
+  if (length(grid_max_tiles) < length(grid_mults)) {
+    grid_max_tiles <- c(grid_max_tiles, rep(grid_max_tiles[length(grid_max_tiles)], length(grid_mults)))
+  }
+
+  wanted <- unique(c("county", names(pr_overlay)))
+  wanted <- wanted[wanted %in% c("county", names(pr_overlay), "aoi_region") |
+                     grepl("^grid_", wanted)]
+  order_ids <- c(
+    "county",
+    sort(wanted[grepl("^grid_", wanted)]),
+    "aoi_region"
+  )
+  order_ids <- intersect(order_ids, wanted)
+
+  for (pid in order_ids) {
+    lab <- format_partition_label(pid)
+    spec <- NULL
+    if (identical(pid, "county")) {
+      spec <- list(
+        kind = "sf",
+        tiles = counties_km,
+        post = {
+          out <- pp_post
+          process_col <- dplyr::case_when(
+            "location_process" %in% names(out) ~ "location_process",
+            "inferred_process" %in% names(out) ~ "inferred_process",
+            "process" %in% names(out) ~ "process",
+            TRUE ~ NA_character_
+          )
+          if (is.na(process_col)) {
+            out$Process <- factor(rep("control", nrow(out)), levels = c("control", "treated"))
+          } else {
+            out$Process <- factor(as.character(out[[process_col]]), levels = c("control", "treated"))
+          }
+          out
+        }
+      )
+    } else if (grepl("^grid_", pid) && is.finite(trigger_km) && !is.null(aoi_owin_part)) {
+      mult <- suppressWarnings(as.numeric(sub("^grid_([0-9.]+)R$", "\\1", pid)))
+      if (!is.finite(mult)) next
+      mi <- match(mult, grid_mults)
+      if (is.na(mi)) mi <- which.min(abs(grid_mults - mult))
+      gp <- oklahoma_report_grid_partition(
+        diameter = mult * trigger_km,
+        win = win_km_part,
+        aoi_owin = aoi_owin_part,
+        label = pid,
+        max_tiles = grid_max_tiles[[max(1L, as.integer(mi))]]
+      )
+      post <- pp_post
+      post$Process <- factor(
+        oklahoma_assign_partition_process(post$x, post$y, gp$partition, gp$processes),
+        levels = c("control", "treated")
+      )
+      spec <- list(
+        kind = "rect",
+        tiles = oklahoma_report_tess_rects(gp$partition, gp$processes),
+        post = post
+      )
+    } else if (identical(pid, "aoi_region") && !is.null(aoi_owin_part)) {
+      aoi_treat <- tryCatch(
+        sf::st_make_valid(sf::st_intersection(sf::st_union(aoi_km), sf::st_union(counties_km))),
+        error = function(e) sf::st_union(aoi_km)
+      )
+      aoi_ctrl <- tryCatch(
+        sf::st_make_valid(sf::st_difference(sf::st_union(counties_km), aoi_treat)),
+        error = function(e) NULL
+      )
+      tiles <- rbind(
+        sf::st_sf(treatment = "treated", geometry = sf::st_geometry(aoi_treat))
+      )
+      if (!is.null(aoi_ctrl) && !sf::st_is_empty(aoi_ctrl)) {
+        tiles <- rbind(
+          tiles,
+          sf::st_sf(treatment = "control", geometry = sf::st_geometry(aoi_ctrl))
+        )
+      }
+      post <- pp_post
+      post$Process <- factor(
+        ifelse(spatstat.geom::inside.owin(post$x, post$y, aoi_owin_part), "treated", "control"),
+        levels = c("control", "treated")
+      )
+      spec <- list(kind = "sf", tiles = tiles, post = post)
+    }
+    if (is.null(spec)) next
+    spec$id <- pid
+    spec$label <- lab
+    spec$xlims <- xlims_part
+    spec$ylims <- ylims_part
+    spec$theme <- theme_part
+    spec$fill_vals <- fill_vals
+    partition_overlay_specs[[length(partition_overlay_specs) + 1L]] <- spec
+    partition_overlay_caps <- c(
+      partition_overlay_caps,
+      sprintf(
+        "Pre-treatment (left) and post-treatment (right) events overlaid on the %s partition.",
+        lab
+      )
+    )
   }
 }
-if (length(partition_plot_files) > 0) {
-  knitr::kable(
-    data.frame(`Panels (top to bottom)` = partition_plot_labels),
-    align = "l"
-  )
-  knitr::include_graphics(partition_plot_files)
+```
+
+```{r fig-partition-pp-all}
+#| label: fig-partition-pp-all
+#| fig-height: 5
+#| fig-cap: !expr if (length(partition_overlay_caps) > 0L) partition_overlay_caps else "Partition event overlays."
+if (length(partition_overlay_specs) < 1L) {
+  cat("Partition geometries could not be rebuilt for event overlays in this results file.\n")
+} else {
+  for (spec in partition_overlay_specs) {
+    if (identical(spec$kind, "rect")) {
+      base_map <- ggplot2::ggplot() +
+        ggplot2::geom_rect(
+          data = spec$tiles,
+          ggplot2::aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = treatment),
+          colour = "grey70", linewidth = 0.05
+        ) +
+        ggplot2::scale_fill_manual(values = spec$fill_vals, guide = "none") +
+        ggplot2::coord_fixed(
+          xlim = spec$xlims, ylim = spec$ylims, expand = FALSE, ratio = 1
+        ) +
+        spec$theme
+    } else {
+      base_map <- ggplot2::ggplot() +
+        ggplot2::geom_sf(
+          data = spec$tiles, ggplot2::aes(fill = treatment),
+          colour = "grey60", linewidth = 0.25
+        ) +
+        ggplot2::scale_fill_manual(values = spec$fill_vals, guide = "none") +
+        ggplot2::coord_sf(
+          xlim = spec$xlims, ylim = spec$ylims, datum = NA, expand = FALSE
+        ) +
+        spec$theme
+    }
+    oklahoma_report_plot_partition_pp(base_map, pp_pre, spec$post)
+  }
 }
 ```
 
@@ -3131,6 +3321,13 @@ for (pname in names(pr)) {
     } else if (!is.null(fit_type$ate$ATE_spillover)) {
       fit_type$ate$ATE_spillover * info$n_tiles
     } else { NA_real_ }
+    n_post <- NA_integer_
+    if (!is.null(info$n_post_ctrl) && !is.null(info$n_post_treat) &&
+        is.finite(info$n_post_ctrl) && is.finite(info$n_post_treat)) {
+      n_post <- as.integer(info$n_post_ctrl) + as.integer(info$n_post_treat)
+    } else if (identical(info$label, "county") && exists("pp_post") && !is.null(pp_post)) {
+      n_post <- as.integer(nrow(pp_post))
+    }
     n_relabel <- if (!is.null(fit_type$sem_obj) &&
                      !is.null(fit_type$sem_obj$adaptive$adaptive_labelling)) {
       lp <- fit_type$sem_obj$adaptive$adaptive_labelling
@@ -3139,7 +3336,18 @@ for (pname in names(pr)) {
     } else if (identical(fit_type$lab, "D: SEM Biv+KDE (all-free)") &&
                !is.null(info$n_relabel) && is.finite(info$n_relabel)) {
       as.integer(info$n_relabel)
-    } else { 0 }
+    } else {
+      NA_integer_
+    }
+    relabel_txt <- if (!grepl("^D:", fit_type$lab)) {
+      "—"
+    } else if (is.finite(n_relabel) && is.finite(n_post) && n_post > 0L) {
+      sprintf("%d / %d", as.integer(n_relabel), as.integer(n_post))
+    } else if (is.finite(n_relabel)) {
+      as.character(as.integer(n_relabel))
+    } else {
+      "NA"
+    }
 
     part_rows[[length(part_rows) + 1]] <- data.frame(
       PartitionID = info$label,
@@ -3147,7 +3355,7 @@ for (pname in names(pr)) {
       Model = fit_type$lab,
       Tiles = info$n_tiles,
       Treated = info$n_treated,
-      `Relabelled points` = n_relabel,
+      `Relabelled / post` = relabel_txt,
       `E[N(control everywhere)]` = round(c_mean, 0),
       `E[N(actual treatment regime)]` = round(t_mean, 0),
       `E[N(treated everywhere)]` = round(t_all_mean, 0),
@@ -3175,8 +3383,9 @@ if (length(part_rows) > 0) {
   part_df$Partition <- factor(as.character(part_df$Partition),
                               levels = unique(as.character(part_df$Partition)))
   part_df_print <- subset(part_df, select = -PartitionID)
-  kable(part_df_print, align = "llcccccccccccccccc",
-        caption = paste0("Partition comparison over ", ate_days, " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters).")) |>
+  rownames(part_df_print) <- NULL
+  kable(part_df_print, align = "llccccccccccccccc", row.names = FALSE,
+        caption = paste0("Partition comparison over ", ate_days, " days using the same expected-count and ATE metrics as Section 6.1 (plus marginal ETAS parameters). SEM relabels are post-treatment events whose inferred process differs from the partition location label; naive Fit C does not relabel.")) |>
     kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE,
                   font_size = 9, latex_options = c("scale_down", "hold_position"))
 }
