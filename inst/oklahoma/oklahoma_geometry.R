@@ -83,3 +83,34 @@ oklahoma_assert_label_support <- function(df,
   }
   invisible(as.integer(n_mismatch))
 }
+
+oklahoma_normalize_primary_partition <- function(raw, quick_check = FALSE) {
+  x <- tolower(trimws(as.character(raw[[1]])))
+  if (!nzchar(x)) x <- "grid_1.0r"
+  x <- gsub("_", "", x, fixed = TRUE)
+  x <- gsub("-", "", x, fixed = TRUE)
+  x <- gsub("\\s+", "", x)
+  out <- if (x %in% c("county", "counties", "admin")) {
+    "county"
+  } else if (x %in% c("gridcoarse", "coarse", "quickgrid")) {
+    "grid_coarse"
+  } else if (x %in% c("grid10r", "grid1r", "grid1.0r", "1r", "1.0r", "1")) {
+    "grid_1.0R"
+  } else {
+    stop("OK_PRIMARY_PARTITION must be county or grid_1.0R; got: ", raw)
+  }
+  if (isTRUE(quick_check) && identical(out, "grid_1.0R")) {
+    "grid_coarse"
+  } else {
+    out
+  }
+}
+
+oklahoma_sensitivity_partition_labels <- function(primary_id) {
+  primary_id <- as.character(primary_id[[1]])
+  all_ids <- c("county", "grid_1.0R", "grid_2.0R", "grid_5.0R", "aoi_region")
+  if (identical(primary_id, "grid_coarse")) {
+    all_ids <- c("county", "aoi_region")
+  }
+  setdiff(all_ids, primary_id)
+}

@@ -125,12 +125,19 @@ oklahoma_report_rebuild_pp_and_counties <- function(data_dir, etas_m0, crs_proj 
 }
 
 oklahoma_report_grid_partition <- function(diameter, win, aoi_owin, label, max_tiles = 5000L) {
-  nx <- max(2L, ceiling(diff(win$xrange) / diameter))
-  ny <- max(2L, ceiling(diff(win$yrange) / diameter))
-  if ((nx * ny) > max_tiles) {
-    shrink <- sqrt((nx * ny) / max_tiles)
-    nx <- max(2L, ceiling(nx / shrink))
-    ny <- max(2L, ceiling(ny / shrink))
+  if (is.null(diameter) || length(diameter) < 1L || !is.finite(diameter[[1]])) {
+    target_tiles <- 100L
+    aspect <- diff(win$xrange) / diff(win$yrange)
+    nx <- max(2L, round(sqrt(target_tiles * aspect)))
+    ny <- max(2L, round(target_tiles / nx))
+  } else {
+    nx <- max(2L, ceiling(diff(win$xrange) / diameter))
+    ny <- max(2L, ceiling(diff(win$yrange) / diameter))
+    if ((nx * ny) > max_tiles) {
+      shrink <- sqrt((nx * ny) / max_tiles)
+      nx <- max(2L, ceiling(nx / shrink))
+      ny <- max(2L, ceiling(ny / shrink))
+    }
   }
   grid_part <- spatstat.geom::quadrats(win, nx = nx, ny = ny)
   n_tiles <- grid_part$n

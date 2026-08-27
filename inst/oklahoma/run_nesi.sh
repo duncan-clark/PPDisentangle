@@ -51,6 +51,7 @@ PP_BOOT_TARGETS="${PP_BOOT_TARGETS:-C,D}"
 PP_KDE_VARIANT_MODE="${PP_KDE_VARIANT_MODE:-}"
 PP_KDE_BW_METHOD="${PP_KDE_BW_METHOD:-}"
 PP_KDE_BW_SENS_KM="${PP_KDE_BW_SENS_KM:-}"
+PP_PRIMARY_PARTITION="${PP_PRIMARY_PARTITION:-}"
 PP_RUN_PARTITION_SENSITIVITY="${PP_RUN_PARTITION_SENSITIVITY:-}"
 PP_BOOT_OUTER_CORES="${PP_BOOT_OUTER_CORES:-}"
 PP_RUN_SENSITIVITY="${PP_RUN_SENSITIVITY:-auto}"
@@ -162,6 +163,7 @@ while [[ "$#" -gt 0 ]]; do
     --kde-variant-mode) PP_KDE_VARIANT_MODE="$2"; KDE_VARIANT_MODE_EXPLICIT=1; shift 2 ;;
     --kde-bw-method) PP_KDE_BW_METHOD="$2"; shift 2 ;;
     --kde-bw-sens-km) PP_KDE_BW_SENS_KM="$2"; shift 2 ;;
+    --primary-partition) PP_PRIMARY_PARTITION="$2"; shift 2 ;;
     --run-partition-sensitivity) PP_RUN_PARTITION_SENSITIVITY="$2"; shift 2 ;;
     --boot-outer-cores) PP_BOOT_OUTER_CORES="$2"; BOOT_OUTER_CORES_EXPLICIT=1; shift 2 ;;
     --run-sensitivity) PP_RUN_SENSITIVITY="$2"; RUN_SENS_EXPLICIT=1; shift 2 ;;
@@ -187,7 +189,60 @@ done
 
 if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
   mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
+  apply_paper_science_suite() {
+    # Shared publication science: primary 1R + Scott-iso, all C/D sensitivities,
+    # A–J triple, bivariate AoN. SEM inner / bootstrap are set by the caller.
+    if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
+    if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=64; fi
+    if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
+    if [ "$SEM_N_LABELLINGS_EXPLICIT" -ne 1 ]; then PP_SEM_N_LABELLINGS=20; fi
+    if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=5000; fi
+    if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
+    if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
+    if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=100; fi
+    if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
+    if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
+    if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
+    PP_RUN_SENSITIVITY=1
+    RUN_SENS_EXPLICIT=1
+    PP_RUN_PARTITION_SENSITIVITY=1
+    PP_RUN_T_TRUNC_SENSITIVITY=1
+    PP_T_TRUNC_SENS_DAYS="1,5,7,10,14,21,90"
+    if [ -z "$PP_KDE_BW_SENS_KM" ]; then PP_KDE_BW_SENS_KM="0.5,1,5,10,20"; fi
+    if [ -z "$PP_KDE_BW_METHOD" ]; then PP_KDE_BW_METHOD="scott-iso"; fi
+    if [ -z "$PP_PRIMARY_PARTITION" ]; then PP_PRIMARY_PARTITION="grid_1.0R"; fi
+    if [ -z "$PP_SEM_T_TRUNC_DAYS" ]; then PP_SEM_T_TRUNC_DAYS=90; fi
+    if [ -z "$PP_ATE_BIVARIATE" ]; then PP_ATE_BIVARIATE=true; fi
+    if [ -z "$PP_ATE_CONTRAST" ]; then PP_ATE_CONTRAST=all_or_nothing; fi
+    PP_SKIP_FULL_REPORT=0
+    PP_CD_ONLY=0
+    PP_UNIV_KDE_ONLY=0
+  }
   case "$mode_norm" in
+    paper|paper-final|publication)
+      apply_paper_science_suite
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=5000; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2000; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=5000; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=100; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=24; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="24:00:00"; fi
+      ;;
+    paper-quick|paper_quick|preview)
+      apply_paper_science_suite
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2000; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2000; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
+      # Cheaper than paper: shorter Omori window, no 90-day t_trunc sensitivity,
+      # skip diagnostic control snapshots (not used for SEM init).
+      PP_SEM_T_TRUNC_DAYS=45
+      PP_T_TRUNC_SENS_DAYS="1,5,7,10,14,21,45"
+      if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="08:00:00"; fi
+      ;;
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
       if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=32; fi
@@ -394,7 +449,7 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
       ;;
     *)
-      echo "Unknown --mode '$PP_MODE' (expected: test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary | cd-only | univ-kde-only)"
+      echo "Unknown --mode '$PP_MODE' (expected: paper | paper-quick | test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary | cd-only | univ-kde-only)"
       exit 1
       ;;
   esac
@@ -475,7 +530,7 @@ if [ -z "$PP_KDE_VARIANT_MODE" ]; then
   PP_KDE_VARIANT_MODE="triple"
 fi
 if [ -z "$PP_KDE_BW_METHOD" ]; then
-  PP_KDE_BW_METHOD="diggle2"
+  PP_KDE_BW_METHOD="scott-iso"
 fi
 case "$(echo "$PP_KDE_BW_METHOD" | tr '[:upper:]' '[:lower:]')" in
   scott|bw.scott|scott_aniso) PP_KDE_BW_METHOD="scott" ;;
@@ -483,7 +538,19 @@ case "$(echo "$PP_KDE_BW_METHOD" | tr '[:upper:]' '[:lower:]')" in
   diggle|bw.diggle) PP_KDE_BW_METHOD="diggle" ;;
   diggle2|2diggle|"2*diggle"|digglex2) PP_KDE_BW_METHOD="diggle2" ;;
   *)
-    echo "Invalid --kde-bw-method '$PP_KDE_BW_METHOD' (expected: diggle2 | diggle | scott | scott-iso)"
+    echo "Invalid --kde-bw-method '$PP_KDE_BW_METHOD' (expected: scott-iso | scott | diggle | diggle2)"
+    exit 1
+    ;;
+esac
+if [ -z "$PP_PRIMARY_PARTITION" ]; then
+  PP_PRIMARY_PARTITION="grid_1.0R"
+fi
+case "$(echo "$PP_PRIMARY_PARTITION" | tr '[:upper:]' '[:lower:]' | tr -d '_-' | tr -d '[:space:]')" in
+  county|counties|admin) PP_PRIMARY_PARTITION="county" ;;
+  gridcoarse|coarse|quickgrid) PP_PRIMARY_PARTITION="grid_coarse" ;;
+  grid10r|grid1r|grid1.0r|1r|1.0r|1) PP_PRIMARY_PARTITION="grid_1.0R" ;;
+  *)
+    echo "Invalid --primary-partition '$PP_PRIMARY_PARTITION' (expected: grid_1.0R | county)"
     exit 1
     ;;
 esac
@@ -583,7 +650,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   export PKG_ROOT PP_MODE PP_CORES PP_BOOT_REPS PP_SEM_INNER PP_SEM_WARMSTART_FIXED PP_SEM_N_ITER PP_SEM_N_LABELLINGS
   export PP_SEM_OUTER_MAXIT PP_SEM_OUTER_MAXIT_BIV PP_SEM_T_TRUNC_DAYS PP_SEM_T_TRUNC_REL PP_T_TRUNC_SENS_DAYS PP_RUN_T_TRUNC_SENSITIVITY PP_SEM_TEMPORAL_WEIGHT
   export PP_SEM_WORKER_LOGS PP_SEM_WORKER_LOG_VERBOSE PP_SEM_WORKER_LOG_SPLIT PP_SEM_TIMING_VERBOSE PP_SEM_PROPOSAL_VERBOSE
-  export PP_SIM_PROGRESS_EVERY PP_SENS_SEM_INNER PP_BOOT_SEM_INNER PP_BOOT_REFIT_SCOPE PP_BOOT_TARGETS PP_KDE_VARIANT_MODE PP_KDE_BW_METHOD PP_KDE_BW_SENS_KM PP_RUN_PARTITION_SENSITIVITY
+  export PP_SIM_PROGRESS_EVERY PP_SENS_SEM_INNER PP_BOOT_SEM_INNER PP_BOOT_REFIT_SCOPE PP_BOOT_TARGETS PP_KDE_VARIANT_MODE PP_KDE_BW_METHOD PP_KDE_BW_SENS_KM PP_PRIMARY_PARTITION PP_RUN_PARTITION_SENSITIVITY
   export PP_BOOT_OUTER_CORES PP_ATE_N_SIMS PP_ATE_BIVARIATE PP_ATE_CONTRAST PP_ATE_SCENARIO
   export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_SMOKE_SEM_D_SEEDS PP_SMOKE_SEM_D_TRUNC PP_SKIP_FULL_REPORT PP_CD_ONLY PP_UNIV_KDE_ONLY PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
   export PP_SEM_CHANGE_FACTOR_MIN_MULT PP_SEM_CHANGE_FACTOR_MAX_MULT PP_SEM_MAX_RELABEL_STEP_FRAC PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC
@@ -619,7 +686,7 @@ echo "=== PPDisentangle Oklahoma (NeSI) ==="
 echo "Job: ${SLURM_JOB_ID} | $(date)"
 echo "Node: $(hostname) | Partition: ${SLURM_JOB_PARTITION:-unknown}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
-echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=$PP_SEM_T_TRUNC_DAYS sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE kde_bw=$PP_KDE_BW_METHOD kde_bw_sens_km=${PP_KDE_BW_SENS_KM:-} run_partition_sens=${PP_RUN_PARTITION_SENSITIVITY:-auto} run_fit_variability=$PP_RUN_FIT_VARIABILITY fit_variability_reps=$PP_FIT_VARIABILITY_REPS fit_variability_cores=$PP_FIT_VARIABILITY_CORES fit_variability_only=$PP_FIT_VARIABILITY_ONLY"
+echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=$PP_SEM_T_TRUNC_DAYS sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE kde_bw=$PP_KDE_BW_METHOD primary_partition=$PP_PRIMARY_PARTITION kde_bw_sens_km=${PP_KDE_BW_SENS_KM:-} run_partition_sens=${PP_RUN_PARTITION_SENSITIVITY:-auto} run_fit_variability=$PP_RUN_FIT_VARIABILITY fit_variability_reps=$PP_FIT_VARIABILITY_REPS fit_variability_cores=$PP_FIT_VARIABILITY_CORES fit_variability_only=$PP_FIT_VARIABILITY_ONLY"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
 echo "ENV CHECK: PP_SEM_INNER=$PP_SEM_INNER | PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER | PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER"
@@ -942,6 +1009,7 @@ export OK_BOOT_REFIT_SCOPE="$PP_BOOT_REFIT_SCOPE"
 export OK_BOOT_TARGETS="$PP_BOOT_TARGETS"
 export OK_KDE_VARIANT_MODE="$PP_KDE_VARIANT_MODE"
 export OK_KDE_BW_METHOD="$PP_KDE_BW_METHOD"
+export OK_PRIMARY_PARTITION="$PP_PRIMARY_PARTITION"
 if [ -n "${PP_KDE_BW_SENS_KM:-}" ]; then
   export OK_KDE_BW_SENS_KM="$PP_KDE_BW_SENS_KM"
 fi

@@ -228,7 +228,15 @@ if (is.null(results$pp_data) || is.null(results$counties)) {
 cty <- results$counties
 # Back-fill config keys expected by the narrative / tables (narrow legacy checkpoints).
 if (is.null(cfg$n_counties) && !is.null(cty$n_counties)) cfg$n_counties <- cty$n_counties
+if (is.null(cfg$n_treated_counties) && !is.null(cty$n_treated)) cfg$n_treated_counties <- cty$n_treated
+if (is.null(cfg$PRIMARY_PARTITION) || !nzchar(as.character(cfg$PRIMARY_PARTITION[[1]]))) {
+  cfg$PRIMARY_PARTITION <- "county"
+}
+if (is.null(cfg$n_tiles) || !is.finite(suppressWarnings(as.numeric(cfg$n_tiles[[1]])))) {
+  cfg$n_tiles <- cfg$n_counties
+}
 if (is.null(cfg$n_treated) && !is.null(cty$n_treated)) cfg$n_treated <- cty$n_treated
+primary_partition_id <- as.character(cfg$PRIMARY_PARTITION[[1]])
 pd0 <- results$pp_data
 if (!is.null(pd0)) {
   if (is.null(cfg$n_pre) || (length(cfg$n_pre) == 1L && is.na(cfg$n_pre))) {
@@ -373,9 +381,9 @@ Counterfactual evaluations use the **full bivariate** ETAS law
 
 The target quantity is the **all-or-nothing total treatment effect**
 under the fitted bivariate law: the expected difference in total
-earthquake counts between a world in which *every* county receives the
-directive ($\mathbf{Z}=(1,\dots,1)$) and a world in which *no* county
-receives it ($\mathbf{Z}=(0,\dots,0)$):
+earthquake counts between a world in which *every tile of the primary
+tessellation* receives the directive ($\mathbf{Z}=(1,\dots,1)$) and a
+world in which *no tile* receives it ($\mathbf{Z}=(0,\dots,0)$):
 
 $$
 \Delta_{\text{AoN}}
@@ -390,7 +398,7 @@ assignment $\mathbf{z}$.
 
 ## Models
 
-Primary county-partition fits (publication pair):
+Primary tessellation (`r primary_partition_id`) publication pair:
 
 | Label | Model | Background | Labels |
 |:---:|:---|:---|:---|
@@ -415,9 +423,14 @@ meta <- jsonlite::fromJSON(readLines(file.path(DATA_DIR, "metadata.json")))
 **Treatment.** OCC directive AOI_20150318: mandatory reduction in
 wastewater disposal volumes within the AOI.
 
-**Tessellation.** The `r cty$n_counties` Oklahoma counties (US Census
-Bureau via `tigris`). Counties whose centroid falls inside the AOI are
-treated.
+**Primary tessellation.** `r primary_partition_id`
+(`r cfg$n_tiles` tiles, `r cfg$n_treated` treated).
+Default is a 1× triggering-range grid whose treated tiles are those whose
+centroid falls inside the OCC AOI.
+
+**County tessellation (sensitivity).** The `r cty$n_counties` Oklahoma
+counties (US Census Bureau via `tigris`). Counties whose centroid falls
+inside the AOI are treated.
 
 **Treated counties** (`r cty$n_treated`):
 `r paste(cty$treated_names, collapse = ", ")`.
@@ -483,11 +496,11 @@ ggplot(ev_all, aes(x = t_days, y = cum_n)) +
   theme_minimal(base_size = 13)
 ```
 
-## County Partition
+## Tessellation Partition
 
 ```{r fig-partition}
 #| label: fig-partition
-#| fig-cap: "Oklahoma county-level partition. Red counties are treated (centroid inside AOI)."
+#| fig-cap: "Primary tessellation used for C/D. Red tiles are treated (centroid inside the AOI). The dashed outline is the OCC AOI."
 options(tigris_use_cache = TRUE)
 counties_sf <- counties(state = "OK", cb = TRUE, year = 2022)
 counties_sf <- st_transform(counties_sf, 5070)
@@ -501,28 +514,119 @@ county_centroids <- st_centroid(counties_sf)
 inside_aoi <- lengths(st_within(county_centroids, aoi_union)) > 0
 counties_sf$treatment <- ifelse(inside_aoi, "treated", "control")
 
-ggplot() +
-  geom_sf(data = counties_sf, aes(fill = treatment),
-          color = "grey40", linewidth = 0.4) +
-  scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
-                    name = "Assignment") +
-  geom_sf(data = aoi_sf, fill = NA, color = "red", linewidth = 1, linetype = "dashed") +
-  labs(title = "Oklahoma County Partition",
-       subtitle = paste0("Treated: ", paste(cty$treated_names, collapse = ", "))) +
-  theme_minimal(base_size = 13) +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5, size = 9))
-
 counties_km <- counties_sf
 st_geometry(counties_km) <- st_geometry(counties_sf) / 1000
 st_crs(counties_km) <- NA
+aoi_km <- aoi_sf
+st_geometry(aoi_km) <- st_geometry(aoi_sf) / 1000
+st_crs(aoi_km) <- NA
+
+geom_path <- file.path(SCRIPT_DIR, "oklahoma_geometry.R")
+if (file.exists(geom_path) && !exists("oklahoma_sf_to_owin_km", mode = "function")) {
+  source(geom_path, local = FALSE)
+}
+support_path <- file.path(SCRIPT_DIR, "oklahoma_report_support.R")
+if (file.exists(support_path) && !exists("oklahoma_report_grid_partition", mode = "function")) {
+  source(support_path, local = FALSE)
+}
+
+ok_boundary <- st_union(counties_sf)
+ok_boundary <- st_make_valid(ok_boundary)
+win_km_part <- if (exists("oklahoma_sf_to_owin_km", mode = "function")) {
+  oklahoma_sf_to_owin_km(ok_boundary)
+} else {
+  NULL
+}
+aoi_owin_part <- if (exists("oklahoma_sf_to_owin_km", mode = "function")) {
+  tryCatch(oklahoma_sf_to_owin_km(aoi_union), error = function(e) NULL)
+} else {
+  NULL
+}
+trigger_km <- suppressWarnings(as.numeric(results$kde_info$trigger_range_km))
+if (!is.finite(trigger_km) || trigger_km <= 0) {
+  trigger_km <- suppressWarnings(as.numeric(cfg$spatial_scale_D))
+}
+grid_max_primary <- if (isTRUE(cfg$TEST_MODE)) 2000L else 5000L
+primary_tess_kind <- "sf"
+primary_tess_tiles <- counties_km
+primary_tess_label <- if (exists("format_partition_label", mode = "function")) {
+  format_partition_label(primary_partition_id)
+} else if (identical(primary_partition_id, "grid_1.0R")) {
+  "Grid (1x triggering range)"
+} else {
+  primary_partition_id
+}
+if (!identical(primary_partition_id, "county") &&
+    exists("oklahoma_report_grid_partition", mode = "function") &&
+    !is.null(win_km_part) && !is.null(aoi_owin_part)) {
+  grid_diam <- if (identical(primary_partition_id, "grid_coarse")) {
+    NA_real_
+  } else {
+    mult <- suppressWarnings(as.numeric(sub("^grid_([0-9.]+)R$", "\\1", primary_partition_id)))
+    if (is.finite(mult) && is.finite(trigger_km)) mult * trigger_km else trigger_km
+  }
+  gp <- oklahoma_report_grid_partition(
+    diameter = grid_diam,
+    win = win_km_part,
+    aoi_owin = aoi_owin_part,
+    label = primary_partition_id,
+    max_tiles = grid_max_primary
+  )
+  primary_tess_kind <- "rect"
+  primary_tess_tiles <- oklahoma_report_tess_rects(gp$partition, gp$processes)
+}
+
+n_tess <- if (identical(primary_tess_kind, "rect")) {
+  nrow(primary_tess_tiles)
+} else {
+  nrow(primary_tess_tiles)
+}
+n_tess_treated <- if (identical(primary_tess_kind, "rect")) {
+  sum(primary_tess_tiles$treatment == "treated", na.rm = TRUE)
+} else {
+  sum(as.character(primary_tess_tiles$treatment) == "treated", na.rm = TRUE)
+}
+tess_subtitle <- sprintf(
+  "%s: %d tiles (%d treated). Dashed line = AOI.",
+  primary_tess_label, n_tess, n_tess_treated
+)
+
+if (identical(primary_tess_kind, "rect")) {
+  ggplot() +
+    geom_rect(
+      data = primary_tess_tiles,
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = treatment),
+      colour = "grey70", linewidth = 0.05
+    ) +
+    geom_sf(data = aoi_km, fill = NA, color = "red", linewidth = 0.7, linetype = "dashed") +
+    scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                      name = "Assignment") +
+    coord_sf(datum = NA, expand = FALSE) +
+    labs(title = "Oklahoma Primary Tessellation",
+         subtitle = tess_subtitle, x = "X (km)", y = "Y (km)") +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5, size = 9))
+} else {
+  ggplot() +
+    geom_sf(data = primary_tess_tiles, aes(fill = treatment),
+            color = "grey40", linewidth = 0.4) +
+    scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                      name = "Assignment") +
+    geom_sf(data = aoi_km, fill = NA, color = "red", linewidth = 0.7, linetype = "dashed") +
+    labs(title = "Oklahoma Primary Tessellation",
+         subtitle = tess_subtitle, x = "X (km)", y = "Y (km)") +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5, size = 9))
+}
 ```
 
 ## Point Patterns
 
 ```{r fig-pp}
 #| label: fig-pp
-#| fig-cap: "Pre-treatment (left) and post-treatment (right) events overlaid on the county partition."
+#| fig-cap: "Pre-treatment (left) and post-treatment (right) events overlaid on the primary tessellation."
 #| fig-height: 5
 xs <- c(pp_pre$x, pp_post$x)
 ys <- c(pp_pre$y, pp_post$y)
@@ -537,15 +641,31 @@ if (length(xs) == 0L || length(ys) == 0L) {
   ylims <- range(ys, na.rm = TRUE)
 }
 
-base_map <- ggplot() +
-  geom_sf(data = counties_km, aes(fill = treatment),
-          colour = "grey60", linewidth = 0.25) +
-  scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
-                    guide = "none") +
-  coord_sf(xlim = xlims, ylim = ylims, datum = NA, expand = FALSE) +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-        legend.position = "none")
+if (exists("primary_tess_kind") && identical(primary_tess_kind, "rect") &&
+    exists("primary_tess_tiles")) {
+  base_map <- ggplot() +
+    geom_rect(
+      data = primary_tess_tiles,
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = treatment),
+      colour = "grey70", linewidth = 0.05
+    ) +
+    scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                      guide = "none") +
+    coord_sf(xlim = xlims, ylim = ylims, datum = NA, expand = FALSE) +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          legend.position = "none")
+} else {
+  base_map <- ggplot() +
+    geom_sf(data = counties_km, aes(fill = treatment),
+            colour = "grey60", linewidth = 0.25) +
+    scale_fill_manual(values = c(control = "#deebf7", treated = "#fc9272"),
+                      guide = "none") +
+    coord_sf(xlim = xlims, ylim = ylims, datum = NA, expand = FALSE) +
+    theme_minimal(base_size = 11) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          legend.position = "none")
+}
 
 p1 <- base_map +
   geom_point(data = pp_pre, aes(x = x, y = y, alpha = t),
@@ -1264,7 +1384,7 @@ When enabled, the code runs a parallel grid over:
 
 using a short inner SEM run (default 100 iterations), then ranks candidates by:
 high final SEM score and low tail accepted/average flips. The chosen settings are
-then used for the main county SEM fits in the run.
+then used for the main primary-tessellation SEM fits in the run.
 
 ```{r sem-final-config}
 #| label: sem-final-config
@@ -1312,7 +1432,7 @@ kable(final_cfg_tbl, align = "lc", caption = "Final SEM settings used for this r
   kable_styling(bootstrap_options = "striped", full_width = FALSE)
 ```
 
-# Results — County Partition
+# Results — Tessellation Partition
 
 ```{r extract}
 #| label: extract
@@ -1991,12 +2111,15 @@ if (length(diag_rows) > 0) {
 
 # All-or-Nothing Treatment Effect
 
-## County Partition
+## Primary Tessellation
 
 ```{r tbl-ate-helpers}
 #| label: tbl-ate-helpers
 #| include: false
-n_cty <- suppressWarnings(as.integer(unlist(cfg$n_counties, use.names = FALSE)))
+n_cty <- suppressWarnings(as.integer(unlist(cfg$n_tiles, use.names = FALSE)))
+if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[1]] < 1L) {
+  n_cty <- suppressWarnings(as.integer(unlist(cfg$n_counties, use.names = FALSE)))
+}
 if (length(n_cty) < 1L || !is.finite(n_cty[[1]]) || is.na(n_cty[[1]]) || n_cty[[1]] < 1L) {
   n_cty <- suppressWarnings(as.integer(unlist(results$counties$n_counties, use.names = FALSE)))
 }
@@ -2285,6 +2408,7 @@ format_partition_label <- function(part_id) {
   if (is.na(part_id) || is.null(part_id)) return(part_id)
   if (part_id == "county") return("County")
   if (part_id == "aoi_region") return("AOI region")
+  if (part_id == "grid_coarse") return("Grid (coarse)")
   m <- regexec("^grid_([0-9.]+)R$", part_id)
   g <- regmatches(part_id, m)[[1]]
   if (length(g) == 2) {
@@ -2411,7 +2535,7 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
             "E[N(control everywhere)]",
             "E[N(right-hand regime)]",
             "SD(control everywhere)", "SD(right-hand regime)",
-            paste0("Saved = control - right / ", n_cty, " counties / ", ate_days, "d"),
+            paste0("Saved = control - right / ", n_cty, " tiles / ", ate_days, "d"),
             "SD(saved)"
           )
         } else {
@@ -2421,7 +2545,7 @@ if (!is.null(ate_biv) && nrow(ate_biv) > 0) {
             "E[N(control everywhere)]",
             "E[N(right-hand regime)]",
             "SD(control everywhere)", "SD(right-hand regime)",
-            paste0("Saved = control - right / ", n_cty, " counties / ", ate_days, "d"),
+            paste0("Saved = control - right / ", n_cty, " tiles / ", ate_days, "d"),
             "SD(saved)", "Bootstrap SD (ATE)", "95% quantile-length CI"
           )
         },
@@ -3076,7 +3200,7 @@ sensitivity to spatial resolution:
 
 For each partition, both the naive bivariate + KDE (C-type, all-free)
 and SEM bivariate + KDE (D-type, all-free) models are fitted. The maps
-below use the same pre/post overlay as the county point-pattern figure.
+below use the same pre/post overlay as the tessellation point-pattern figure.
 
 ```{r prep-partition-overlays}
 #| label: prep-partition-overlays
@@ -3132,24 +3256,29 @@ if (!is.null(pr_overlay) && length(pr_overlay) >= 1L &&
   if (!is.finite(trigger_km) || trigger_km <= 0) {
     trigger_km <- suppressWarnings(as.numeric(cfg$spatial_scale_D))
   }
-  grid_mults <- suppressWarnings(as.numeric(unlist(cfg$grid_multipliers)))
-  if (length(grid_mults) < 1L || !any(is.finite(grid_mults))) {
-    grid_mults <- c(1.0, 2.0, 5.0)
-  }
+  grid_mults <- unique(c(
+    1.0, 2.0, 5.0,
+    suppressWarnings(as.numeric(unlist(cfg$grid_multipliers)))
+  ))
+  grid_mults <- grid_mults[is.finite(grid_mults)]
   test_mode <- isTRUE(cfg$TEST_MODE)
-  grid_max_tiles <- if (isTRUE(test_mode)) c(2000L, 1600L, 1200L) else c(5000L, 3000L, 1500L)
-  if (length(grid_max_tiles) < length(grid_mults)) {
-    grid_max_tiles <- c(grid_max_tiles, rep(grid_max_tiles[length(grid_max_tiles)], length(grid_mults)))
+  grid_max_lookup <- if (isTRUE(test_mode)) {
+    c(`1` = 2000L, `2` = 1600L, `5` = 1200L)
+  } else {
+    c(`1` = 5000L, `2` = 3000L, `5` = 1500L)
   }
+  grid_max_tiles <- unname(grid_max_lookup[as.character(as.integer(grid_mults))])
+  grid_max_tiles[is.na(grid_max_tiles)] <- if (isTRUE(test_mode)) 1600L else 3000L
 
-  wanted <- unique(c("county", names(pr_overlay)))
-  wanted <- wanted[wanted %in% c("county", names(pr_overlay), "aoi_region") |
+  wanted <- unique(c(primary_partition_id, "county", names(pr_overlay)))
+  wanted <- wanted[wanted %in% c("county", names(pr_overlay), "aoi_region", primary_partition_id) |
                      grepl("^grid_", wanted)]
-  order_ids <- c(
+  order_ids <- unique(c(
+    primary_partition_id,
     "county",
     sort(wanted[grepl("^grid_", wanted)]),
     "aoi_region"
-  )
+  ))
   order_ids <- intersect(order_ids, wanted)
 
   for (pid in order_ids) {
@@ -3175,18 +3304,29 @@ if (!is.null(pr_overlay) && length(pr_overlay) >= 1L &&
           out
         }
       )
-    } else if (grepl("^grid_", pid) && is.finite(trigger_km) && !is.null(aoi_owin_part)) {
-      mult <- suppressWarnings(as.numeric(sub("^grid_([0-9.]+)R$", "\\1", pid)))
-      if (!is.finite(mult)) next
-      mi <- match(mult, grid_mults)
-      if (is.na(mi)) mi <- which.min(abs(grid_mults - mult))
-      gp <- oklahoma_report_grid_partition(
-        diameter = mult * trigger_km,
-        win = win_km_part,
-        aoi_owin = aoi_owin_part,
-        label = pid,
-        max_tiles = grid_max_tiles[[max(1L, as.integer(mi))]]
-      )
+    } else if (grepl("^grid_", pid) && !is.null(aoi_owin_part)) {
+      if (identical(pid, "grid_coarse")) {
+        gp <- oklahoma_report_grid_partition(
+          diameter = NA_real_,
+          win = win_km_part,
+          aoi_owin = aoi_owin_part,
+          label = pid,
+          max_tiles = 2000L
+        )
+      } else {
+        if (!is.finite(trigger_km)) next
+        mult <- suppressWarnings(as.numeric(sub("^grid_([0-9.]+)R$", "\\1", pid)))
+        if (!is.finite(mult)) next
+        mi <- match(mult, grid_mults)
+        if (is.na(mi)) mi <- which.min(abs(grid_mults - mult))
+        gp <- oklahoma_report_grid_partition(
+          diameter = mult * trigger_km,
+          win = win_km_part,
+          aoi_owin = aoi_owin_part,
+          label = pid,
+          max_tiles = grid_max_tiles[[max(1L, as.integer(mi))]]
+        )
+      }
       post <- pp_post
       post$Process <- factor(
         oklahoma_assign_partition_process(post$x, post$y, gp$partition, gp$processes),
@@ -3282,11 +3422,24 @@ if (length(partition_overlay_specs) < 1L) {
 #| label: tbl-partition-sensitivity
 pr <- results$partition_results
 ap <- results$ate_partitions
+if (is.null(pr)) pr <- list()
+primary_info <- list(
+  label = primary_partition_id,
+  E_params = if (!is.null(fit_C_obj)) fit_C_obj$params else NULL,
+  F_params = if (!is.null(fit_D_obj)) fit_D_obj$params else NULL,
+  semF = if (!is.null(fit_D_obj)) fit_D_obj$sem else NULL,
+  n_tiles = n_cty,
+  n_treated = suppressWarnings(as.integer(unlist(cfg$n_treated, use.names = FALSE)))[1],
+  n_relabel = NA_integer_
+)
+if (!primary_partition_id %in% names(pr)) {
+  pr <- c(setNames(list(primary_info), primary_partition_id), pr)
+}
 
 part_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
-  ate_info <- if (info$label == "county") {
+  ate_info <- if (identical(info$label, primary_partition_id)) {
     list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
          ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
@@ -3325,7 +3478,7 @@ for (pname in names(pr)) {
     if (!is.null(info$n_post_ctrl) && !is.null(info$n_post_treat) &&
         is.finite(info$n_post_ctrl) && is.finite(info$n_post_treat)) {
       n_post <- as.integer(info$n_post_ctrl) + as.integer(info$n_post_treat)
-    } else if (identical(info$label, "county") && exists("pp_post") && !is.null(pp_post)) {
+    } else if (identical(info$label, primary_partition_id) && exists("pp_post") && !is.null(pp_post)) {
       n_post <- as.integer(nrow(pp_post))
     }
     n_relabel <- if (!is.null(fit_type$sem_obj) &&
@@ -3374,11 +3527,11 @@ for (pname in names(pr)) {
 
 if (length(part_rows) > 0) {
   part_df <- do.call(rbind, part_rows)
-  # Keep county first, then all remaining partitions alphabetically by ID.
+  # Keep the primary tessellation first, then remaining partitions.
+  part_ids <- unique(as.character(part_df$PartitionID))
   part_df$PartitionID <- factor(part_df$PartitionID,
-                                levels = c("county",
-                                           sort(setdiff(unique(as.character(part_df$PartitionID)),
-                                                        "county"))))
+                                levels = c(primary_partition_id,
+                                           sort(setdiff(part_ids, primary_partition_id))))
   part_df <- part_df[order(part_df$PartitionID, part_df$Model), ]
   part_df$Partition <- factor(as.character(part_df$Partition),
                               levels = unique(as.character(part_df$Partition)))
@@ -3393,11 +3546,11 @@ if (length(part_rows) > 0) {
 
 ```{r fig-partition-params}
 #| label: fig-partition-params
-#| fig-cap: "Marginal ETAS parameters (mu, A, alpha_m) across partition schemes. County is highlighted to compare against grid-based partitions."
+#| fig-cap: "Marginal ETAS parameters (mu, A, alpha_m) across partition schemes. The primary tessellation is highlighted."
 #| fig-height: 6
 if (exists("part_df") && nrow(part_df) > 0) {
   plot_df <- part_df
-  plot_df$is_county <- as.character(plot_df$Partition) == "County"
+  plot_df$is_county <- as.character(plot_df$PartitionID) == primary_partition_id
 
   param_long <- rbind(
     data.frame(plot_df[, c("Partition", "Model", "is_county")],
@@ -3443,7 +3596,7 @@ if (exists("biv_sim") && !is.null(biv_sim) && nrow(biv_sim) > 0) {
 part_sim_rows <- list()
 for (pname in names(pr)) {
   info <- pr[[pname]]
-  ate_info <- if (info$label == "county") {
+  ate_info <- if (identical(info$label, primary_partition_id)) {
     list(ate_E = if (!is.null(fit_C_obj)) fit_C_obj$ate else NULL,
          ate_F = if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL)
   } else {
@@ -3465,10 +3618,10 @@ if (length(part_sim_rows) > 0) {
   part_sim <- do.call(rbind, part_sim_rows)
   part_sim$PartitionID <- part_sim$Partition
   part_sim$Partition <- vapply(part_sim$Partition, format_partition_label, character(1))
+  part_sim_ids <- unique(as.character(part_sim$PartitionID))
   part_sim$PartitionID <- factor(part_sim$PartitionID,
-                                 levels = c("county",
-                                            sort(setdiff(unique(as.character(part_sim$PartitionID)),
-                                                         "county"))))
+                                 levels = c(primary_partition_id,
+                                            sort(setdiff(part_sim_ids, primary_partition_id))))
   part_order <- unique(as.character(part_sim[order(part_sim$PartitionID), "Partition"]))
   part_sim$Partition <- factor(part_sim$Partition, levels = part_order)
   p_part <- ggplot(part_sim, aes(x = TotalATE, fill = Model)) +
@@ -3491,7 +3644,7 @@ if (length(part_sim_rows) > 0) {
 # Interpretation
 
 ```{r summaries, include=FALSE}
-n_cty_interp <- cfg$n_counties
+n_cty_interp <- if (!is.null(cfg$n_tiles)) cfg$n_tiles else cfg$n_counties
 ate_days_interp <- if (!is.null(cfg$ATE_WINDOW_DAYS)) cfg$ATE_WINDOW_DAYS else 100
 
 safe_mu_ratio <- function(par) {
@@ -3591,7 +3744,9 @@ grid_str <- if (length(grid_vals) > 0L) {
   paste(round(grid_vals, 2), "km", collapse = ", ")
 } else { "N/A" }
 cdf <- data.frame(
-  Setting = c("Magnitude threshold","GR \u03b2","Counties (total / treated)",
+  Setting = c("Magnitude threshold","GR \u03b2","Primary tessellation",
+              "Primary tiles (total / treated)",
+              "Counties (total / treated)",
               "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
               "SEM change factor","SEM max relabel step frac","SEM forced refit flip frac","Fitting window (days)",
               "SEM t_trunc (days)","SEM t_trunc source","SEM t_trunc rel level",
@@ -3599,7 +3754,10 @@ cdf <- data.frame(
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
               "Test mode"),
   Value = c(scalar_chr(cfg$ETAS_M0), scalar_chr(cfg$BETA_GR),
-            paste0(scalar_chr(cfg$n_counties), " / ", scalar_chr(cfg$n_treated)),
+            scalar_chr(cfg$PRIMARY_PARTITION),
+            paste0(scalar_chr(cfg$n_tiles), " / ", scalar_chr(cfg$n_treated)),
+            paste0(scalar_chr(cfg$n_counties), " / ",
+                   scalar_chr(cfg$n_treated_counties %||% results$counties$n_treated)),
             scalar_chr(cfg$SEM_N_ITER), scalar_chr(cfg$SEM_INNER_ITER), sem_inner_props, scalar_chr(cfg$SEM_N_LABELLINGS),
             scalar_chr(cfg$SEM_CHANGE_FACTOR),
             scalar_chr(cfg$SEM_MAX_RELABEL_STEP_FRAC),

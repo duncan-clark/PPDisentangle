@@ -183,6 +183,7 @@ settings_df <- data.frame(
     "BOOT_N_REPS / boot_reps",
     "KDE_VARIANT_MODE",
     "KDE_BW_METHOD",
+    "PRIMARY_PARTITION",
     "RUN_SENSITIVITY",
     "RUN_T_TRUNC_SENSITIVITY"
   ),
@@ -206,7 +207,8 @@ settings_df <- data.frame(
     scalar_chr(cfg$ATE_CONTRAST),
     paste(scalar_chr(cfg$BOOT_N_REPS), scalar_chr(cfg$BOOT_REPS), sep = " / "),
     scalar_chr(cfg$KDE_VARIANT_MODE),
-    scalar_chr(cfg$KDE_BW_METHOD %||% (results$kde_info$bw_method %||% "diggle2")),
+    scalar_chr(cfg$KDE_BW_METHOD %||% (results$kde_info$bw_method %||% "scott-iso")),
+    scalar_chr(cfg$PRIMARY_PARTITION %||% "county"),
     scalar_chr(cfg$RUN_SENSITIVITY),
     scalar_chr(cfg$RUN_T_TRUNC_SENSITIVITY)
   ),
@@ -243,7 +245,7 @@ if (is.null(kde)) {
       "Training events (held-out pre)"
     ),
     Value = c(
-      scalar_chr(kde$bw_method %||% "diggle2"),
+      scalar_chr(kde$bw_method %||% "scott-iso"),
       scalar_chr(kde$bw_label %||% NA),
       fmt_num(kde$bw_sigma, 3),
       bw_xy_txt,

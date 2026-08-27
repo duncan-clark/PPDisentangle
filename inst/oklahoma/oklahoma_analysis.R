@@ -5,15 +5,15 @@
 # Treatment: OCC directive AOI_20150318 (wastewater injection reduction)
 # State space: Oklahoma state boundary
 #
-# Core fits (county partition):
-#   B. Naive bivariate ETAS     — joint MLE on location-labeled data
-#   D. SEM bivariate ETAS       — adaptive_SEM with model_type="etas_bivariate"
-#   E. Naive bivariate + KDE bg — B with non-parametric background from control
-#   F. SEM bivariate + KDE bg   — D with non-parametric background from control
+# Core fits (primary tessellation, default grid_1.0R):
+#   A. Naive bivariate ETAS     — joint MLE, homogeneous background
+#   B. SEM bivariate ETAS       — adaptive_SEM, homogeneous background
+#   C. Naive bivariate + KDE bg — publication naive pair
+#   D. SEM bivariate + KDE bg   — publication SEM pair
 #
-# Partition sensitivity:
-#   - County boundaries (default)
-#   - Grid: 1D, 2D, 5D (D = estimated triggering range)
+# Partition sensitivity (excludes the primary tessellation):
+#   - County boundaries
+#   - Remaining grids: 2D, 5D (and 1D if county is primary)
 #   - AOI region (AOI polygon = treated, rest = control)
 #
 # Usage:
@@ -328,9 +328,9 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
 KDE_VARIANT_MODE <- tolower(trimws(Sys.getenv("OK_KDE_VARIANT_MODE", "triple")))
 if (!KDE_VARIANT_MODE %in% c("single", "triple")) KDE_VARIANT_MODE <- "triple"
 RUN_KDE_PROFILE_SWEEP <- identical(KDE_VARIANT_MODE, "triple")
-# Background KDE bandwidth. Default remains 2 * bw.diggle (publication).
+# Background KDE bandwidth. Default is isotropic Scott (bw.scott.iso).
 # "scott" uses spatstat::bw.scott (anisotropic); "scott-iso" uses bw.scott.iso.
-KDE_BW_METHOD_RAW <- tolower(trimws(Sys.getenv("OK_KDE_BW_METHOD", "diggle2")))
+KDE_BW_METHOD_RAW <- tolower(trimws(Sys.getenv("OK_KDE_BW_METHOD", "scott-iso")))
 KDE_BW_METHOD <- switch(
   KDE_BW_METHOD_RAW,
   "scott" =, "bw.scott" =, "scott_aniso" = "scott",
@@ -339,9 +339,9 @@ KDE_BW_METHOD <- switch(
   "diggle2" =, "2diggle" =, "2*diggle" =, "digglex2" = "diggle2",
   NA_character_
 )
-if (!nzchar(KDE_BW_METHOD_RAW)) KDE_BW_METHOD <- "diggle2"
+if (!nzchar(KDE_BW_METHOD_RAW)) KDE_BW_METHOD <- "scott-iso"
 if (is.na(KDE_BW_METHOD)) {
-  stop("OK_KDE_BW_METHOD must be one of: diggle2 (default), diggle, scott, scott-iso; got: ",
+  stop("OK_KDE_BW_METHOD must be one of: scott-iso (default), scott, diggle, diggle2; got: ",
        KDE_BW_METHOD_RAW)
 }
 OK_VERBOSE <- tolower(Sys.getenv("OK_VERBOSE", "false")) %in% c("1", "true", "yes", "y")
@@ -421,6 +421,10 @@ OK_ATE_METHOD_LABEL <- paste0(
   "_", OK_ATE_CONTRAST
 )
 source(file.path(SCRIPT_DIR, "oklahoma_geometry.R"), local = FALSE)
+PRIMARY_PARTITION <- oklahoma_normalize_primary_partition(
+  Sys.getenv("OK_PRIMARY_PARTITION", "grid_1.0R"),
+  quick_check = QUICK_CHECK
+)
 source(file.path(SCRIPT_DIR, "ate_bivariate.R"), local = FALSE)
 cat(sprintf("ATE evaluation: bivariate=%s contrast=%s\n",
             OK_ATE_BIVARIATE, OK_ATE_CONTRAST))
@@ -897,6 +901,7 @@ cat(sprintf("SEM worker logs enabled: %s | worker logs verbose: %s | split-to-ma
             SEM_WORKER_LOGS, SEM_WORKER_LOG_VERBOSE, SEM_WORKER_LOG_SPLIT))
 cat(sprintf("KDE variant mode: %s | bandwidth method: %s\n",
             KDE_VARIANT_MODE, KDE_BW_METHOD))
+cat(sprintf("Primary tessellation: %s\n", PRIMARY_PARTITION))
 if (length(KDE_BW_SENS_KM) > 0L) {
   cat(sprintf("KDE bandwidth sensitivity (km): %s | SEM inner=%d\n",
               paste(signif(KDE_BW_SENS_KM, 4), collapse = ", "),
@@ -1007,9 +1012,9 @@ post_end_days <- as.numeric(difftime(
   as.POSIXct(meta$design$post_end_utc, tz = "UTC"), t_star_utc, units = "days"))
 
 # ============================================================================
-# 2. Oklahoma county tessellation
+# 2. Geometry, AOI-exterior structural init, primary tessellation
 # ============================================================================
-cat("\n--- Step 2: Building county tessellation ---\n")
+cat("\n--- Step 2: Building study geometry ---\n")
 
 options(tigris_use_cache = TRUE)
 counties_sf <- counties(state = "OK", cb = TRUE, year = 2022)
@@ -1032,12 +1037,12 @@ if (sum(valid_idx) < 50) {
 
 county_owins_valid <- county_owins[valid_idx]
 counties_sf_valid  <- counties_sf[valid_idx, ]
-partition <- tess(tiles = county_owins_valid, window = win_km)
+county_partition <- tess(tiles = county_owins_valid, window = win_km)
 
 cat(sprintf("  Counties in tessellation: %d / %d\n",
-            partition$n, nrow(counties_sf)))
+            county_partition$n, nrow(counties_sf)))
 
-# Assign treatment: county centroid inside OCC AOI
+# Assign treatment: county centroid inside OCC AOI (sensitivity / maps).
 aoi_path <- file.path(DATA_DIR, "occ_aoi_layer_2.geojson")
 aoi_sf <- st_read(aoi_path, quiet = TRUE)
 aoi_sf <- st_transform(aoi_sf, CRS_PROJ)
@@ -1047,43 +1052,60 @@ aoi_union <- st_union(aoi_sf)
 county_centroids <- st_centroid(counties_sf_valid)
 inside_aoi <- lengths(st_within(county_centroids, aoi_union)) > 0
 
-partition_processes <- ifelse(inside_aoi, "treated", "control")
-names(partition_processes) <- counties_sf_valid$NAME
-
-treated_idx <- partition_processes == "treated"
-treated_names <- names(partition_processes)[treated_idx]
-control_ss <- as.owin(partition[!treated_idx])
-treated_ss <- as.owin(partition[treated_idx])
-state_spaces <- list(control = control_ss, treated = treated_ss)
+county_processes <- ifelse(inside_aoi, "treated", "control")
+names(county_processes) <- counties_sf_valid$NAME
+county_treated_idx <- county_processes == "treated"
+county_treated_names <- names(county_processes)[county_treated_idx]
+county_control_ss <- as.owin(county_partition[!county_treated_idx])
+county_treated_ss <- as.owin(county_partition[county_treated_idx])
+county_state_spaces <- list(control = county_control_ss, treated = county_treated_ss)
+county_scheme <- list(
+  partition = county_partition,
+  processes = county_processes,
+  state_spaces = county_state_spaces,
+  label = "county",
+  treated_idx = county_treated_idx
+)
 
 cat(sprintf("  Treated counties: %d (%s)\n",
-            sum(treated_idx),
-            paste(treated_names, collapse = ", ")))
-cat(sprintf("  Control counties: %d\n", sum(!treated_idx)))
+            sum(county_treated_idx),
+            paste(county_treated_names, collapse = ", ")))
+cat(sprintf("  Control counties: %d\n", sum(!county_treated_idx)))
 
-# ---- Assign events to counties ----
-assign_county <- function(df) {
-  df$location_process <- oklahoma_assign_partition_process(
-    df$x, df$y, partition, partition_processes
-  )
+aoi_owin <- tryCatch({
+  oklahoma_sf_to_owin_km(aoi_union)
+}, error = function(e) {
+  cat("  AOI owin construction failed, using treated-county union as fallback\n")
+  county_treated_ss
+})
+aoi_treat_ss <- tryCatch(
+  intersect.owin(aoi_owin, win_km),
+  error = function(e) county_treated_ss
+)
+aoi_ctrl_ss <- tryCatch(
+  setminus.owin(win_km, aoi_treat_ss),
+  error = function(e) county_control_ss
+)
+
+# Keep events inside the Oklahoma window; primary labels are assigned later.
+keep_in_win <- function(df) {
+  ok <- is.finite(df$x) & is.finite(df$y) & is.finite(df$t) &
+    spatstat.geom::inside.owin(df$x, df$y, win_km)
+  df[ok, , drop = FALSE]
+}
+attach_event_cols <- function(df) {
   df$W <- 1.0
   df$n <- nrow(df)
   df$background <- TRUE
+  df$location_process <- NA_character_
   df
 }
-
-pp_pre  <- assign_county(as.data.frame(ev_all[t_days < 0,
-  .(x = x_km, y = y_km, t = t_days, mag = mag)]))
-pp_post <- assign_county(as.data.frame(ev_all[t_days >= 0 & t_days <= post_end_days,
-  .(x = x_km, y = y_km, t = t_days, mag = mag)]))
-
-# Drop events outside Oklahoma
-pp_pre  <- pp_pre[!is.na(pp_pre$location_process), ]
-pp_post <- pp_post[!is.na(pp_post$location_process), ]
-oklahoma_assert_label_support(pp_pre, control_ss, treated_ss, context = "pp_pre")
-oklahoma_assert_label_support(pp_post, control_ss, treated_ss, context = "pp_post")
+pp_pre  <- attach_event_cols(keep_in_win(as.data.frame(ev_all[t_days < 0,
+  .(x = x_km, y = y_km, t = t_days, mag = mag)])))
+pp_post <- attach_event_cols(keep_in_win(as.data.frame(ev_all[t_days >= 0 & t_days <= post_end_days,
+  .(x = x_km, y = y_km, t = t_days, mag = mag)])))
 cat(sprintf(
-  "  Label/support check: pre=%d post=%d events consistent with county masks\n",
+  "  Window support: pre=%d post=%d events inside Oklahoma\n",
   nrow(pp_pre), nrow(pp_post)
 ))
 
@@ -1095,7 +1117,7 @@ n_pre_total <- nrow(pp_pre_all)
 
 # Gutenberg-Richter beta from all supported pre-treatment events. Before the
 # intervention the whole Oklahoma domain is the control process, so future
-# county treatment labels must not determine this sample.
+# tessellation treatment labels must not determine this sample.
 if (!is.finite(BETA_GR) || BETA_GR <= 0) {
   mag_pre_ok <- pp_pre_all$mag
   mag_pre_ok <- mag_pre_ok[is.finite(mag_pre_ok) & mag_pre_ok >= ETAS_M0]
@@ -1136,18 +1158,13 @@ if (length(keep_idx) < 1) {
 pp_pre_holdout <- pp_pre_all[holdout_idx, ]
 pp_pre <- pp_pre_all[keep_idx, ]
 
-# Carry-over convention: all pre-treatment events are control-process
-# events regardless of eventual treated/control location status.
-pp_pre$process  <- "control"
-pp_post$process <- pp_post$location_process
-pp_pre$inferred_process  <- "control"
-pp_post$inferred_process <- pp_post$location_process
-pp_all <- rbind(pp_pre, pp_post)
-pp_all <- pp_all[order(pp_all$t), ]
-
 windowT_post <- c(0, post_end_days)
 windowT_fit <- c(min(pp_pre$t, na.rm = TRUE), post_end_days)
-pp_pre_ctrl_all <- pp_pre_all[pp_pre_all$location_process == "control", ]
+# Structural decays from first-half *AOI-exterior* pre data (robust to the
+# later treated-region rate ramp). The AOI polygon is the zero-background
+# region for this calibration, not the primary treated tiles.
+aoi_exterior <- !spatstat.geom::inside.owin(pp_pre_all$x, pp_pre_all$y, aoi_treat_ss)
+pp_pre_ctrl_all <- pp_pre_all[aoi_exterior, , drop = FALSE]
 pp_pre_ctrl_all <- pp_pre_ctrl_all[order(pp_pre_ctrl_all$t), ]
 n_pre_ctrl_total <- nrow(pp_pre_ctrl_all)
 n_pre_ctrl_struct_init <- floor(n_pre_ctrl_total * 0.5)
@@ -1157,14 +1174,13 @@ pp_pre_ctrl_struct_init <- pp_pre_ctrl_all[ctrl_struct_idx, ]
 n_pre_ctrl_struct_init <- nrow(pp_pre_ctrl_struct_init)
 
 if (n_pre_ctrl_struct_init < 5) {
-  stop("Insufficient first-half control pre-treatment events for structural parameter estimation.")
+  stop("Insufficient first-half AOI-exterior pre-treatment events for structural parameter estimation.")
 }
 
-# Structural decays from first-half *control-county* pre data (robust to the
-# later treated-region rate ramp). The full pre-treatment ETAS init used to
-# warm-start every downstream fit is estimated separately on *all*
-# pre-treatment events with whole-domain control background (pre-treatment
-# everywhere is control), matching the tstar diagnostic snapshot.
+# The full pre-treatment ETAS init used to warm-start every downstream fit
+# is estimated separately on *all* pre-treatment events with whole-domain
+# control background (pre-treatment everywhere is control), matching the
+# tstar diagnostic snapshot.
 estimate_structural_init <- function() {
   starts <- VANILLA_STARTS
   best <- NULL
@@ -1189,7 +1205,7 @@ estimate_structural_init <- function() {
         t_trunc = SEM_T_TRUNC_DAYS,
         maxit = VANILLA_MAXIT,
         fixed_params = with_gamma_fixed(NULL),
-        zero_background_region = treated_ss
+        zero_background_region = aoi_treat_ss
       ),
       error = function(e) NULL
     )
@@ -1280,7 +1296,7 @@ estimate_pre_full_etas_init <- function() {
 }
 PRE_CTRL_BOOT_PARAMS <- estimate_pre_full_etas_init()
 
-cat(sprintf("  Structural init (from first 50%% control pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
+cat(sprintf("  Structural init (from first 50%% AOI-exterior pre): c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
             STRUCT_INIT$c, STRUCT_INIT$p, STRUCT_INIT$D,
             STRUCT_INIT$gamma, STRUCT_INIT$q))
 cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=%.4f, A=%.4f, alpha_m=%.4f, c=%.4f, p=%.4f, D=%.4f, gamma=%.4f, q=%.4f\n",
@@ -1288,6 +1304,134 @@ cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
 cat(sprintf("  SEM t_trunc: %.4f days (source=%s)\n", SEM_T_TRUNC_DAYS, SEM_T_TRUNC_SOURCE))
+
+# Data-informed triggering range from the KDE holdout sample (Q90 NN).
+# Needed before the primary grid tessellation is built.
+X_bg_scale <- spatstat.geom::ppp(pp_pre_holdout$x, pp_pre_holdout$y, window = win_km)
+nn_training_early <- spatstat.geom::nndist(X_bg_scale)
+trigger_range_km <- as.numeric(stats::quantile(nn_training_early, probs = 0.9, na.rm = TRUE))
+if (!is.finite(trigger_range_km) || trigger_range_km <= 0) {
+  trigger_range_km <- STRUCT_DEFAULTS$D
+}
+cat(sprintf("  Estimated triggering range (Q90 NN distance): %.2f km\n", trigger_range_km))
+
+build_grid_partition <- function(diameter, win, aoi_owin, label, max_tiles = NULL) {
+  if (is.na(diameter)) {
+    target_tiles <- 100L
+    aspect <- diff(win$xrange) / diff(win$yrange)
+    nx <- max(2L, round(sqrt(target_tiles * aspect)))
+    ny <- max(2L, round(target_tiles / nx))
+  } else {
+    nx <- max(2L, ceiling(diff(win$xrange) / diameter))
+    ny <- max(2L, ceiling(diff(win$yrange) / diameter))
+    if (is.null(max_tiles)) {
+      max_tiles <- if (TEST_MODE || QUICK_CHECK) 2000L else 5000L
+    }
+    if ((nx * ny) > max_tiles) {
+      shrink <- sqrt((nx * ny) / max_tiles)
+      nx <- max(2L, ceiling(nx / shrink))
+      ny <- max(2L, ceiling(ny / shrink))
+      cat(sprintf("  [%s] requested grid too fine; coarsened to %d x %d (<= %d tiles)\n",
+                  label, nx, ny, max_tiles))
+    }
+  }
+  grid_part <- spatstat.geom::quadrats(win, nx = nx, ny = ny)
+
+  n_tiles <- grid_part$n
+  grid_procs <- character(n_tiles)
+  tile_list <- spatstat.geom::tiles(grid_part)
+  for (i in seq_len(n_tiles)) {
+    tile_cent <- c(mean(tile_list[[i]]$xrange), mean(tile_list[[i]]$yrange))
+    grid_procs[i] <- if (spatstat.geom::inside.owin(tile_cent[1], tile_cent[2], aoi_owin)) {
+      "treated"
+    } else {
+      "control"
+    }
+  }
+  names(grid_procs) <- spatstat.geom::tilenames(grid_part)
+
+  g_treated_idx <- grid_procs == "treated"
+  g_ctrl_ss <- tryCatch(
+    as.owin(grid_part[!g_treated_idx]),
+    error = function(e) county_control_ss
+  )
+  g_treat_ss <- tryCatch(
+    as.owin(grid_part[g_treated_idx]),
+    error = function(e) county_treated_ss
+  )
+  g_state_spaces <- list(control = g_ctrl_ss, treated = g_treat_ss)
+
+  cat(sprintf("  [%s] %d tiles (%d treated, %d control)\n",
+              label, n_tiles, sum(g_treated_idx), sum(!g_treated_idx)))
+
+  list(partition = grid_part, processes = grid_procs,
+       state_spaces = g_state_spaces, label = label,
+       treated_idx = g_treated_idx)
+}
+
+if (identical(PRIMARY_PARTITION, "county")) {
+  primary_scheme <- county_scheme
+} else if (identical(PRIMARY_PARTITION, "grid_coarse")) {
+  primary_scheme <- build_grid_partition(NA, win_km, aoi_owin, "grid_coarse", 2000L)
+} else {
+  max_tiles_primary <- if (TEST_MODE || QUICK_CHECK) 2000L else 5000L
+  primary_scheme <- build_grid_partition(
+    diameter = trigger_range_km,
+    win = win_km,
+    aoi_owin = aoi_owin,
+    label = "grid_1.0R",
+    max_tiles = max_tiles_primary
+  )
+}
+
+install_primary_scheme <- function(scheme) {
+  partition <<- scheme$partition
+  partition_processes <<- scheme$processes
+  treated_idx <<- scheme$treated_idx
+  treated_names <<- names(scheme$processes)[scheme$treated_idx]
+  if (length(treated_names) < 1L) {
+    treated_names <<- as.character(which(scheme$treated_idx))
+  }
+  control_ss <<- scheme$state_spaces$control
+  treated_ss <<- scheme$state_spaces$treated
+  state_spaces <<- scheme$state_spaces
+  PRIMARY_PARTITION_LABEL <<- scheme$label
+}
+install_primary_scheme(primary_scheme)
+
+relabel_keep <- function(df, context) {
+  df$location_process <- oklahoma_assign_partition_process(
+    df$x, df$y, partition, partition_processes
+  )
+  df$W <- 1.0
+  df$n <- nrow(df)
+  df$background <- TRUE
+  out <- df[!is.na(df$location_process), , drop = FALSE]
+  oklahoma_assert_label_support(out, control_ss, treated_ss, context = context)
+  out
+}
+pp_pre_all <- relabel_keep(pp_pre_all, "pp_pre_all")
+pp_pre_holdout <- relabel_keep(pp_pre_holdout, "pp_pre_holdout")
+pp_pre <- relabel_keep(pp_pre, "pp_pre")
+pp_post <- relabel_keep(pp_post, "pp_post")
+
+# Carry-over convention: all pre-treatment events are control-process
+# events regardless of eventual treated/control location status.
+pp_pre$process  <- "control"
+pp_post$process <- pp_post$location_process
+pp_pre$inferred_process  <- "control"
+pp_post$inferred_process <- pp_post$location_process
+pp_all <- rbind(pp_pre, pp_post)
+pp_all <- pp_all[order(pp_all$t), ]
+
+if (identical(PRIMARY_PARTITION, "county")) {
+  cat(sprintf("  Primary tessellation county: %d treated (%s)\n",
+              sum(treated_idx), paste(treated_names, collapse = ", ")))
+} else {
+  cat(sprintf("  Primary tessellation %s: %d tiles (%d treated, %d control)\n",
+              PRIMARY_PARTITION_LABEL, partition$n,
+              sum(treated_idx), sum(!treated_idx)))
+}
 
 apply_pre_init_etas <- function(start_par, preserve = c("A", "mu")) {
   # Keep caller-provided productivity/background starts for multistart diversity;
@@ -1486,7 +1630,7 @@ cat("\n--- Step 3: Plots ---\n")
 
 tryCatch({
   counties_plot <- counties_sf_valid
-  counties_plot$treatment <- partition_processes
+  counties_plot$treatment <- county_processes
 
   p_partition <- ggplot() +
     geom_sf(data = counties_plot, aes(fill = treatment),
@@ -1957,14 +2101,17 @@ KDE_BG_LOOKUP <- list(
   treated = make_kde_bg_lookup(treated_ss)
 )
 
-# Data-informed triggering range from the same subset used for KDE:
-# use a robust upper-local scale (90th percentile nearest-neighbor distance).
-nn_training <- nndist(X_bg)
-trigger_range_km <- as.numeric(stats::quantile(nn_training, probs = 0.9, na.rm = TRUE))
-if (!is.finite(trigger_range_km) || trigger_range_km <= 0) {
-  trigger_range_km <- STRUCT_DEFAULTS$D
+# Triggering range was computed in Step 2 from the same holdout sample
+# (needed to build the primary grid tessellation).
+if (!exists("trigger_range_km", inherits = FALSE) ||
+    !is.finite(trigger_range_km) || trigger_range_km <= 0) {
+  nn_training <- nndist(X_bg)
+  trigger_range_km <- as.numeric(stats::quantile(nn_training, probs = 0.9, na.rm = TRUE))
+  if (!is.finite(trigger_range_km) || trigger_range_km <= 0) {
+    trigger_range_km <- STRUCT_DEFAULTS$D
+  }
 }
-cat(sprintf("  Estimated triggering range (Q90 NN distance): %.2f km\n", trigger_range_km))
+cat(sprintf("  Triggering range (Q90 NN distance): %.2f km\n", trigger_range_km))
 
 kde_info <- list(
   bw_method = KDE_BW_METHOD,
@@ -2048,7 +2195,7 @@ tryCatch({
   cat("  Stored KDE background-rate plot in results$plots$background_rate_kde\n")
 }, error = function(e) cat("  Background-rate plot error:", e$message, "\n"))
 
-# Parameter profiles for county KDE bivariate fits.
+# Parameter profiles for primary-tessellation KDE bivariate fits.
 # - all_free: free except gamma=0 (magnitude-independent spatial scale); letters C/D (PRIMARY)
 # - productivity_free: all mu/A/alpha free; structural terms fixed from pre-treatment; E/F
 # Internal objects still use fitE/semF / kde_variant_fits$E/$F for naive/SEM slots;
@@ -2080,10 +2227,10 @@ kde_fit_label <- function(fit_type, variant_id) {
   sprintf("Fit %s [%s]", letter, variant_id)
 }
 # KDE bandwidth SEM (all-free D) uses this RNG key so stochastic SEM matches main Fit D
-# when sigma and data match (i.e. digglex2 vs main county KDE).
+# when sigma and data match (i.e. same bandwidth vs main primary KDE).
 OK_BW_SEM_RNG_LABEL <- kde_fit_label("F", "all_free")
 cat(sprintf(
-  "  KDE county fit variants to run: %s\n",
+  "  KDE primary-partition fit variants to run: %s\n",
   paste(kde_variant_ids, collapse = ", ")
 ))
 cat(sprintf(
@@ -2726,7 +2873,7 @@ if (!isTRUE(FIT_VARIABILITY_ONLY) && RUN_SEM_PILOT) {
 }
 
 if (!isTRUE(FIT_VARIABILITY_ONLY) && !isTRUE(BOOTSTRAP_ONLY) && !isTRUE(T_TRUNC_SENS_ONLY)) {
-cat("\n--- Step 4 unified dispatch: running all county fits in parallel ---\n")
+cat("\n--- Step 4 unified dispatch: running all primary-tessellation fits in parallel ---\n")
 fit_jobs_all <- list()
 if (!isTRUE(CD_ONLY) && !isTRUE(UNIV_KDE_ONLY)) {
   fit_jobs_all <- c(
@@ -2804,7 +2951,7 @@ if (length(fit_jobs_all) < 1L) {
   fit_all_out <- run_parallel(
     fit_jobs_all, run_all_fit_job,
     cores = min(length(fit_jobs_all), N_CORES),
-    label = "fit-all-county-jobs"
+    label = "fit-all-primary-jobs"
   )
 } else {
   fit_all_out <- lapply(fit_jobs_all, run_all_fit_job)
@@ -3320,9 +3467,9 @@ pp_post_sem_L <- pp_post_sem_L[pp_post_sem_L$t >= 0, , drop = FALSE]
 } # end !CD_ONLY univariate block
 
 # ============================================================================
-# 4K. KDE bandwidth sensitivity (county partition, inhomogeneous C/D = all_free)
+# 4K. KDE bandwidth sensitivity (primary partition, inhomogeneous C/D = all_free)
 # ============================================================================
-cat("\n--- Step 4K: KDE bandwidth sensitivity (county, inhom C/D all_free) ---\n")
+cat("\n--- Step 4K: KDE bandwidth sensitivity (primary partition, inhom C/D all_free) ---\n")
 if (length(KDE_BW_SENS_KM) > 0L) {
   kde_bandwidth_specs <- lapply(KDE_BW_SENS_KM, function(km) {
     list(
@@ -3452,89 +3599,56 @@ kde_bandwidth_fits <- NULL
 cat("\n--- Step 5: Alternative partitioning schemes ---\n")
 
 D_scale <- trigger_range_km
+sens_ids <- oklahoma_sensitivity_partition_labels(PRIMARY_PARTITION)
 if (QUICK_CHECK) {
-  grid_multipliers <- c(1.0)
-  grid_diameters <- c(NA_real_)
-  grid_max_tiles <- c(2000L)
-  cat("  QUICK_CHECK mode: using one coarse grid (~100 tiles)\n")
-} else {
-  grid_multipliers <- c(1.0, 2.0, 5.0)
-  grid_diameters <- grid_multipliers * trigger_range_km
-  # Use distinct tile caps so the three radii produce meaningfully different grids.
-  grid_max_tiles <- if (TEST_MODE) c(2000L, 1600L, 1200L) else c(5000L, 3000L, 1500L)
-  cat(sprintf("  Triggering range = %.2f km; grid diameters: %s km\n",
-              trigger_range_km,
-              paste(round(grid_diameters, 2), collapse = ", ")))
-}
-
-build_grid_partition <- function(diameter, win, aoi_owin, label, max_tiles = NULL) {
-  if (is.na(diameter)) {
-    target_tiles <- 100L
-    aspect <- diff(win$xrange) / diff(win$yrange)
-    nx <- max(2L, round(sqrt(target_tiles * aspect)))
-    ny <- max(2L, round(target_tiles / nx))
+  want_grid <- intersect(sens_ids, "grid_coarse")
+  grid_multipliers <- if (length(want_grid)) 1.0 else numeric(0)
+  grid_diameters <- if (length(want_grid)) NA_real_ else numeric(0)
+  grid_max_tiles <- if (length(want_grid)) 2000L else integer(0)
+  if (length(want_grid)) {
+    cat("  QUICK_CHECK mode: using one coarse grid (~100 tiles) as sensitivity\n")
   } else {
-    nx <- max(2L, ceiling(diff(win$xrange) / diameter))
-    ny <- max(2L, ceiling(diff(win$yrange) / diameter))
-    if (is.null(max_tiles)) {
-      max_tiles <- if (TEST_MODE || QUICK_CHECK) 2000L else 5000L
-    }
-    if ((nx * ny) > max_tiles) {
-      shrink <- sqrt((nx * ny) / max_tiles)
-      nx <- max(2L, ceiling(nx / shrink))
-      ny <- max(2L, ceiling(ny / shrink))
-      cat(sprintf("  [%s] requested grid too fine; coarsened to %d x %d (<= %d tiles)\n",
-                  label, nx, ny, max_tiles))
-    }
+    cat("  QUICK_CHECK mode: primary is the coarse grid; no extra grid sensitivities\n")
   }
-  grid_part <- quadrats(win, nx = nx, ny = ny)
-
-  n_tiles <- grid_part$n
-  grid_procs <- character(n_tiles)
-  tile_list <- tiles(grid_part)
-  for (i in seq_len(n_tiles)) {
-    tile_cent <- c(mean(tile_list[[i]]$xrange), mean(tile_list[[i]]$yrange))
-    grid_procs[i] <- if (inside.owin(tile_cent[1], tile_cent[2], aoi_owin)) {
-      "treated"
-    } else {
-      "control"
-    }
+} else {
+  want_grid <- grep("^grid_", sens_ids, value = TRUE)
+  grid_multipliers <- if (length(want_grid)) {
+    as.numeric(sub("^grid_([0-9.]+)R$", "\\1", want_grid))
+  } else {
+    numeric(0)
   }
-  names(grid_procs) <- tilenames(grid_part)
-
-  g_treated_idx <- grid_procs == "treated"
-  g_ctrl_ss <- tryCatch(as.owin(grid_part[!g_treated_idx]), error = function(e) control_ss)
-  g_treat_ss <- tryCatch(as.owin(grid_part[g_treated_idx]), error = function(e) treated_ss)
-  g_state_spaces <- list(control = g_ctrl_ss, treated = g_treat_ss)
-
-  cat(sprintf("  [%s] %d tiles (%d treated, %d control)\n",
-              label, n_tiles, sum(g_treated_idx), sum(!g_treated_idx)))
-
-  list(partition = grid_part, processes = grid_procs,
-       state_spaces = g_state_spaces, label = label,
-       treated_idx = g_treated_idx)
+  grid_diameters <- if (length(grid_multipliers)) grid_multipliers * trigger_range_km else numeric(0)
+  grid_max_lookup <- if (TEST_MODE) {
+    c(`1` = 2000L, `2` = 1600L, `5` = 1200L)
+  } else {
+    c(`1` = 5000L, `2` = 3000L, `5` = 1500L)
+  }
+  grid_max_tiles <- unname(grid_max_lookup[as.character(as.integer(grid_multipliers))])
+  grid_max_tiles[is.na(grid_max_tiles)] <- if (TEST_MODE) 1600L else 3000L
+  if (length(grid_diameters)) {
+    cat(sprintf("  Triggering range = %.2f km; sensitivity grid diameters: %s km\n",
+                trigger_range_km,
+                paste(round(grid_diameters, 2), collapse = ", ")))
+  } else {
+    cat("  No grid partition sensitivities scheduled (primary already covers them).\n")
+  }
 }
 
-aoi_owin <- tryCatch({
-  oklahoma_sf_to_owin_km(aoi_union)
-}, error = function(e) {
-  cat("  AOI owin construction failed, using treated_ss as fallback\n")
-  treated_ss
-})
-
-grid_partitions <- lapply(seq_along(grid_diameters), function(i) {
-  build_grid_partition(
-    diameter = grid_diameters[i],
-    win = win_km,
-    aoi_owin = aoi_owin,
-    label = if (QUICK_CHECK) "grid_coarse" else sprintf("grid_%.1fR", grid_multipliers[i]),
-    max_tiles = grid_max_tiles[i]
-  )
-})
+grid_partitions <- if (length(grid_diameters)) {
+  lapply(seq_along(grid_diameters), function(i) {
+    build_grid_partition(
+      diameter = grid_diameters[i],
+      win = win_km,
+      aoi_owin = aoi_owin,
+      label = if (QUICK_CHECK) "grid_coarse" else sprintf("grid_%.1fR", grid_multipliers[i]),
+      max_tiles = grid_max_tiles[i]
+    )
+  })
+} else {
+  list()
+}
 
 cat("\n  Building AOI partition (AOI = treated, rest = control)...\n")
-aoi_treat_ss <- intersect.owin(aoi_owin, win_km)
-aoi_ctrl_ss <- setminus.owin(win_km, aoi_treat_ss)
 aoi_partition <- tess(tiles = list(control = aoi_ctrl_ss, treated = aoi_treat_ss),
                       window = win_km)
 aoi_procs <- c(control = "control", treated = "treated")
@@ -3545,13 +3659,12 @@ aoi_scheme <- list(partition = aoi_partition, processes = aoi_procs,
                    state_spaces = aoi_state_spaces, label = "aoi_region",
                    treated_idx = aoi_treated_idx)
 
-all_partitions <- c(
-  list(county = list(partition = partition, processes = partition_processes,
-                     state_spaces = state_spaces, label = "county",
-                     treated_idx = treated_idx)),
-  setNames(grid_partitions, sapply(grid_partitions, `[[`, "label")),
+candidate_partitions <- c(
+  list(county = county_scheme),
+  setNames(grid_partitions, vapply(grid_partitions, `[[`, character(1), "label")),
   list(aoi_region = aoi_scheme)
 )
+all_partitions <- candidate_partitions[intersect(sens_ids, names(candidate_partitions))]
 
 if (!RUN_SENSITIVITY || !RUN_PARTITION_SENSITIVITY) {
   all_partitions <- list()
@@ -4382,12 +4495,12 @@ pre_sens_saved_at <- as.character(Sys.time())
 # pair (fits_named$C/$D) for older checkpoint / bootstrap-only code paths.
 fits_named_pre_sensitivity <- list(
   A = list(
-    letter = "A", label = "Naive bivariate (county)",
+    letter = "A", label = sprintf("Naive bivariate (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_bivariate", algorithm = "naive",
     params = B_params, fit = fitB, ate = ate_B
   ),
   B = list(
-    letter = "B", label = "SEM bivariate (county)",
+    letter = "B", label = sprintf("SEM bivariate (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
@@ -4404,22 +4517,22 @@ fits_named_pre_sensitivity <- list(
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
   G = list(
-    letter = "G", label = "Naive univariate ETAS + KDE (county)",
+    letter = "G", label = sprintf("Naive univariate ETAS + KDE (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_kde", algorithm = "naive",
     params = I_params, fit = fitI, ate = ate_I
   ),
   H = list(
-    letter = "H", label = "SEM univariate ETAS + KDE (county)",
+    letter = "H", label = sprintf("SEM univariate ETAS + KDE (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
   ),
   I = list(
-    letter = "I", label = "Naive univariate ETAS (county, no KDE)",
+    letter = "I", label = sprintf("Naive univariate ETAS (%s, no KDE)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_homog", algorithm = "naive",
     params = K_params, fit = fitK, ate = ate_K
   ),
   J = list(
-    letter = "J", label = "SEM univariate ETAS (county, no KDE)",
+    letter = "J", label = sprintf("SEM univariate ETAS (%s, no KDE)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_homog", algorithm = "sem",
     params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
@@ -4451,9 +4564,9 @@ results_pre_sensitivity <- list(
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
-    treated_names = treated_names,
-    n_counties = partition$n,
-    n_treated = sum(treated_idx)
+    treated_names = county_treated_names,
+    n_counties = county_partition$n,
+    n_treated = sum(county_treated_idx)
   ),
   metadata = list(stage = "pre_sensitivity", saved_at = pre_sens_saved_at),
   checkpoint = list(
@@ -4506,6 +4619,7 @@ results_pre_sensitivity <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    PRIMARY_PARTITION = PRIMARY_PARTITION,
     KDE_BW_SENS_KM = KDE_BW_SENS_KM,
     RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
@@ -4545,7 +4659,10 @@ results_pre_sensitivity <- list(
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
     n_post = nrow(pp_post),
-    n_counties = partition$n, n_treated = sum(treated_idx),
+    n_counties = county_partition$n,
+    n_treated_counties = sum(county_treated_idx),
+    n_tiles = partition$n,
+    n_treated = sum(treated_idx),
     grid_diameters = NULL,
     grid_multipliers = NULL,
     kde_bandwidth_multipliers = NULL,
@@ -4572,7 +4689,7 @@ invisible(gc(verbose = FALSE))
 cat("\n--- Step 7a: Sensitivity ATE payloads (for checkpoint + final report) ---\n")
 cat("  Stage meaning: MAIN-FIT ATE stage is complete; now computing sensitivity ATEs only.\n")
 
-# ATE sensitivity by KDE bandwidth (county only, inhomogeneous C/D all_free)
+# ATE sensitivity by KDE bandwidth (primary partition, inhomogeneous C/D all_free)
 kde_bandwidth_sensitivity <- lapply(kde_bandwidth_fits, function(kf) {
   if (is.null(kf) || (is.null(kf$E_params) && is.null(kf$F_params))) return(NULL)
   ate_saved_stats <- function(ate_obj) {
@@ -4636,7 +4753,7 @@ kde_bandwidth_sensitivity <- Filter(Negate(is.null), kde_bandwidth_sensitivity)
 
 # ATE for alternative partitions (C/D all-free, bivariate AoN)
 ate_partitions <- lapply(partition_results, function(pr) {
-  if (is.null(pr) || identical(pr$label, "county")) return(NULL)
+  if (is.null(pr) || identical(pr$label, PRIMARY_PARTITION_LABEL)) return(NULL)
   if (is.null(pr$E_params) && is.null(pr$F_params)) return(NULL)
   part_info <- all_partitions[[pr$label]]
   if (is.null(part_info)) return(NULL)
@@ -5083,12 +5200,12 @@ pre_boot_saved_at <- as.character(Sys.time())
 # Public A–J lettering (same as pre-sensitivity). Legacy fitE/fitF alias C/D.
 fits_named <- list(
   A = list(
-    letter = "A", label = "Naive bivariate (county)",
+    letter = "A", label = sprintf("Naive bivariate (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_bivariate", algorithm = "naive",
     params = B_params, fit = fitB, ate = ate_B
   ),
   B = list(
-    letter = "B", label = "SEM bivariate (county)",
+    letter = "B", label = sprintf("SEM bivariate (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_bivariate", algorithm = "sem",
     params = D_params, fit = semD, ctrl = D_ctrl, treat = D_treat, ate = ate_D
   ),
@@ -5105,22 +5222,22 @@ fits_named <- list(
              method = "kde_productivity_free", algorithm = "sem"),
         kde_variant_fits$F$productivity_free),
   G = list(
-    letter = "G", label = "Naive univariate ETAS + KDE (county)",
+    letter = "G", label = sprintf("Naive univariate ETAS + KDE (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_kde", algorithm = "naive",
     params = I_params, fit = fitI, ate = ate_I
   ),
   H = list(
-    letter = "H", label = "SEM univariate ETAS + KDE (county)",
+    letter = "H", label = sprintf("SEM univariate ETAS + KDE (%s)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_kde", algorithm = "sem",
     params = J_params, fit = semJ, ctrl = J_ctrl, treat = J_treat, ate = ate_J
   ),
   I = list(
-    letter = "I", label = "Naive univariate ETAS (county, no KDE)",
+    letter = "I", label = sprintf("Naive univariate ETAS (%s, no KDE)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_homog", algorithm = "naive",
     params = K_params, fit = fitK, ate = ate_K
   ),
   J = list(
-    letter = "J", label = "SEM univariate ETAS (county, no KDE)",
+    letter = "J", label = sprintf("SEM univariate ETAS (%s, no KDE)", PRIMARY_PARTITION_LABEL),
     method = "county_univariate_homog", algorithm = "sem",
     params = L_params, fit = semL, ctrl = L_ctrl, treat = L_treat, ate = ate_L
   )
@@ -5153,9 +5270,9 @@ results_pre_bootstrap <- list(
   plots = analysis_plots,
   counties = list(
     names = counties_sf_valid$NAME,
-    treated_names = treated_names,
-    n_counties = partition$n,
-    n_treated = sum(treated_idx)
+    treated_names = county_treated_names,
+    n_counties = county_partition$n,
+    n_treated = sum(county_treated_idx)
   ),
   metadata = list(stage = "pre_bootstrap", saved_at = pre_boot_saved_at),
   checkpoint = list(
@@ -5211,6 +5328,7 @@ results_pre_bootstrap <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    PRIMARY_PARTITION = PRIMARY_PARTITION,
     KDE_BW_SENS_KM = KDE_BW_SENS_KM,
     RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
@@ -5250,7 +5368,10 @@ results_pre_bootstrap <- list(
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
     n_post = nrow(pp_post),
-    n_counties = partition$n, n_treated = sum(treated_idx),
+    n_counties = county_partition$n,
+    n_treated_counties = sum(county_treated_idx),
+    n_tiles = partition$n,
+    n_treated = sum(treated_idx),
     grid_diameters = grid_diameters,
     grid_multipliers = grid_multipliers,
     kde_bandwidth_multipliers = vapply(kde_bandwidth_specs, `[[`, numeric(1), "multiplier"),
@@ -6388,10 +6509,10 @@ cat(sprintf("%-30s  %12s  %12s  %12s  %12s\n",
 cat(paste(rep("-", 90), collapse = ""), "\n")
 
 ate_print_list <- list(
-  list(ate = ate_B, lab = "A: Naive Biv (county)"),
-  list(ate = ate_D, lab = "B: SEM Biv (county)"),
-  list(ate = ate_E, lab = "C: Naive Biv+KDE (county)"),
-  list(ate = ate_F, lab = "D: SEM Biv+KDE (county)"))
+  list(ate = ate_B, lab = sprintf("A: Naive Biv (%s)", PRIMARY_PARTITION_LABEL)),
+  list(ate = ate_D, lab = sprintf("B: SEM Biv (%s)", PRIMARY_PARTITION_LABEL)),
+  list(ate = ate_E, lab = sprintf("C: Naive Biv+KDE (%s)", PRIMARY_PARTITION_LABEL)),
+  list(ate = ate_F, lab = sprintf("D: SEM Biv+KDE (%s)", PRIMARY_PARTITION_LABEL)))
 
 for (pname in names(ate_partitions)) {
   ap <- ate_partitions[[pname]]
@@ -6515,9 +6636,9 @@ results <- list(
   ),
   counties = list(
     names = counties_sf_valid$NAME,
-    treated_names = treated_names,
-    n_counties = partition$n,
-    n_treated = sum(treated_idx)
+    treated_names = county_treated_names,
+    n_counties = county_partition$n,
+    n_treated = sum(county_treated_idx)
   ),
   fit_name_map = list(
     A = "fits_named$A",
@@ -6565,6 +6686,7 @@ results <- list(
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
+    PRIMARY_PARTITION = PRIMARY_PARTITION,
     KDE_BW_SENS_KM = KDE_BW_SENS_KM,
     RUN_PARTITION_SENSITIVITY = RUN_PARTITION_SENSITIVITY,
     CD_ONLY = CD_ONLY,
@@ -6604,7 +6726,10 @@ results <- list(
     windowT_post = windowT_post,
     n_pre = nrow(pp_pre), n_pre_holdout = nrow(pp_pre_holdout), n_pre_total = nrow(pp_pre_all),
     n_post = nrow(pp_post),
-    n_counties = partition$n, n_treated = sum(treated_idx),
+    n_counties = county_partition$n,
+    n_treated_counties = sum(county_treated_idx),
+    n_tiles = partition$n,
+    n_treated = sum(treated_idx),
     grid_diameters = grid_diameters,
     grid_multipliers = grid_multipliers,
     kde_bandwidth_multipliers = vapply(kde_bandwidth_specs, `[[`, numeric(1), "multiplier"),
