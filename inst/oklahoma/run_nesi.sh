@@ -89,6 +89,7 @@ SEM_INNER_EXPLICIT=0
 SEM_WARMSTART_EXPLICIT=0
 SEM_N_ITER_EXPLICIT=0
 SEM_N_LABELLINGS_EXPLICIT=0
+SEM_T_TRUNC_EXPLICIT=0
 SEM_OUTER_MAXIT_EXPLICIT=0
 SEM_OUTER_MAXIT_BIV_EXPLICIT=0
 SEM_OPTIM_METHOD_EXPLICIT=0
@@ -131,7 +132,7 @@ while [[ "$#" -gt 0 ]]; do
     --sem-n-labellings) PP_SEM_N_LABELLINGS="$2"; SEM_N_LABELLINGS_EXPLICIT=1; shift 2 ;;
     --sem-outer-maxit) PP_SEM_OUTER_MAXIT="$2"; SEM_OUTER_MAXIT_EXPLICIT=1; shift 2 ;;
     --sem-outer-maxit-biv) PP_SEM_OUTER_MAXIT_BIV="$2"; SEM_OUTER_MAXIT_BIV_EXPLICIT=1; shift 2 ;;
-    --sem-t-trunc-days) PP_SEM_T_TRUNC_DAYS="$2"; shift 2 ;;
+    --sem-t-trunc-days) PP_SEM_T_TRUNC_DAYS="$2"; SEM_T_TRUNC_EXPLICIT=1; shift 2 ;;
     --sem-t-trunc-rel) PP_SEM_T_TRUNC_REL="$2"; shift 2 ;;
     --t-trunc-sens-days) PP_T_TRUNC_SENS_DAYS="$2"; shift 2 ;;
     --run-t-trunc-sensitivity) PP_RUN_T_TRUNC_SENSITIVITY="$2"; shift 2 ;;
@@ -198,58 +199,59 @@ done
 if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
   mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
   apply_paper_science_suite() {
-    # Shared publication science: primary 1R + Scott-iso, all C/D sensitivities,
-    # A–J triple, bivariate AoN. SEM inner / bootstrap are set by the caller.
+    # Publication science: county primary, t_trunc=250, gated D from that C,
+    # A–J (not C/D-only), scott-iso, bandwidth + partition C/D, no t-trunc grid.
     if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
     if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=64; fi
     if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
-    if [ "$SEM_N_LABELLINGS_EXPLICIT" -ne 1 ]; then PP_SEM_N_LABELLINGS=20; fi
+    if [ "$SEM_N_LABELLINGS_EXPLICIT" -ne 1 ]; then PP_SEM_N_LABELLINGS=0; fi
     if [ "$SEM_OUTER_MAXIT_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT=5000; fi
     if [ "$SEM_OUTER_MAXIT_BIV_EXPLICIT" -ne 1 ]; then PP_SEM_OUTER_MAXIT_BIV=5000; fi
-    if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="triple"; fi
-    if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=100; fi
+    if [ "$SEM_OPTIM_METHOD_EXPLICIT" -ne 1 ]; then PP_SEM_OPTIM_METHOD="max"; fi
+    if [ "$KDE_VARIANT_MODE_EXPLICIT" -ne 1 ]; then PP_KDE_VARIANT_MODE="single"; fi
+    if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
     if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
     if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
     if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
     PP_RUN_SENSITIVITY=1
     RUN_SENS_EXPLICIT=1
     PP_RUN_PARTITION_SENSITIVITY=1
-    PP_RUN_T_TRUNC_SENSITIVITY=1
-    PP_T_TRUNC_SENS_DAYS="1,5,7,10,14,21,90"
-    if [ -z "$PP_KDE_BW_SENS_KM" ]; then PP_KDE_BW_SENS_KM="0.5,1,5,10,20"; fi
+    PP_RUN_T_TRUNC_SENSITIVITY=0
     if [ -z "$PP_KDE_BW_METHOD" ]; then PP_KDE_BW_METHOD="scott-iso"; fi
-    if [ -z "$PP_PRIMARY_PARTITION" ]; then PP_PRIMARY_PARTITION="grid_1.0R"; fi
-    if [ -z "$PP_SEM_T_TRUNC_DAYS" ]; then PP_SEM_T_TRUNC_DAYS=90; fi
+    if [ -z "$PP_PRIMARY_PARTITION" ]; then PP_PRIMARY_PARTITION="county"; fi
+    if [ "${SEM_T_TRUNC_EXPLICIT:-0}" -ne 1 ]; then PP_SEM_T_TRUNC_DAYS=250; fi
     if [ -z "$PP_ATE_BIVARIATE" ]; then PP_ATE_BIVARIATE=true; fi
     if [ -z "$PP_ATE_CONTRAST" ]; then PP_ATE_CONTRAST=all_or_nothing; fi
-    PP_SKIP_FULL_REPORT=0
+    PP_SEM_MONOTONE_COMPLETE_LL=1
+    PP_SEM_START_FROM_C=1
+    PP_SEM_BIV_N_THREADS=1
+    if [ -z "${PP_SEM_SINGLE_FLIP_FROM_ITER:-}" ]; then
+      PP_SEM_SINGLE_FLIP_FROM_ITER=1001
+    fi
+    PP_SKIP_FULL_REPORT=1
     PP_CD_ONLY=0
     PP_UNIV_KDE_ONLY=0
+    if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
   }
   case "$mode_norm" in
     paper|paper-final|publication)
       apply_paper_science_suite
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=5000; fi
-      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2000; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=5000; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=100; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1250; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1250; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=256; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=24; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=64; fi
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="24:00:00"; fi
       ;;
     paper-quick|paper_quick|preview)
       apply_paper_science_suite
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
-      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2000; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2000; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1250; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1250; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
-      # Cheaper than paper: shorter Omori window, no 90-day t_trunc sensitivity,
-      # skip diagnostic control snapshots (not used for SEM init).
-      PP_SEM_T_TRUNC_DAYS=45
-      PP_T_TRUNC_SENS_DAYS="1,5,7,10,14,21,45"
-      if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
-      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="08:00:00"; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="12:00:00"; fi
       ;;
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
