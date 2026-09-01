@@ -406,12 +406,29 @@ Primary tessellation (`r primary_partition_id`) publication pair:
 | **D** | SEM bivariate ETAS | KDE (non-parametric) | SEM-corrected |
 
 All fits fix $\gamma\equiv 0$ (magnitude-independent spatial scale $d(m)=D$).
-**A/B** homogeneous bivariate (all-free except $\gamma$);
-**C/D** KDE all-free (primary);
-**E/F** KDE with structural $(c,p,D,q)$ fixed from first-half control pre-treatment;
-**G/H** univariate+KDE; **I/J** univariate homogeneous (no KDE).
-Partition-sensitivity refits use the same C/D (all-free) specifications on
-alternative tessellations.
+```{r cd-only-scope}
+#| echo: false
+#| results: asis
+if (isTRUE(cfg$CD_ONLY)) {
+  cat(
+    "This artifact is a **C/D-only** run: only the primary naive (C) and SEM (D) ",
+    "KDE bivariate fits were estimated. Homogeneous A/B, structural E/F, ",
+    "univariate G–J, bootstrap, and tessellation/bandwidth/t-trunc sensitivities ",
+    "were not run. Sections below that depend on those outputs will say so.\n",
+    sep = ""
+  )
+} else {
+  cat(
+    "**A/B** homogeneous bivariate (all-free except $\\gamma$); ",
+    "**C/D** KDE all-free (primary); ",
+    "**E/F** KDE with structural $(c,p,D,q)$ fixed from first-half control pre-treatment; ",
+    "**G/H** univariate+KDE; **I/J** univariate homogeneous (no KDE). ",
+    "Partition-sensitivity refits use the same C/D (all-free) specifications on ",
+    "alternative tessellations.\n",
+    sep = ""
+  )
+}
+```
 
 # Study Design
 
@@ -3202,6 +3219,20 @@ For each partition, both the naive bivariate + KDE (C-type, all-free)
 and SEM bivariate + KDE (D-type, all-free) models are fitted. The maps
 below use the same pre/post overlay as the tessellation point-pattern figure.
 
+The SEM-D log-likelihood table below scores every tessellation's fitted
+parameters on the **same AOI geometry** (OCC polygon = treated, complement =
+control, same KDE field). The two columns change only the process labels:
+the SEM's last proposed labelling versus the AOI-boundary location labels.
+A higher last-labelling likelihood means the sampler's proposed labels
+outscore the geographic AOI assignment under that tessellation's fitted
+model. Pre-treatment events remain control in both columns.
+
+A separate parameter table lists the fitted bivariate ETAS coefficients
+for C and D on each partition (background, productivity, cross-excitation,
+shared structural terms, and branching). Use it to see whether a tessellation
+stays C-like (\(\mu_1\gg\mu_0\), moderate \(\rho\)) or walks toward a
+low-background, near-critical treated Hawkes.
+
 ```{r prep-partition-overlays}
 #| label: prep-partition-overlays
 #| include: false
@@ -3544,6 +3575,196 @@ if (length(part_rows) > 0) {
 }
 ```
 
+```{r tbl-partition-params}
+#| label: tbl-partition-params
+#| tbl-cap: "Bivariate ETAS parameters for C (location labels) and D (SEM) on each partition. Branching ratios are A*beta/(beta-alpha); rho is the offspring spectral radius. Shared structural terms (c, p, D, q) are one value per bivariate fit (gamma = 0)."
+pnum <- function(par, nm) {
+  if (is.null(par)) return(NA_real_)
+  if (is.list(par) && nm %in% names(par)) {
+    v <- suppressWarnings(as.numeric(par[[nm]]))
+    return(if (length(v) && is.finite(v[[1]])) v[[1]] else NA_real_)
+  }
+  pv <- tryCatch(unlist(par), error = function(e) NULL)
+  if (is.null(pv) || is.null(names(pv)) || !nm %in% names(pv)) return(NA_real_)
+  v <- suppressWarnings(as.numeric(pv[[nm]]))
+  if (!length(v) || !is.finite(v[[1]])) return(NA_real_)
+  v[[1]]
+}
+beta_part <- suppressWarnings(as.numeric(unlist(cfg$BETA_GR, use.names = FALSE)))
+beta_part <- beta_part[is.finite(beta_part) & beta_part > 0]
+beta_part <- if (length(beta_part)) beta_part[[1]] else 2.3
+eta_part <- function(A, alpha, beta_gr = beta_part) {
+  if (!is.finite(A) || !is.finite(alpha) || !is.finite(beta_gr) || beta_gr <= 0) {
+    return(NA_real_)
+  }
+  gap <- beta_gr - alpha
+  if (!is.finite(gap) || gap <= 1e-8) return(Inf)
+  A * beta_gr / gap
+}
+rho_part <- function(par) {
+  e00 <- eta_part(pnum(par, "A_00"), pnum(par, "alpha_m_00"))
+  e01 <- eta_part(pnum(par, "A_01"), pnum(par, "alpha_m_01"))
+  e10 <- eta_part(pnum(par, "A_10"), pnum(par, "alpha_m_10"))
+  e11 <- eta_part(pnum(par, "A_11"), pnum(par, "alpha_m_11"))
+  M <- matrix(c(e00, e01, e10, e11), nrow = 2, byrow = TRUE)
+  if (!all(is.finite(M))) return(Inf)
+  max(Re(eigen(M, only.values = TRUE)$values))
+}
+fmt_part <- function(x, digits = 4L) {
+  if (length(x) < 1L || is.null(x) || is.na(x)) return("—")
+  if (!is.finite(x)) return("Inf")
+  sprintf(paste0("%.", as.integer(digits), "f"), as.numeric(x))
+}
+fmt_tiny <- function(x) {
+  if (length(x) < 1L || is.null(x) || is.na(x)) return("—")
+  if (!is.finite(x)) return("Inf")
+  if (abs(x) > 0 && abs(x) < 1e-3) return(format(signif(x, 3), scientific = TRUE))
+  sprintf("%.4f", x)
+}
+
+part_param_rows <- list()
+if (exists("pr") && length(pr) > 0L) {
+  part_ids_p <- unique(as.character(unlist(lapply(pr, function(z) z$label))))
+  part_ids_p <- c(primary_partition_id, sort(setdiff(part_ids_p, primary_partition_id)))
+  part_ids_p <- intersect(part_ids_p, unique(c(names(pr), primary_partition_id)))
+  for (pid in part_ids_p) {
+    info <- pr[[pid]]
+    if (is.null(info)) next
+    for (ft in list(
+      list(lab = "C", par = info$E_params),
+      list(lab = "D", par = info$F_params)
+    )) {
+      par <- ft$par
+      if (is.null(par)) next
+      e00 <- eta_part(pnum(par, "A_00"), pnum(par, "alpha_m_00"))
+      e11 <- eta_part(pnum(par, "A_11"), pnum(par, "alpha_m_11"))
+      part_param_rows[[length(part_param_rows) + 1L]] <- data.frame(
+        Partition = format_partition_label(pid),
+        Model = ft$lab,
+        mu_0 = fmt_part(pnum(par, "mu_0")),
+        mu_1 = fmt_part(pnum(par, "mu_1")),
+        A_00 = fmt_part(pnum(par, "A_00")),
+        A_11 = fmt_part(pnum(par, "A_11")),
+        alpha_00 = fmt_part(pnum(par, "alpha_m_00")),
+        alpha_11 = fmt_part(pnum(par, "alpha_m_11")),
+        A_01 = fmt_tiny(pnum(par, "A_01")),
+        A_10 = fmt_tiny(pnum(par, "A_10")),
+        c = fmt_tiny(pnum(par, "c")),
+        p = fmt_part(pnum(par, "p")),
+        D = fmt_part(pnum(par, "D")),
+        q = fmt_part(pnum(par, "q")),
+        eta_00 = fmt_part(e00, 3L),
+        eta_11 = fmt_part(e11, 3L),
+        rho = fmt_part(rho_part(par), 3L),
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+}
+if (length(part_param_rows) > 0L) {
+  part_param_df <- do.call(rbind, part_param_rows)
+  rownames(part_param_df) <- NULL
+  kable(
+    part_param_df,
+    align = "llcccccccccccccccc",
+    row.names = FALSE,
+    col.names = c(
+      "Partition", "Model",
+      "$\\mu_0$", "$\\mu_1$",
+      "$A_{00}$", "$A_{11}$",
+      "$\\alpha_{00}$", "$\\alpha_{11}$",
+      "$A_{01}$", "$A_{10}$",
+      "$c$", "$p$", "$D$", "$q$",
+      "$\\eta_{00}$", "$\\eta_{11}$", "$\\rho$"
+    ),
+    escape = FALSE
+  ) |>
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "bordered"),
+      full_width = FALSE, font_size = 8,
+      latex_options = c("scale_down", "hold_position")
+    ) |>
+    scroll_box(width = "100%")
+} else {
+  cat("Partition C/D parameters are not stored in this results file.\n")
+}
+```
+
+```{r tbl-partition-sem-aoi-loglik}
+#| label: tbl-partition-sem-aoi-loglik
+#| tbl-cap: "SEM D log-likelihood on the AOI geometry: last proposed labelling vs AOI-boundary labels. Both columns use that tessellation's fitted SEM-D parameters, the AOI control/treated regions, and the same KDE field. Higher is better. Delta = last labelling minus AOI-boundary labels."
+support_path <- file.path(SCRIPT_DIR, "oklahoma_report_support.R")
+if (file.exists(support_path) &&
+    !exists("oklahoma_report_partition_sem_aoi_loglik", mode = "function")) {
+  source(support_path, local = FALSE)
+}
+pp_pre_holdout_ll <- NULL
+if (!is.null(results$pp_data) && !is.null(results$pp_data$pp_pre_holdout)) {
+  pp_pre_holdout_ll <- coerce_pp_df(results$pp_data$pp_pre_holdout)
+}
+primary_ll_info <- list(
+  label = primary_partition_id,
+  F_params = if (!is.null(fit_D_obj)) fit_D_obj$params else NULL,
+  semF = if (!is.null(fit_D_obj)) {
+    if (!is.null(fit_D_obj$fit) && !is.null(fit_D_obj$fit$adaptive)) {
+      fit_D_obj$fit
+    } else {
+      fit_D_obj$sem
+    }
+  } else {
+    NULL
+  },
+  pp_post_sem = NULL
+)
+if (!is.null(pr[[primary_partition_id]]) &&
+    !is.null(pr[[primary_partition_id]]$pp_post_sem)) {
+  primary_ll_info$pp_post_sem <- pr[[primary_partition_id]]$pp_post_sem
+}
+sem_aoi_ll_df <- if (exists("oklahoma_report_partition_sem_aoi_loglik", mode = "function") &&
+                     exists("win_km_part") && exists("aoi_owin_part") &&
+                     !is.null(win_km_part) && !is.null(aoi_owin_part) &&
+                     !is.null(pp_pre_holdout_ll)) {
+  oklahoma_report_partition_sem_aoi_loglik(
+    partition_results = pr,
+    primary_id = primary_partition_id,
+    primary_info = primary_ll_info,
+    pp_pre = pp_pre,
+    pp_post = pp_post,
+    pp_pre_holdout = pp_pre_holdout_ll,
+    win_km = win_km_part,
+    aoi_owin = aoi_owin_part,
+    kde_info = results$kde_info,
+    cfg = cfg,
+    format_label = format_partition_label
+  )
+} else {
+  NULL
+}
+if (!is.null(sem_aoi_ll_df) && nrow(sem_aoi_ll_df) > 0L) {
+  ll_print <- sem_aoi_ll_df
+  ll_print$Last_labelling_LL <- round(ll_print$Last_labelling_LL, 2)
+  ll_print$AOI_boundary_LL <- round(ll_print$AOI_boundary_LL, 2)
+  ll_print$Delta_last_minus_AOI <- round(ll_print$Delta_last_minus_AOI, 2)
+  names(ll_print) <- c(
+    "PartitionID",
+    "Partition",
+    "Last labelling LL",
+    "AOI-boundary LL",
+    "Delta (last - AOI)",
+    "Post labels last != AOI",
+    "N post"
+  )
+  ll_print <- subset(ll_print, select = -PartitionID)
+  rownames(ll_print) <- NULL
+  kable(ll_print, align = "lrrrrr", row.names = FALSE) |>
+    kable_styling(bootstrap_options = c("striped", "hover", "bordered"),
+                  full_width = FALSE, font_size = 10)
+} else {
+  cat("SEM D AOI-vs-last-labelling log-likelihoods could not be rebuilt from this results file (need KDE holdout, AOI geometry, and Fit D parameters).\n")
+}
+```
+
 ```{r fig-partition-params}
 #| label: fig-partition-params
 #| fig-cap: "Marginal ETAS parameters (mu, A, alpha_m) across partition schemes. The primary tessellation is highlighted."
@@ -3720,9 +3941,10 @@ cat(paste(effect_lines, collapse = "\n"), "\n")
 
 **Partition sensitivity.** The alternative partition schemes (grids at
 different scales and the AOI-as-single-region partition) show how the
-treatment effect estimate varies with spatial resolution. Coarser
-partitions aggregate more spatial heterogeneity, while finer grids
-may better capture localized effects but have fewer events per cell.
+treatment effect estimate varies with spatial resolution. The SEM-D
+log-likelihood table scores each tessellation's fitted parameters on the
+same AOI geometry, so a last-labelling gain over the AOI-boundary labels
+is a labelling comparison rather than a change of spatial compensator.
 
 # Configuration
 

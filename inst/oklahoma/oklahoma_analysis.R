@@ -48,6 +48,14 @@ REPO_DIR <- if (basename(SCRIPT_DIR) == "oklahoma" &&
 } else {
   normalizePath(getwd(), winslash = "/", mustWork = FALSE)
 }
+# R --file= can mangle spaces (Google Drive "My Drive" → "My~+~Drive").
+repo_dir_env <- trimws(Sys.getenv("OK_REPO_DIR", ""))
+if (nzchar(repo_dir_env) && file.exists(file.path(repo_dir_env, "DESCRIPTION"))) {
+  REPO_DIR <- normalizePath(repo_dir_env, winslash = "/", mustWork = FALSE)
+  SCRIPT_DIR <- file.path(REPO_DIR, "inst", "oklahoma")
+} else if (!file.exists(file.path(REPO_DIR, "DESCRIPTION"))) {
+  stop("Could not locate PPDisentangle DESCRIPTION. Set OK_REPO_DIR to the package root.")
+}
 
 # Ensure this script uses the CURRENT repository source (not a stale installed build).
 # This is critical for SEM relabelling logic diagnostics and recent algorithm changes.
@@ -182,6 +190,10 @@ if (!is.finite(SENS_SEM_INNER_ITER) || is.na(SENS_SEM_INNER_ITER) || SENS_SEM_IN
   SENS_SEM_INNER_ITER <- SEM_INNER_ITER
 }
 SEM_INNER_PROPS   <- if (QUICK_CHECK) 3 else if (TEST_MODE) 5  else 20
+env_sem_inner_props <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_INNER_PROPS", "")))
+if (is.finite(env_sem_inner_props) && !is.na(env_sem_inner_props) && env_sem_inner_props >= 1L) {
+  SEM_INNER_PROPS <- env_sem_inner_props
+}
 SEM_CHANGE_FACTOR <- 0.01
 SEM_CHANGE_FACTOR_MIN_MULT <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_CHANGE_FACTOR_MIN_MULT", "1.0")))
 if (!is.finite(SEM_CHANGE_FACTOR_MIN_MULT) || is.na(SEM_CHANGE_FACTOR_MIN_MULT) || SEM_CHANGE_FACTOR_MIN_MULT <= 0) {
@@ -193,6 +205,23 @@ if (!is.finite(SEM_CHANGE_FACTOR_MAX_MULT) || is.na(SEM_CHANGE_FACTOR_MAX_MULT) 
 }
 SEM_OPTIM_METHOD <- tolower(trimws(Sys.getenv("OK_SEM_OPTIM_METHOD", "sample_weighted")))
 if (!SEM_OPTIM_METHOD %in% c("max", "sample_weighted")) SEM_OPTIM_METHOD <- "sample_weighted"
+SEM_MONOTONE_COMPLETE_LL <- tolower(Sys.getenv("OK_SEM_MONOTONE_COMPLETE_LL", "false")) %in%
+  c("1", "true", "yes", "y")
+SEM_START_FROM_C <- tolower(Sys.getenv("OK_SEM_START_FROM_C", "false")) %in%
+  c("1", "true", "yes", "y")
+SEM_BIV_N_THREADS <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_BIV_N_THREADS", "1")))
+if (!is.finite(SEM_BIV_N_THREADS) || is.na(SEM_BIV_N_THREADS) || SEM_BIV_N_THREADS < 1L) {
+  SEM_BIV_N_THREADS <- 1L
+}
+SEM_SINGLE_FLIP_FROM_ITER <- suppressWarnings(as.numeric(Sys.getenv(
+  "OK_SEM_SINGLE_FLIP_FROM_ITER", ""
+)))
+if (!is.finite(SEM_SINGLE_FLIP_FROM_ITER) || is.na(SEM_SINGLE_FLIP_FROM_ITER) ||
+    SEM_SINGLE_FLIP_FROM_ITER < 1) {
+  SEM_SINGLE_FLIP_FROM_ITER <- Inf
+} else {
+  SEM_SINGLE_FLIP_FROM_ITER <- as.integer(SEM_SINGLE_FLIP_FROM_ITER)
+}
 SEM_SELECTION_TEMPERATURE <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_SELECTION_TEMPERATURE", "0.2")))
 if (!is.finite(SEM_SELECTION_TEMPERATURE) || is.na(SEM_SELECTION_TEMPERATURE) || SEM_SELECTION_TEMPERATURE <= 0) {
   SEM_SELECTION_TEMPERATURE <- 0.2
@@ -511,6 +540,8 @@ SENS_CORES_DEFAULT <- if (MEMORY_SAFE) min(2L, N_CORES) else N_CORES
 SENS_CORES <- suppressWarnings(as.integer(ifelse(nzchar(SENS_CORES_RAW), SENS_CORES_RAW, as.character(SENS_CORES_DEFAULT))))
 if (!is.finite(SENS_CORES) || is.na(SENS_CORES) || SENS_CORES < 1L) SENS_CORES <- 1L
 SENS_CORES <- max(1L, min(SENS_CORES, N_CORES))
+# Overwritten after the sensitivity job list is built so leftover cores go to M-step.
+SENS_BIV_N_THREADS <- SEM_BIV_N_THREADS
 # Use all allocated cores for ATE forward sims by default (sims are independent;
 # CRN seeds are per-replicate so parallel is safe). Override with OK_ATE_SIM_CORES.
 ATE_SIM_CORES_DEFAULT <- N_CORES
@@ -837,8 +868,15 @@ cat("=== Oklahoma County-Based ETAS Analysis ===\n")
 cat(sprintf("Mode: %s | SEM iters: %d | Change factor: %.3f | Cores: %d\n",
             mode_label, SEM_N_ITER, SEM_CHANGE_FACTOR,
             N_CORES))
-cat(sprintf("SEM selection: method=%s | temperature=%.3f\n",
-            SEM_OPTIM_METHOD, SEM_SELECTION_TEMPERATURE))
+cat(sprintf("SEM selection: method=%s | temperature=%.3f | monotone=%s | start_from_C=%s | single_flip_from_iter=%s | biv_threads=%d\n",
+            SEM_OPTIM_METHOD, SEM_SELECTION_TEMPERATURE,
+            SEM_MONOTONE_COMPLETE_LL, SEM_START_FROM_C,
+            if (is.finite(SEM_SINGLE_FLIP_FROM_ITER)) {
+              as.character(SEM_SINGLE_FLIP_FROM_ITER)
+            } else {
+              "off"
+            },
+            SEM_BIV_N_THREADS))
 cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
             SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
 cat(sprintf("SEM relabel controls: max_step_frac=%.3f | force_param_update_flip_frac=%.3f\n",
@@ -1835,7 +1873,8 @@ run_sem_fit <- function(pp_data_in,
                         sem_selection_temperature_in = SEM_SELECTION_TEMPERATURE,
                         verbose_in = DF_VERBOSE,
                         label = "SEM",
-                        sem_rng_label_in = NULL) {
+                        sem_rng_label_in = NULL,
+                        biv_n_threads_in = SEM_BIV_N_THREADS) {
   fixed_params_in <- with_gamma_fixed(fixed_params_in)
   t0 <- proc.time()[["elapsed"]]
   sem_rng_label <- if (!is.null(sem_rng_label_in)) {
@@ -1893,8 +1932,11 @@ run_sem_fit <- function(pp_data_in,
         max_relabel_step_frac = SEM_MAX_RELABEL_STEP_FRAC,
         force_param_update_flip_frac = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
+        require_monotone_complete_ll = SEM_MONOTONE_COMPLETE_LL,
         proposal_method = "simulation",
-        outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV
+        single_flip_from_iter = SEM_SINGLE_FLIP_FROM_ITER,
+        outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV,
+        biv_n_threads = max(1L, as.integer(biv_n_threads_in))
       ),
       m0 = ETAS_M0, beta_gr = BETA_GR,
       enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
@@ -1920,7 +1962,8 @@ run_sem_fit <- function(pp_data_in,
     tryCatch({
       pp_data_sem <- pp_data_in
       init_params_sem <- init_params_in
-      if (identical(model_type_in, "etas_bivariate") && !is.null(init_params_sem)) {
+      if (identical(model_type_in, "etas_bivariate") && !is.null(init_params_sem) &&
+          !isTRUE(SEM_START_FROM_C)) {
         init_params_sem <- enforce_control_decay_start(init_params_sem, init_ctrl_params_in)
       }
       if (SEM_WARMSTART_FIXED && identical(model_type_in, "etas_bivariate")) {
@@ -2260,6 +2303,21 @@ extract_marginals <- function(biv_par) {
   treat <- as.list(c(mu = biv_par[["mu_1"]], A = biv_par[["A_11"]],
     alpha_m = biv_par[["alpha_m_11"]], structural))
   list(ctrl = ctrl, treat = treat)
+}
+# When the monotone gate is on, D must start from that job's C MLE. Otherwise
+# the first M-step can leave C's basin while the gate only blocks downhill LL.
+sem_init_from_c <- function(c_params, fallback_init,
+                            fallback_ctrl = A_ctrl,
+                            fallback_treat = A_treat) {
+  if (!isTRUE(SEM_START_FROM_C) || is.null(c_params)) {
+    return(list(init = fallback_init, ctrl = fallback_ctrl, treat = fallback_treat))
+  }
+  marg <- extract_marginals(c_params)
+  list(
+    init = c_params,
+    ctrl = if (!is.null(marg)) marg$ctrl else fallback_ctrl,
+    treat = if (!is.null(marg)) marg$treat else fallback_treat
+  )
 }
 extract_marginals_indep <- function(indep_par) {
   if (is.null(indep_par) || is.null(indep_par$control) || is.null(indep_par$treated)) return(NULL)
@@ -2708,13 +2766,20 @@ cat("\n--- Fit D: SEM bivariate ETAS with KDE background ---\n")
 biv_init_F <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
 fit_f <- function(init_params = biv_init_F,
                   fixed_params = NULL,
-                  fit_label = "Fit D") {
+                  fit_label = "Fit D",
+                  init_ctrl_params = A_ctrl,
+                  init_treat_params = A_treat) {
   fixed_params <- with_gamma_fixed(fixed_params)
   tryCatch({
-    init_params_use <- enforce_control_decay_start(init_params, A_ctrl)
+    init_params_use <- if (isTRUE(SEM_START_FROM_C)) {
+      init_params
+    } else {
+      enforce_control_decay_start(init_params, init_ctrl_params)
+    }
     cat(sprintf(
-      "  [%s] start decays from control fit: c=%.4f p=%.4f D=%.4f gamma=%.4f q=%.4f\n",
+      "  [%s] start=%s  c=%.4f p=%.4f D=%.4f gamma=%.4f q=%.4f\n",
       fit_label,
+      if (isTRUE(SEM_START_FROM_C)) "Fit C MLE" else "control-decay",
       as.numeric(init_params_use[["c"]]),
       as.numeric(init_params_use[["p"]]),
       as.numeric(init_params_use[["D"]]),
@@ -2727,6 +2792,8 @@ fit_f <- function(init_params = biv_init_F,
       partition_processes_in = partition_processes,
       state_spaces_in = state_spaces,
       init_params_in = init_params_use,
+      init_ctrl_params_in = init_ctrl_params,
+      init_treat_params_in = init_treat_params,
       fixed_params_in = fixed_params,
       background_rate_var_in = "W",
       control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
@@ -2896,6 +2963,7 @@ if (!isTRUE(AB_ONLY) && !isTRUE(UNIV_KDE_ONLY)) {
   cat(sprintf("  %s: skipping KDE Fits C/D.\n",
               if (isTRUE(UNIV_KDE_ONLY)) "UNIV_KDE_ONLY" else "AB_ONLY"))
 }
+c_start_params <- list()
 run_all_fit_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
   out <- NULL
@@ -2921,10 +2989,26 @@ run_all_fit_job <- function(job) {
   } else if (kind == "D_kde_sem") {
     spec <- kde_variant_specs[[vid]]
     fit_label <- kde_fit_label("F", vid)
+    init_d <- biv_init_F
+    init_ctrl_d <- A_ctrl
+    init_treat_d <- A_treat
+    if (isTRUE(SEM_START_FROM_C)) {
+      c_par <- c_start_params[[as.character(vid)]]
+      if (!is.null(c_par)) {
+        init_d <- c_par
+        marg <- extract_marginals(c_par)
+        if (!is.null(marg)) {
+          init_ctrl_d <- marg$ctrl
+          init_treat_d <- marg$treat
+        }
+      }
+    }
     out <- fit_f(
-      init_params = biv_init_F,
+      init_params = init_d,
       fixed_params = spec$fixed_params,
-      fit_label = fit_label
+      fit_label = fit_label,
+      init_ctrl_params = init_ctrl_d,
+      init_treat_params = init_treat_d
     )
   }
   complete <- if (kind %in% c("A_hom_naive", "C_kde_naive")) {
@@ -2947,6 +3031,31 @@ run_all_fit_job <- function(job) {
 }
 if (length(fit_jobs_all) < 1L) {
   fit_all_out <- list()
+} else if (isTRUE(SEM_START_FROM_C)) {
+  c_jobs <- Filter(function(j) identical(j$kind, "C_kde_naive"), fit_jobs_all)
+  d_jobs <- Filter(function(j) identical(j$kind, "D_kde_sem"), fit_jobs_all)
+  other_jobs <- Filter(
+    function(j) !j$kind %in% c("C_kde_naive", "D_kde_sem"),
+    fit_jobs_all
+  )
+  cat("  OK_SEM_START_FROM_C: Fit C first, then start D from that C MLE.\n")
+  run_job_batch <- function(jobs, label) {
+    if (length(jobs) < 1L) return(list())
+    if (N_CORES > 1L && length(jobs) > 1L) {
+      run_parallel(jobs, run_all_fit_job, cores = min(length(jobs), N_CORES), label = label)
+    } else {
+      lapply(jobs, run_all_fit_job)
+    }
+  }
+  other_out <- run_job_batch(other_jobs, "fit-other-primary")
+  c_out <- run_job_batch(c_jobs, "fit-C-before-D")
+  for (row in c_out) {
+    if (!is.null(row$obj) && valid_biv_fit(row$obj)) {
+      c_start_params[[as.character(row$variant_id)]] <- row$obj$par
+    }
+  }
+  d_out <- run_job_batch(d_jobs, "fit-D-from-C")
+  fit_all_out <- c(as.list(other_out), as.list(c_out), as.list(d_out))
 } else if (N_CORES > 1L && length(fit_jobs_all) > 1L) {
   fit_all_out <- run_parallel(
     fit_jobs_all, run_all_fit_job,
@@ -3537,6 +3646,7 @@ run_kde_bandwidth_fit <- function(spec) {
   })
   E_params_local <- if (valid_biv_fit(fitE_local)) fitE_local$par else NULL
   E_loglik_local <- if (valid_biv_fit(fitE_local)) fitE_local$value else NA_real_
+  d_start_local <- sem_init_from_c(E_params_local, biv_init_local)
 
   semF_local <- tryCatch({
     run_sem_fit(
@@ -3544,14 +3654,17 @@ run_kde_bandwidth_fit <- function(spec) {
       partition_in = partition,
       partition_processes_in = partition_processes,
       state_spaces_in = state_spaces,
-      init_params_in = biv_init_local,
+      init_params_in = d_start_local$init,
+      init_ctrl_params_in = d_start_local$ctrl,
+      init_treat_params_in = d_start_local$treat,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
       control_background_pre_mass_ratio_in = mass_ratio_local,
       sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
       label = sprintf("BW %s Fit D", bw_label),
-      sem_rng_label_in = OK_BW_SEM_RNG_LABEL
+      sem_rng_label_in = OK_BW_SEM_RNG_LABEL,
+      biv_n_threads_in = SENS_BIV_N_THREADS
     )
   }, error = function(e) {
     cat(sprintf("  [BW %s] Fit D error: %s\n", bw_label, e$message))
@@ -3756,22 +3869,25 @@ run_biv_for_partition <- function(part_info) {
   }, error = function(e) { cat(sprintf("    [%s] Inhom naive fit error: %s\n", label, e$message)); NULL })
 
   E_params_p <- if (valid_biv_fit(fitE_p)) fitE_p$par else NULL
+  d_start_p <- sem_init_from_c(E_params_p, biv_init_p)
 
   # SEM bivariate + KDE background
-  biv_init_sem_p <- biv_init_p
   semF_p <- tryCatch({
     run_sem_fit(
       pp_data_in = pp_all_p,
       partition_in = part_info$partition,
       partition_processes_in = part_info$processes,
       state_spaces_in = p_state_spaces,
-      init_params_in = biv_init_sem_p,
+      init_params_in = d_start_p$init,
+      init_ctrl_params_in = d_start_p$ctrl,
+      init_treat_params_in = d_start_p$treat,
       fixed_params_in = SENSITIVITY_FIXED_PARAMS,
       background_rate_var_in = "W",
       control_background_pre_mass_ratio_in = mass_ratio_p,
       sem_inner_iter_in = SENS_SEM_INNER_ITER,
       verbose_in = FALSE,
-      label = sprintf("Partition %s Fit D", label)
+      label = sprintf("Partition %s Fit D", label),
+      biv_n_threads_in = SENS_BIV_N_THREADS
     )
   }, error = function(e) { cat(sprintf("    [%s] Inhom SEM error: %s\n", label, e$message)); NULL })
 
@@ -3815,8 +3931,12 @@ sensitivity_jobs <- c(
   lapply(all_partitions, function(part_info) list(type = "partition", id = part_info$label, payload = part_info))
 )
 kde_bandwidth_labels <- vapply(kde_bandwidth_specs, `[[`, character(1), "label")
+sens_n_parallel <- max(1L, min(SENS_CORES, max(1L, length(sensitivity_jobs))))
+SENS_BIV_N_THREADS <- max(1L, as.integer(floor(N_CORES / sens_n_parallel)))
 cat(sprintf("  Sensitivity jobs: %d bandwidth + %d partition = %d total\n",
             length(kde_bandwidth_specs), length(all_partitions), length(sensitivity_jobs)))
+cat(sprintf("  Sensitivity parallel: %d workers, %d SEM threads/job (N_CORES=%d, SENS_CORES=%d)\n",
+            sens_n_parallel, SENS_BIV_N_THREADS, N_CORES, SENS_CORES))
 
 run_sensitivity_job <- function(job) {
   t0 <- proc.time()[["elapsed"]]
@@ -4601,6 +4721,10 @@ results_pre_sensitivity <- list(
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
+    SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
+    SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
     RUN_SEM_PILOT = RUN_SEM_PILOT,
     SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
@@ -4628,6 +4752,7 @@ results_pre_sensitivity <- list(
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
+    SENS_BIV_N_THREADS = SENS_BIV_N_THREADS,
     ATE_SIM_CORES = ATE_SIM_CORES,
     ATE_USE_CRN = OK_ATE_USE_CRN,
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
@@ -5310,6 +5435,10 @@ results_pre_bootstrap <- list(
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
+    SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
+    SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
     RUN_SEM_PILOT = RUN_SEM_PILOT,
     SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
@@ -5337,6 +5466,7 @@ results_pre_bootstrap <- list(
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
+    SENS_BIV_N_THREADS = SENS_BIV_N_THREADS,
     ATE_SIM_CORES = ATE_SIM_CORES,
     ATE_USE_CRN = OK_ATE_USE_CRN,
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,
@@ -6668,6 +6798,10 @@ results <- list(
     SEM_CHANGE_FACTOR_MIN_MULT = SEM_CHANGE_FACTOR_MIN_MULT,
     SEM_CHANGE_FACTOR_MAX_MULT = SEM_CHANGE_FACTOR_MAX_MULT,
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
+    SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
+    SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
+    SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
     RUN_SEM_PILOT = RUN_SEM_PILOT,
     SEM_PILOT_INNER_ITER = SEM_PILOT_INNER_ITER,
@@ -6695,6 +6829,7 @@ results <- list(
     MEMORY_SAFE = MEMORY_SAFE,
     TRIM_SENS_OBJECTS = TRIM_SENS_OBJECTS,
     SENS_CORES = SENS_CORES,
+    SENS_BIV_N_THREADS = SENS_BIV_N_THREADS,
     ATE_SIM_CORES = ATE_SIM_CORES,
     ATE_USE_CRN = OK_ATE_USE_CRN,
     ATE_CRN_PAIR = OK_ATE_CRN_PAIR,

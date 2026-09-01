@@ -170,6 +170,9 @@ settings_df <- data.frame(
     "ETAS_M0",
     "SEM_INNER_ITER",
     "SEM_N_ITER",
+    "SEM start from C",
+    "SEM monotone complete LL",
+    "SEM single-flip from iter",
     "SEM_N_LABELLINGS",
     "SEM change factor",
     "SEM max relabel step frac",
@@ -195,6 +198,13 @@ settings_df <- data.frame(
     fmt_num(cfg$ETAS_M0, 2),
     scalar_chr(cfg$SEM_INNER_ITER %||% cfg$SEM_INNER),
     scalar_chr(cfg$SEM_N_ITER),
+    scalar_chr(cfg$SEM_START_FROM_C),
+    scalar_chr(cfg$SEM_MONOTONE_COMPLETE_LL),
+    if (is.finite(safe_num(cfg$SEM_SINGLE_FLIP_FROM_ITER))) {
+      scalar_chr(cfg$SEM_SINGLE_FLIP_FROM_ITER)
+    } else {
+      "off"
+    },
     scalar_chr(cfg$SEM_N_LABELLINGS),
     fmt_num(cfg$SEM_CHANGE_FACTOR, 4),
     fmt_num(cfg$SEM_MAX_RELABEL_STEP_FRAC, 4),

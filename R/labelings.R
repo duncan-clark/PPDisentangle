@@ -1002,6 +1002,19 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param stagnation_trigger_every Trigger exploration every N consecutive
 #'   no-flip iterations.
 #' @param MCMC_style Use MCMC acceptance/rejection
+#' @param require_monotone_complete_ll If \code{TRUE}, never accept a
+#'   labelling whose complete-data metric is below the current labelling,
+#'   and never keep an M-step whose complete-data log-likelihood is below
+#'   the best so far. The first parameter update is forced on the starting
+#'   labels so the search cannot leave a worse complete-data mode than that
+#'   baseline.
+#' @param monotone_estep_slack Non-negative slack (nats) on the E-step
+#'   gate only. Proposals with metric \code{>= current - slack} may be
+#'   accepted; the M-step still reverts if natural-scale complete-data
+#'   log-likelihood falls. Default 0 preserves a hard E-step gate.
+#' @param single_flip_from_iter If finite, use exhaustive one-event flip
+#'   proposals from this inner iteration onward. \code{Inf} (default)
+#'   keeps \code{proposal_method} for the whole run.
 #' @param verbose Print progress
 #' @param biv_n_threads Worker threads for the batched bivariate metric
 #'   kernel (default 1 = serial, identical to previous behaviour).
@@ -1035,7 +1048,10 @@ em_style_labelling <- function(pp_data,
                                change_factor = 0.1,
                                stagnation_trigger_every = 10,
                                MCMC_style = FALSE,
+                               require_monotone_complete_ll = FALSE,
+                               monotone_estep_slack = 0,
                                proposal_method = "simulation",
+                               single_flip_from_iter = Inf,
                                fixed_params = NULL,
                                verbose = FALSE,
                                model_type = "hawkes",
@@ -1076,6 +1092,23 @@ em_style_labelling <- function(pp_data,
   if (!is.finite(selection_temperature) || is.na(selection_temperature) || selection_temperature <= 0) {
     selection_temperature <- 0.15
   }
+  require_monotone_complete_ll <- isTRUE(require_monotone_complete_ll)
+  monotone_ll_tol <- 1e-6
+  single_flip_from_iter <- suppressWarnings(as.numeric(single_flip_from_iter))
+  if (!is.finite(single_flip_from_iter) || is.na(single_flip_from_iter) ||
+      single_flip_from_iter < 1) {
+    single_flip_from_iter <- Inf
+  } else {
+    single_flip_from_iter <- as.integer(single_flip_from_iter)
+  }
+  monotone_estep_slack <- suppressWarnings(as.numeric(monotone_estep_slack))
+  if (!is.finite(monotone_estep_slack) || is.na(monotone_estep_slack) ||
+      monotone_estep_slack < 0) {
+    monotone_estep_slack <- 0
+  }
+  best_complete_ll <- -Inf
+  n_downhill_rejected <- 0L
+  complete_ll_trace <- rep(NA_real_, iter)
   change_factor_min_mult <- suppressWarnings(as.numeric(change_factor_min_mult))
   change_factor_max_mult <- suppressWarnings(as.numeric(change_factor_max_mult))
   if (!is.finite(change_factor_min_mult) || is.na(change_factor_min_mult) || change_factor_min_mult <= 0) {
@@ -1394,7 +1427,8 @@ em_style_labelling <- function(pp_data,
   post_data <- starting_data[!is_pre, , drop = FALSE]
   post_data <- post_data[order(post_data$t), , drop = FALSE]
   n_post_total <- nrow(post_data)
-  max_proposals_per_iter <- if (identical(proposal_method, "single_flip")) {
+  max_proposals_per_iter <- if (identical(proposal_method, "single_flip") ||
+                                 is.finite(single_flip_from_iter)) {
     n_post_total + 1L
   } else {
     as.integer(n_props) + 1L
@@ -1613,7 +1647,9 @@ em_style_labelling <- function(pp_data,
     } else {
       current_change_factor
     }
-    if (proposal_method == "single_flip") {
+    use_single_flip <- identical(proposal_method, "single_flip") ||
+      (is.finite(single_flip_from_iter) && i >= single_flip_from_iter)
+    if (use_single_flip) {
       n_post_pts <- nrow(post_data)
       labelling_proposals <- lapply(seq_len(n_post_pts), function(j) {
         proposed <- post_data
@@ -1698,6 +1734,9 @@ em_style_labelling <- function(pp_data,
     }
     force_include_starting <- isTRUE(include_starting_data) && (i <= include_starting_first_n)
     include_starting_this_iter <- (isTRUE(include_starting_data) && !isTRUE(trigger_explore)) || force_include_starting
+    if (require_monotone_complete_ll) {
+      include_starting_this_iter <- TRUE
+    }
     if (include_starting_this_iter) {
       if (length(labelling_proposals) == 0) {
         labelling_proposals <- list()
@@ -2031,7 +2070,42 @@ em_style_labelling <- function(pp_data,
       if (!all(is.finite(w)) || sum(w) <= 0) return(finite_idx[[which.max(vals[finite_idx])]])
       finite_idx[[sample.int(length(finite_idx), size = 1L, prob = w)]]
     }
-    if (identical(optim_method, "sample_weighted") && metric_name == "post_likelihood") {
+    current_idx <- which(flips_per_proposal == 0L)
+    current_metric <- if (length(current_idx) > 0L) {
+      max(as.numeric(metric[current_idx]), na.rm = TRUE)
+    } else {
+      -Inf
+    }
+    if (!is.finite(current_metric)) current_metric <- -Inf
+    lock_starting_for_baseline <- require_monotone_complete_ll &&
+      !is.finite(best_complete_ll)
+    if (lock_starting_for_baseline) {
+      if (length(current_idx) > 0L) {
+        best_metric_idx <- current_idx[[1L]]
+        max_metric_labelling <- labelling_proposals[[best_metric_idx]]
+      } else {
+        best_metric_idx <- NA_integer_
+        max_metric_labelling <- post_data
+      }
+    } else if (require_monotone_complete_ll && metric_name == "post_likelihood") {
+      eligible <- which(
+        is.finite(metric) &
+          (as.numeric(metric) + monotone_ll_tol + monotone_estep_slack >= current_metric)
+      )
+      if (length(eligible) < 1L && length(current_idx) > 0L) {
+        eligible <- current_idx
+      }
+      if (length(eligible) < 1L) {
+        eligible <- seq_along(metric)
+      }
+      if (identical(optim_method, "sample_weighted")) {
+        picked <- sample_metric_idx(metric[eligible], selection_temperature)
+        best_metric_idx <- eligible[[picked]]
+      } else {
+        best_metric_idx <- eligible[[which.max(as.numeric(metric[eligible]))]]
+      }
+      max_metric_labelling <- labelling_proposals[[best_metric_idx]]
+    } else if (identical(optim_method, "sample_weighted") && metric_name == "post_likelihood") {
       best_metric_idx <- sample_metric_idx(metric, selection_temperature)
       max_metric_labelling <- labelling_proposals[[best_metric_idx]]
     } else if (MCMC_style & metric_name == "post_likelihood" & i != 1) {
@@ -2058,10 +2132,14 @@ em_style_labelling <- function(pp_data,
     accepted_labelling <- proposed_best
     proposed_best_flips <- sum(post_data$inferred_process != proposed_best$inferred_process, na.rm = TRUE)
     if (proposed_best_flips > max_flips_per_step) {
-      flip_idx <- which(post_data$inferred_process != proposed_best$inferred_process)
-      keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
-      accepted_labelling <- post_data
-      accepted_labelling$inferred_process[keep_idx] <- proposed_best$inferred_process[keep_idx]
+      if (require_monotone_complete_ll) {
+        accepted_labelling <- post_data
+      } else {
+        flip_idx <- which(post_data$inferred_process != proposed_best$inferred_process)
+        keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
+        accepted_labelling <- post_data
+        accepted_labelling$inferred_process[keep_idx] <- proposed_best$inferred_process[keep_idx]
+      }
     }
     max_diff <- sum(post_data$inferred_process != accepted_labelling$inferred_process, na.rm = TRUE)
     average <- mean(flips_per_proposal)
@@ -2070,6 +2148,9 @@ em_style_labelling <- function(pp_data,
     do_param_update <- FALSE
     if (!is.null(param_update_cadence)) {
       do_param_update <- ((i %% param_update_cadence) == 0L) || i == iter || force_param_update_due
+    }
+    if (lock_starting_for_baseline) {
+      do_param_update <- TRUE
     }
     if (do_param_update) {
         t_param_start <- proc.time()[3]
@@ -2082,6 +2163,11 @@ em_style_labelling <- function(pp_data,
         mml_post_treated <- mml_post[mml_post$inferred_process == "treated", ]
         mml_post_control <- mml_post[mml_post$inferred_process == "control", ]
 
+        snapshot_post <- post_data
+        snapshot_biv <- if (is_biv_etas) biv_etas_params else NULL
+        snapshot_treated_n <- length(treated_par)
+        snapshot_control_n <- length(control_par)
+        mstep_reverted <- FALSE
         if (is_biv_etas) {
           # Joint bivariate ETAS parameter update
           biv_par <- if (!is.null(biv_etas_params)) {
@@ -2249,6 +2335,43 @@ em_style_labelling <- function(pp_data,
             alpha_m = biv_par[["alpha_m_00"]],
             c = biv_par[["c"]], p = biv_par[["p"]],
             D = biv_par[["D"]], gamma = biv_par[["gamma"]], q = biv_par[["q"]]))
+          new_complete_ll <- tryCatch(
+            as.numeric(biv_obj(biv_par))[1L],
+            error = function(e) -Inf
+          )
+          if (length(new_complete_ll) < 1L || !is.finite(new_complete_ll)) {
+            new_complete_ll <- -Inf
+          }
+          if (require_monotone_complete_ll &&
+              is.finite(best_complete_ll) &&
+              new_complete_ll < best_complete_ll - monotone_ll_tol) {
+            biv_etas_params <- snapshot_biv
+            biv_par <- snapshot_biv
+            if (snapshot_treated_n < length(treated_par)) {
+              treated_par <- treated_par[seq_len(snapshot_treated_n)]
+            }
+            if (snapshot_control_n < length(control_par)) {
+              control_par <- control_par[seq_len(snapshot_control_n)]
+            }
+            accepted_labelling <- snapshot_post
+            fits[[i]] <- list(
+              par = snapshot_biv,
+              convergence = NA_integer_,
+              value = best_complete_ll,
+              complete_ll = best_complete_ll,
+              rejected_downhill = TRUE
+            )
+            n_downhill_rejected <- n_downhill_rejected + 1L
+            complete_ll_trace[i] <- best_complete_ll
+            mstep_reverted <- TRUE
+          } else {
+            if (is.finite(new_complete_ll)) {
+              best_complete_ll <- new_complete_ll
+            }
+            complete_ll_trace[i] <- new_complete_ll
+            fits[[i]]$value <- new_complete_ll
+            fits[[i]]$complete_ll <- new_complete_ll
+          }
         } else {
         profile_optim <- function(full_par, obj_fn, label) {
           full_vec <- if (is_etas) {
@@ -2533,6 +2656,11 @@ em_style_labelling <- function(pp_data,
           }
         }
         current_metric_cache <- NA_real_
+        if (isTRUE(mstep_reverted)) {
+          accepted_labelling <- snapshot_post
+          max_diff <- 0L
+          accepted_flips_cum_next <- accepted_flips_cum
+        }
         accepted_flips_cum <- accepted_flips_cum_next
         while (accepted_flips_cum >= next_forced_param_update_at) {
           next_forced_param_update_at <- next_forced_param_update_at + force_param_update_flip_n
@@ -2540,6 +2668,7 @@ em_style_labelling <- function(pp_data,
     } else {
       accepted_flips_cum <- accepted_flips_cum_next
     }
+    max_metric_labelling <- accepted_labelling
 
     retained_starting <- isTRUE(max_diff == 0)
     if (retained_starting) {
@@ -2563,7 +2692,14 @@ em_style_labelling <- function(pp_data,
     mml_post_acc <- accepted_labelling
     accuracy <- mean(mml_post_acc$inferred_process == mml_post_acc$process)
     accuracies[i] <- accuracy
-    metric_vec[i] <- metric[best_metric_idx]
+    metric_vec[i] <- if (length(best_metric_idx) == 1L &&
+                         is.finite(best_metric_idx) &&
+                         best_metric_idx >= 1L &&
+                         best_metric_idx <= length(metric)) {
+      metric[[best_metric_idx]]
+    } else {
+      current_metric
+    }
     current_metric_cache <- metric_vec[i]
     average_flips[i] <- average
     max_metric_flips[i] <- max_diff
@@ -2608,6 +2744,8 @@ em_style_labelling <- function(pp_data,
     all_accuracies = all_accuracies, all_metrics = all_metrics,
     change_factor_trace = change_factor_trace,
     retained_starting_trace = retained_starting_trace,
+    complete_ll_trace = complete_ll_trace,
+    n_downhill_rejected = n_downhill_rejected,
     class_results = class_results[seq_len(class_results_n)], fits = fits,
     etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
     etas_bivariate_convergence = if (is_biv_etas && length(fits) > 0L) {
