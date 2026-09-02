@@ -962,6 +962,36 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   return(dat)
 }
 
+.sem_maybe_cap_labelling <- function(current, proposed,
+                                     max_flips_per_step,
+                                     require_monotone_complete_ll,
+                                     allow_improving_teleport,
+                                     current_metric,
+                                     proposed_metric,
+                                     monotone_ll_tol = 1e-6,
+                                     monotone_estep_slack = 0) {
+  n_flip <- sum(current$inferred_process != proposed$inferred_process, na.rm = TRUE)
+  if (!is.finite(n_flip) || n_flip <= max_flips_per_step) {
+    return(list(labelling = proposed, n_flip = as.integer(n_flip), teleported = FALSE))
+  }
+  cur_m <- suppressWarnings(as.numeric(current_metric)[1L])
+  prop_m <- suppressWarnings(as.numeric(proposed_metric)[1L])
+  if (!is.finite(cur_m)) cur_m <- -Inf
+  improve <- is.finite(prop_m) &&
+    (prop_m + monotone_ll_tol + monotone_estep_slack >= cur_m)
+  if (isTRUE(allow_improving_teleport) && isTRUE(improve)) {
+    return(list(labelling = proposed, n_flip = as.integer(n_flip), teleported = TRUE))
+  }
+  if (isTRUE(require_monotone_complete_ll)) {
+    return(list(labelling = current, n_flip = 0L, teleported = FALSE))
+  }
+  flip_idx <- which(current$inferred_process != proposed$inferred_process)
+  keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
+  out <- current
+  out$inferred_process[keep_idx] <- proposed$inferred_process[keep_idx]
+  list(labelling = out, n_flip = as.integer(max_flips_per_step), teleported = FALSE)
+}
+
 #' EM-style iterative labeling with parameter updates
 #'
 #' Core inner loop of the SEM algorithm: generates labeling proposals,
@@ -1012,6 +1042,13 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #'   gate only. Proposals with metric \code{>= current - slack} may be
 #'   accepted; the M-step still reverts if natural-scale complete-data
 #'   log-likelihood falls. Default 0 preserves a hard E-step gate.
+#' @param include_sequential_map_proposal If \code{TRUE} (bivariate ETAS
+#'   only), add one extra proposal each inner iteration: sequential MAP
+#'   labels under the current \eqn{\theta}.
+#' @param allow_improving_teleport If \code{TRUE}, a selected proposal that
+#'   exceeds \code{max_relabel_step_frac} is still accepted in full when its
+#'   complete-data metric is at least the current labelling (an improving
+#'   Hamming teleport). Default \code{FALSE} keeps the historical cap.
 #' @param single_flip_from_iter If finite, use exhaustive one-event flip
 #'   proposals from this inner iteration onward. \code{Inf} (default)
 #'   keeps \code{proposal_method} for the whole run.
@@ -1050,6 +1087,8 @@ em_style_labelling <- function(pp_data,
                                MCMC_style = FALSE,
                                require_monotone_complete_ll = FALSE,
                                monotone_estep_slack = 0,
+                               include_sequential_map_proposal = FALSE,
+                               allow_improving_teleport = FALSE,
                                proposal_method = "simulation",
                                single_flip_from_iter = Inf,
                                fixed_params = NULL,
@@ -1106,8 +1145,11 @@ em_style_labelling <- function(pp_data,
       monotone_estep_slack < 0) {
     monotone_estep_slack <- 0
   }
+  include_sequential_map_proposal <- isTRUE(include_sequential_map_proposal)
+  allow_improving_teleport <- isTRUE(allow_improving_teleport)
   best_complete_ll <- -Inf
   n_downhill_rejected <- 0L
+  n_teleports <- 0L
   complete_ll_trace <- rep(NA_real_, iter)
   change_factor_min_mult <- suppressWarnings(as.numeric(change_factor_min_mult))
   change_factor_max_mult <- suppressWarnings(as.numeric(change_factor_max_mult))
@@ -1433,6 +1475,9 @@ em_style_labelling <- function(pp_data,
   } else {
     as.integer(n_props) + 1L
   }
+  if (include_sequential_map_proposal) {
+    max_proposals_per_iter <- max_proposals_per_iter + 1L
+  }
   class_results <- vector(
     "list",
     max(1L, as.integer(iter) * max(1L, max_proposals_per_iter))
@@ -1631,6 +1676,7 @@ em_style_labelling <- function(pp_data,
   total_param_update <- 0
   current_change_factor <- change_factor
   no_flip_streak <- 0L
+  labelling_proposals <- list()
   progress_every <- suppressWarnings(as.integer(Sys.getenv("OK_SEM_PROGRESS_EVERY", "25")))
   if (!is.finite(progress_every) || is.na(progress_every) || progress_every < 1L) progress_every <- 0L
 
@@ -1731,6 +1777,41 @@ em_style_labelling <- function(pp_data,
         # Proposals preserve post_data ordering; avoid redundant per-proposal sort.
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
+    }
+    if (include_sequential_map_proposal && is_biv_etas) {
+      biv_par_map <- if (!is.null(biv_etas_params)) {
+        unlist(biv_etas_params)
+      } else {
+        init_bivariate_from_independent(
+          control_par[[length(control_par)]],
+          treated_par[[length(treated_par)]]
+        )
+      }
+      if (!is.null(fixed_params)) {
+        for (nm in intersect(names(fixed_params), .etas_bivariate_par_names)) {
+          biv_par_map[[nm]] <- fixed_params[[nm]]
+        }
+      }
+      map_init <- biv_pid_base
+      map_init[biv_post_slot] <- as.integer(post_data$inferred_process == "treated")
+      map_assign <- as.integer(biv_geom_full$t >= treatment_time)
+      map_pid <- sequential_map_etas_bivariate(
+        params = biv_par_map,
+        t = biv_tt, x = biv_x, y = biv_y, mag = biv_mag,
+        assignable = map_assign,
+        process_id_init = map_init,
+        W0 = biv_W0, W1 = biv_W1,
+        areaS_0 = biv_aS0, areaS_1 = biv_aS1,
+        m0 = biv_m0, t_trunc = t_trunc
+      )
+      map_post <- post_data
+      map_post$inferred_process <- ifelse(
+        as.integer(map_pid)[biv_post_slot] == 1L, "treated", "control"
+      )
+      if (length(labelling_proposals) == 0) {
+        labelling_proposals <- list()
+      }
+      labelling_proposals[[length(labelling_proposals) + 1L]] <- map_post
     }
     force_include_starting <- isTRUE(include_starting_data) && (i <= include_starting_first_n)
     include_starting_this_iter <- (isTRUE(include_starting_data) && !isTRUE(trigger_explore)) || force_include_starting
@@ -2129,19 +2210,28 @@ em_style_labelling <- function(pp_data,
     }
 
     proposed_best <- as.data.frame(max_metric_labelling)
-    accepted_labelling <- proposed_best
-    proposed_best_flips <- sum(post_data$inferred_process != proposed_best$inferred_process, na.rm = TRUE)
-    if (proposed_best_flips > max_flips_per_step) {
-      if (require_monotone_complete_ll) {
-        accepted_labelling <- post_data
-      } else {
-        flip_idx <- which(post_data$inferred_process != proposed_best$inferred_process)
-        keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
-        accepted_labelling <- post_data
-        accepted_labelling$inferred_process[keep_idx] <- proposed_best$inferred_process[keep_idx]
-      }
+    proposed_best_metric <- if (length(best_metric_idx) == 1L &&
+                                is.finite(best_metric_idx) &&
+                                best_metric_idx >= 1L &&
+                                best_metric_idx <= length(metric)) {
+      as.numeric(metric[[best_metric_idx]])[1L]
+    } else {
+      -Inf
     }
-    max_diff <- sum(post_data$inferred_process != accepted_labelling$inferred_process, na.rm = TRUE)
+    cap_res <- .sem_maybe_cap_labelling(
+      current = post_data,
+      proposed = proposed_best,
+      max_flips_per_step = max_flips_per_step,
+      require_monotone_complete_ll = require_monotone_complete_ll,
+      allow_improving_teleport = allow_improving_teleport,
+      current_metric = current_metric,
+      proposed_metric = proposed_best_metric,
+      monotone_ll_tol = monotone_ll_tol,
+      monotone_estep_slack = monotone_estep_slack
+    )
+    accepted_labelling <- cap_res$labelling
+    if (isTRUE(cap_res$teleported)) n_teleports <- n_teleports + 1L
+    max_diff <- cap_res$n_flip
     average <- mean(flips_per_proposal)
     accepted_flips_cum_next <- accepted_flips_cum + max_diff
     force_param_update_due <- accepted_flips_cum_next >= next_forced_param_update_at
@@ -2746,6 +2836,7 @@ em_style_labelling <- function(pp_data,
     retained_starting_trace = retained_starting_trace,
     complete_ll_trace = complete_ll_trace,
     n_downhill_rejected = n_downhill_rejected,
+    n_teleports = n_teleports,
     class_results = class_results[seq_len(class_results_n)], fits = fits,
     etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
     etas_bivariate_convergence = if (is_biv_etas && length(fits) > 0L) {

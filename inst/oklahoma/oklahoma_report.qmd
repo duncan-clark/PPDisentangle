@@ -3012,7 +3012,7 @@ if (length(scen_boot_rows) > 0) {
 
 ```{r fig-ate-bootstrap-cd}
 #| label: fig-ate-bootstrap-cd
-#| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the selected KDE bootstrap pair, using all finite ATEs retained after failed or explosive refits are excluded. Shape/spread preserved, recentered to the point ATE."
+#| fig-cap: "Bias-corrected bootstrap replicate distribution of total saved for the primary KDE pair C/D, using all finite ATEs retained after failed or explosive refits are excluded. Shape/spread preserved, recentered to the point ATE."
 #| fig-height: 4
 #| eval: !expr '!using_pre_bootstrap && !is.null(boot_naive_df) && !is.null(boot_sem_df)'
 # Labels / centers follow results$config$ATE_METHOD for this RDS.
@@ -3073,10 +3073,10 @@ if (!is.null(boot_naive_df) && !is.null(boot_sem_df) &&
            y = "Bootstrap replicate count",
            title = paste0("Bias-corrected bootstrap AoN total-saved distribution (", boot_pair_label, ")"),
            subtitle = sprintf(
-             "Centers: E=%.1f, F=%.1f; retained stable finite ATEs %d/%d (E) and %d/%d (F); %d non-finite ATE(s) omitted",
-             naive_obs_mean, sem_obs_mean,
-             length(naive_filt$vals), naive_filt$n_in,
-             length(sem_filt$vals), sem_filt$n_in,
+             "Centers: %s=%.1f, %s=%.1f; retained stable finite ATEs %d/%d (%s) and %d/%d (%s); %d non-finite ATE(s) omitted",
+             boot_naive_id, naive_obs_mean, boot_sem_id, sem_obs_mean,
+             length(naive_filt$vals), naive_filt$n_in, boot_naive_id,
+             length(sem_filt$vals), sem_filt$n_in, boot_sem_id,
              n_drop
            )) +
       theme_minimal(base_size = 13) +
@@ -3219,13 +3219,16 @@ For each partition, both the naive bivariate + KDE (C-type, all-free)
 and SEM bivariate + KDE (D-type, all-free) models are fitted. The maps
 below use the same pre/post overlay as the tessellation point-pattern figure.
 
-The SEM-D log-likelihood table below scores every tessellation's fitted
+The log-likelihood table below scores every tessellation's fitted
 parameters on the **same AOI geometry** (OCC polygon = treated, complement =
-control, same KDE field). The two columns change only the process labels:
-the SEM's last proposed labelling versus the AOI-boundary location labels.
-A higher last-labelling likelihood means the sampler's proposed labels
-outscore the geographic AOI assignment under that tessellation's fitted
-model. Pre-treatment events remain control in both columns.
+control, same KDE field). **Fit C LL** uses that tessellation's naive C
+parameters with AOI-boundary labels (C's native complete-data labelling).
+The D columns keep that tessellation's SEM-D parameters and change only
+the process labels: the SEM's last proposed labelling versus the
+AOI-boundary location labels. A higher last-labelling likelihood means
+the sampler's proposed labels outscore the geographic AOI assignment
+under that tessellation's fitted D model. Pre-treatment events remain
+control in every column.
 
 A separate parameter table lists the fitted bivariate ETAS coefficients
 for C and D on each partition (background, productivity, cross-excitation,
@@ -3458,7 +3461,7 @@ primary_info <- list(
   label = primary_partition_id,
   E_params = if (!is.null(fit_C_obj)) fit_C_obj$params else NULL,
   F_params = if (!is.null(fit_D_obj)) fit_D_obj$params else NULL,
-  semF = if (!is.null(fit_D_obj)) fit_D_obj$sem else NULL,
+  semF = sem_fit_obj(fit_D_obj),
   n_tiles = n_cty,
   n_treated = suppressWarnings(as.integer(unlist(cfg$n_treated, use.names = FALSE)))[1],
   n_relabel = NA_integer_
@@ -3532,6 +3535,15 @@ for (pname in names(pr)) {
     } else {
       "NA"
     }
+    rnd <- function(x, digits = 0L) {
+      v <- suppressWarnings(as.numeric(x)[1L])
+      if (!is.finite(v)) NA_real_ else round(v, digits)
+    }
+    pget <- function(par, nm) {
+      if (is.null(par)) return(NA_real_)
+      v <- tryCatch(par[[nm]], error = function(e) NULL)
+      suppressWarnings(as.numeric(v)[1L])
+    }
 
     part_rows[[length(part_rows) + 1]] <- data.frame(
       PartitionID = info$label,
@@ -3540,18 +3552,18 @@ for (pname in names(pr)) {
       Tiles = info$n_tiles,
       Treated = info$n_treated,
       `Relabelled / post` = relabel_txt,
-      `E[N(control everywhere)]` = round(c_mean, 0),
-      `E[N(actual treatment regime)]` = round(t_mean, 0),
-      `E[N(treated everywhere)]` = round(t_all_mean, 0),
-      `Saved = control - actual` = round(saved_diff_mean, 0),
-      `SD(saved)` = round(sim_sd_total, 0),
-      `Spillover` = round(spill_total, 0),
-      mu_0 = round(fit_type$par[["mu_0"]], 4),
-      mu_1 = round(fit_type$par[["mu_1"]], 4),
-      A_0 = round(fit_type$par[["A_00"]], 4),
-      A_1 = round(fit_type$par[["A_11"]], 4),
-      alpha_m_0 = round(fit_type$par[["alpha_m_00"]], 4),
-      alpha_m_1 = round(fit_type$par[["alpha_m_11"]], 4),
+      `E[N(control everywhere)]` = rnd(c_mean, 0),
+      `E[N(actual treatment regime)]` = rnd(t_mean, 0),
+      `E[N(treated everywhere)]` = rnd(t_all_mean, 0),
+      `Saved = control - actual` = rnd(saved_diff_mean, 0),
+      `SD(saved)` = rnd(sim_sd_total, 0),
+      `Spillover` = rnd(spill_total, 0),
+      mu_0 = rnd(pget(fit_type$par, "mu_0"), 4),
+      mu_1 = rnd(pget(fit_type$par, "mu_1"), 4),
+      A_0 = rnd(pget(fit_type$par, "A_00"), 4),
+      A_1 = rnd(pget(fit_type$par, "A_11"), 4),
+      alpha_m_0 = rnd(pget(fit_type$par, "alpha_m_00"), 4),
+      alpha_m_1 = rnd(pget(fit_type$par, "alpha_m_11"), 4),
       check.names = FALSE)
   }
 }
@@ -3693,7 +3705,7 @@ if (length(part_param_rows) > 0L) {
 
 ```{r tbl-partition-sem-aoi-loglik}
 #| label: tbl-partition-sem-aoi-loglik
-#| tbl-cap: "SEM D log-likelihood on the AOI geometry: last proposed labelling vs AOI-boundary labels. Both columns use that tessellation's fitted SEM-D parameters, the AOI control/treated regions, and the same KDE field. Higher is better. Delta = last labelling minus AOI-boundary labels."
+#| tbl-cap: "Fit C and SEM D log-likelihoods on the AOI geometry. Fit C uses that tessellation's naive C parameters with AOI-boundary labels. The D columns use that tessellation's SEM-D parameters with last proposed labelling vs AOI-boundary labels. All columns share the AOI control/treated regions and the same KDE field. Higher is better. Delta = D last labelling minus D AOI-boundary labels."
 support_path <- file.path(SCRIPT_DIR, "oklahoma_report_support.R")
 if (file.exists(support_path) &&
     !exists("oklahoma_report_partition_sem_aoi_loglik", mode = "function")) {
@@ -3705,6 +3717,7 @@ if (!is.null(results$pp_data) && !is.null(results$pp_data$pp_pre_holdout)) {
 }
 primary_ll_info <- list(
   label = primary_partition_id,
+  E_params = if (!is.null(fit_C_obj)) fit_C_obj$params else NULL,
   F_params = if (!is.null(fit_D_obj)) fit_D_obj$params else NULL,
   semF = if (!is.null(fit_D_obj)) {
     if (!is.null(fit_D_obj$fit) && !is.null(fit_D_obj$fit$adaptive)) {
@@ -3743,25 +3756,27 @@ sem_aoi_ll_df <- if (exists("oklahoma_report_partition_sem_aoi_loglik", mode = "
 }
 if (!is.null(sem_aoi_ll_df) && nrow(sem_aoi_ll_df) > 0L) {
   ll_print <- sem_aoi_ll_df
+  ll_print$Fit_C_LL <- round(ll_print$Fit_C_LL, 2)
   ll_print$Last_labelling_LL <- round(ll_print$Last_labelling_LL, 2)
   ll_print$AOI_boundary_LL <- round(ll_print$AOI_boundary_LL, 2)
   ll_print$Delta_last_minus_AOI <- round(ll_print$Delta_last_minus_AOI, 2)
   names(ll_print) <- c(
     "PartitionID",
     "Partition",
-    "Last labelling LL",
-    "AOI-boundary LL",
-    "Delta (last - AOI)",
+    "Fit C LL",
+    "D last labelling LL",
+    "D AOI-boundary LL",
+    "Delta (D last - D AOI)",
     "Post labels last != AOI",
     "N post"
   )
   ll_print <- subset(ll_print, select = -PartitionID)
   rownames(ll_print) <- NULL
-  kable(ll_print, align = "lrrrrr", row.names = FALSE) |>
+  kable(ll_print, align = "lrrrrrr", row.names = FALSE) |>
     kable_styling(bootstrap_options = c("striped", "hover", "bordered"),
                   full_width = FALSE, font_size = 10)
 } else {
-  cat("SEM D AOI-vs-last-labelling log-likelihoods could not be rebuilt from this results file (need KDE holdout, AOI geometry, and Fit D parameters).\n")
+  cat("C/D AOI-vs-last-labelling log-likelihoods could not be rebuilt from this results file (need KDE holdout, AOI geometry, and Fit C or Fit D parameters).\n")
 }
 ```
 
@@ -3941,10 +3956,12 @@ cat(paste(effect_lines, collapse = "\n"), "\n")
 
 **Partition sensitivity.** The alternative partition schemes (grids at
 different scales and the AOI-as-single-region partition) show how the
-treatment effect estimate varies with spatial resolution. The SEM-D
+treatment effect estimate varies with spatial resolution. The C/D
 log-likelihood table scores each tessellation's fitted parameters on the
-same AOI geometry, so a last-labelling gain over the AOI-boundary labels
-is a labelling comparison rather than a change of spatial compensator.
+same AOI geometry. Fit C is the naive complete-data likelihood on
+AOI-boundary labels; a D last-labelling gain over D's AOI-boundary
+labels is a labelling comparison rather than a change of spatial
+compensator.
 
 # Configuration
 

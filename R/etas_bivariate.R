@@ -898,6 +898,52 @@ loglik_etas_bivariate_batch <- function(params,
 }
 
 
+#' Sequential MAP process labels under bivariate ETAS
+#'
+#' Time-ordered assignment: non-assignable events (typically pre-treatment)
+#' keep \code{process_id_init}; each assignable event is labelled
+#' \code{argmax_k \lambda_k} given already-assigned parents. Matches the
+#' intensity used by \code{loglik_etas_bivariate}.
+#'
+#' @param params Named bivariate ETAS parameter vector.
+#' @param t,x,y,mag Event geometry (\code{t} on the same scale as
+#'   \code{t_trunc}; not shifted unless the caller shifted it).
+#' @param assignable Integer 0/1; 1 means this row may be relabelled.
+#' @param process_id_init Integer 0/1 labels used for non-assignable rows.
+#' @param W0,W1 Background weight vectors.
+#' @param areaS_0,areaS_1 Active areas.
+#' @param m0 Reference magnitude.
+#' @param t_trunc Temporal truncation; \code{NULL} disables.
+#' @return Integer vector of process ids (0 = control, 1 = treated).
+#' @keywords internal
+sequential_map_etas_bivariate <- function(params, t, x, y, mag,
+                                          assignable, process_id_init,
+                                          W0, W1, areaS_0, areaS_1,
+                                          m0, t_trunc = NULL) {
+  pv <- if (is.list(params) && !is.null(names(params))) unlist(params) else {
+    v <- as.numeric(params)
+    if (is.null(names(v))) names(v) <- .etas_bivariate_par_names
+    v
+  }
+  tt <- suppressWarnings(as.numeric(t_trunc))
+  if (length(tt) != 1L || !is.finite(tt) || tt <= 0) tt <- -1.0
+  etas_bivariate_sequential_map_cpp(
+    t = as.numeric(t), x = as.numeric(x), y = as.numeric(y), mag = as.numeric(mag),
+    assignable = as.integer(assignable),
+    process_id_init = as.integer(process_id_init),
+    W_val_0 = as.numeric(W0), W_val_1 = as.numeric(W1),
+    mu_0 = pv[["mu_0"]], mu_1 = pv[["mu_1"]],
+    A_00 = pv[["A_00"]], alpha_m_00 = pv[["alpha_m_00"]],
+    A_11 = pv[["A_11"]], alpha_m_11 = pv[["alpha_m_11"]],
+    A_01 = pv[["A_01"]], alpha_m_01 = pv[["alpha_m_01"]],
+    A_10 = pv[["A_10"]], alpha_m_10 = pv[["alpha_m_10"]],
+    cc = pv[["c"]], p = pv[["p"]], D = pv[["D"]],
+    gamma_par = if (is.finite(pv[["gamma"]])) pv[["gamma"]] else 0,
+    q = pv[["q"]],
+    m0 = m0, areaS_0 = areaS_0, areaS_1 = areaS_1, t_trunc = tt
+  )
+}
+
 #' Fit bivariate ETAS via MLE
 #'
 #' @param params_init Initial parameter values (named list or vector of 15).

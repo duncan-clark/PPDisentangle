@@ -89,6 +89,43 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// etas_bivariate_sequential_map_cpp
+IntegerVector etas_bivariate_sequential_map_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector mag, IntegerVector assignable, IntegerVector process_id_init, NumericVector W_val_0, NumericVector W_val_1, double mu_0, double mu_1, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double areaS_0, double areaS_1, double t_trunc);
+RcppExport SEXP _PPDisentangle_etas_bivariate_sequential_map_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP magSEXP, SEXP assignableSEXP, SEXP process_id_initSEXP, SEXP W_val_0SEXP, SEXP W_val_1SEXP, SEXP mu_0SEXP, SEXP mu_1SEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP areaS_0SEXP, SEXP areaS_1SEXP, SEXP t_truncSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mag(magSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type assignable(assignableSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type process_id_init(process_id_initSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val_0(W_val_0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type W_val_1(W_val_1SEXP);
+    Rcpp::traits::input_parameter< double >::type mu_0(mu_0SEXP);
+    Rcpp::traits::input_parameter< double >::type mu_1(mu_1SEXP);
+    Rcpp::traits::input_parameter< double >::type A_00(A_00SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_00(alpha_m_00SEXP);
+    Rcpp::traits::input_parameter< double >::type A_11(A_11SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_11(alpha_m_11SEXP);
+    Rcpp::traits::input_parameter< double >::type A_01(A_01SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_01(alpha_m_01SEXP);
+    Rcpp::traits::input_parameter< double >::type A_10(A_10SEXP);
+    Rcpp::traits::input_parameter< double >::type alpha_m_10(alpha_m_10SEXP);
+    Rcpp::traits::input_parameter< double >::type cc(ccSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type D(DSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma_par(gamma_parSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< double >::type areaS_0(areaS_0SEXP);
+    Rcpp::traits::input_parameter< double >::type areaS_1(areaS_1SEXP);
+    Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
+    rcpp_result_gen = Rcpp::wrap(etas_bivariate_sequential_map_cpp(t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sim_etas_bivariate_children_cpp
 List sim_etas_bivariate_children_cpp(NumericVector parent_x, NumericVector parent_y, NumericVector parent_t, NumericVector parent_mag, IntegerVector parent_process, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double beta_gr, double t_min, double t_max, double x_min, double x_max, double y_min, double y_max, double t_trunc, NumericVector mag_pool, int max_generations);
 RcppExport SEXP _PPDisentangle_sim_etas_bivariate_children_cpp(SEXP parent_xSEXP, SEXP parent_ySEXP, SEXP parent_tSEXP, SEXP parent_magSEXP, SEXP parent_processSEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP beta_grSEXP, SEXP t_minSEXP, SEXP t_maxSEXP, SEXP x_minSEXP, SEXP x_maxSEXP, SEXP y_minSEXP, SEXP y_maxSEXP, SEXP t_truncSEXP, SEXP mag_poolSEXP, SEXP max_generationsSEXP) {
@@ -356,6 +393,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_PPDisentangle_etas_bivariate_loglik_batch_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_batch_cpp, 30},
     {"_PPDisentangle_etas_bivariate_loglik_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_cpp, 29},
+    {"_PPDisentangle_etas_bivariate_sequential_map_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_sequential_map_cpp, 27},
     {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 29},
     {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
     {"_PPDisentangle_etas_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_filtration_cpp, 21},

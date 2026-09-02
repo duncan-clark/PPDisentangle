@@ -448,6 +448,13 @@ oklahoma_report_eval_biv_kde_loglik <- function(params,
   as.numeric(ll)
 }
 
+oklahoma_report_fit_c_params <- function(info) {
+  if (!is.null(info$E_params)) return(info$E_params)
+  if (!is.null(info$C_params)) return(info$C_params)
+  if (!is.null(info$fitE) && !is.null(info$fitE$par)) return(info$fitE$par)
+  NULL
+}
+
 oklahoma_report_fit_d_params <- function(info) {
   if (!is.null(info$F_params)) return(info$F_params)
   if (!is.null(info$params)) return(info$params)
@@ -474,6 +481,7 @@ oklahoma_report_partition_sem_aoi_loglik <- function(partition_results,
   empty <- data.frame(
     PartitionID = character(),
     Partition = character(),
+    Fit_C_LL = numeric(),
     Last_labelling_LL = numeric(),
     AOI_boundary_LL = numeric(),
     Delta_last_minus_AOI = numeric(),
@@ -504,6 +512,9 @@ oklahoma_report_partition_sem_aoi_loglik <- function(partition_results,
   if (!is.null(primary_info) && !primary_id %in% names(pr)) {
     pr <- c(setNames(list(primary_info), primary_id), pr)
   } else if (!is.null(primary_info) && primary_id %in% names(pr)) {
+    if (is.null(pr[[primary_id]]$E_params) && !is.null(primary_info$E_params)) {
+      pr[[primary_id]]$E_params <- primary_info$E_params
+    }
     if (is.null(pr[[primary_id]]$F_params) && !is.null(primary_info$F_params)) {
       pr[[primary_id]]$F_params <- primary_info$F_params
     }
@@ -519,8 +530,9 @@ oklahoma_report_partition_sem_aoi_loglik <- function(partition_results,
   for (pname in names(pr)) {
     info <- pr[[pname]]
     if (is.null(info)) next
-    params <- oklahoma_report_fit_d_params(info)
-    if (is.null(params)) next
+    c_params <- oklahoma_report_fit_c_params(info)
+    d_params <- oklahoma_report_fit_d_params(info)
+    if (is.null(c_params) && is.null(d_params)) next
     pid <- as.character(info$label %||% pname)
     sem_for_row <- if (identical(pid, as.character(primary_id))) {
       info$semF %||% (if (!is.null(primary_info)) primary_info$semF else NULL)
@@ -529,11 +541,14 @@ oklahoma_report_partition_sem_aoi_loglik <- function(partition_results,
     }
     last_lab <- oklahoma_report_sem_last_labelling(info, sem_obj = sem_for_row)
     last_realiz <- oklahoma_report_apply_last_labels(catalog, last_lab)
+    ll_c <- oklahoma_report_eval_biv_kde_loglik(
+      c_params, aoi_realiz, windowT, win_km, aoi_ss, mass_ratio, cfg
+    )
     ll_last <- oklahoma_report_eval_biv_kde_loglik(
-      params, last_realiz, windowT, win_km, aoi_ss, mass_ratio, cfg
+      d_params, last_realiz, windowT, win_km, aoi_ss, mass_ratio, cfg
     )
     ll_aoi <- oklahoma_report_eval_biv_kde_loglik(
-      params, aoi_realiz, windowT, win_km, aoi_ss, mass_ratio, cfg
+      d_params, aoi_realiz, windowT, win_km, aoi_ss, mass_ratio, cfg
     )
     post_last <- last_realiz$inferred_process[last_realiz$t >= 0]
     post_aoi <- aoi_realiz$inferred_process[aoi_realiz$t >= 0]
@@ -546,6 +561,7 @@ oklahoma_report_partition_sem_aoi_loglik <- function(partition_results,
     rows[[length(rows) + 1L]] <- data.frame(
       PartitionID = pid,
       Partition = format_label(pid),
+      Fit_C_LL = ll_c,
       Last_labelling_LL = ll_last,
       AOI_boundary_LL = ll_aoi,
       Delta_last_minus_AOI = ll_last - ll_aoi,

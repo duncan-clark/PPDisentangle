@@ -238,6 +238,8 @@ adaptive_SEM <- function(pp_data,
     temporal_weight = 0, temporal_scale_days = NULL,
     require_monotone_complete_ll = FALSE,
     monotone_estep_slack = 0,
+    include_sequential_map_proposal = FALSE,
+    allow_improving_teleport = FALSE,
     fixed_params = NULL, verbose = FALSE, state_spaces = NULL,
     outer_maxit = 500, outer_maxit_biv = NULL, param_refit_cadence = 1,
     biv_n_threads = 1L
@@ -281,6 +283,8 @@ adaptive_SEM <- function(pp_data,
           MCMC_style = FALSE,
           require_monotone_complete_ll = adaptive_control$require_monotone_complete_ll,
           monotone_estep_slack = adaptive_control$monotone_estep_slack,
+          include_sequential_map_proposal = adaptive_control$include_sequential_map_proposal,
+          allow_improving_teleport = adaptive_control$allow_improving_teleport,
           proposal_method = adaptive_control$proposal_method,
           single_flip_from_iter = adaptive_control$single_flip_from_iter,
           temporal_weight = adaptive_control$temporal_weight,
@@ -310,6 +314,7 @@ adaptive_SEM <- function(pp_data,
       etas_bivariate_params = result$etas_bivariate_params,
       etas_bivariate_convergence = result$etas_bivariate_convergence,
       etas_bivariate_value = result$etas_bivariate_value,
+      n_teleports = result$n_teleports,
       time_taken = t_adapt_end - t_adapt_start
     ))
   }
@@ -1475,6 +1480,7 @@ adaptive_SEM <- function(pp_data,
     metrics = adapt$metrics,
     all_metrics = adapt$all_metrics,
     class_results = adapt$class_results,
+    n_teleports = adapt$n_teleports,
     adaptive_labelling = if (!is.null(baseline_adaptive_labelling)) baseline_adaptive_labelling else adapt$adaptive_labelling
   )
   result <- list(

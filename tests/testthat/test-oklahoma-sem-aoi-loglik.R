@@ -115,10 +115,13 @@ test_that("SEM last-labelling vs AOI-boundary loglik uses a common AOI geometry"
   )
   expect_equal(ll_same, ll_aoi, tolerance = 1e-8)
 
+  params_c <- params
+  params_c[["mu_0"]] <- params[["mu_0"]] + 0.15
   tbl <- oklahoma_report_partition_sem_aoi_loglik(
     partition_results = list(
       grid_1.0R = list(
         label = "grid_1.0R",
+        E_params = params_c,
         F_params = params,
         pp_post_sem = last_lab
       ),
@@ -144,10 +147,13 @@ test_that("SEM last-labelling vs AOI-boundary loglik uses a common AOI geometry"
   )
   expect_equal(nrow(tbl), 2L)
   expect_equal(as.character(tbl$PartitionID[1]), "grid_1.0R")
+  expect_true(is.finite(tbl$Fit_C_LL[1]))
   expect_true(is.finite(tbl$Last_labelling_LL[1]))
   expect_true(is.finite(tbl$AOI_boundary_LL[1]))
+  expect_false(isTRUE(all.equal(tbl$Fit_C_LL[1], tbl$AOI_boundary_LL[1])))
   expect_gt(abs(tbl$Delta_last_minus_AOI[1]), 1e-8)
   expect_equal(tbl$Post_last_ne_AOI[1], 2L)
   expect_equal(tbl$Post_last_ne_AOI[2], 0L)
   expect_equal(tbl$Delta_last_minus_AOI[2], 0, tolerance = 1e-8)
+  expect_true(is.na(tbl$Fit_C_LL[2]))
 })

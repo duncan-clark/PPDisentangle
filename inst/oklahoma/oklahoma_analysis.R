@@ -231,6 +231,12 @@ if (!is.finite(SEM_MAX_RELABEL_STEP_FRAC) || is.na(SEM_MAX_RELABEL_STEP_FRAC) ||
   SEM_MAX_RELABEL_STEP_FRAC <- 0.05
 }
 SEM_MAX_RELABEL_STEP_FRAC <- min(SEM_MAX_RELABEL_STEP_FRAC, 1.0)
+SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL <- tolower(Sys.getenv(
+  "OK_SEM_SEQUENTIAL_MAP_PROPOSAL", "true"
+)) %in% c("1", "true", "yes", "y")
+SEM_ALLOW_IMPROVING_TELEPORT <- tolower(Sys.getenv(
+  "OK_SEM_ALLOW_IMPROVING_TELEPORT", "true"
+)) %in% c("1", "true", "yes", "y")
 SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC", "0.05")))
 if (!is.finite(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || is.na(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <= 0) {
   SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- 0.05
@@ -877,6 +883,9 @@ cat(sprintf("SEM selection: method=%s | temperature=%.3f | monotone=%s | start_f
               "off"
             },
             SEM_BIV_N_THREADS))
+cat(sprintf("SEM sequential MAP proposal=%s | improving teleport=%s | max_relabel_step_frac=%.3f\n",
+            SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL, SEM_ALLOW_IMPROVING_TELEPORT,
+            SEM_MAX_RELABEL_STEP_FRAC))
 cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
             SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
 cat(sprintf("SEM relabel controls: max_step_frac=%.3f | force_param_update_flip_frac=%.3f\n",
@@ -1789,9 +1798,21 @@ valid_biv_params <- function(x) {
   )
 }
 valid_biv_fit <- function(fit) {
-  PPDisentangle:::.etas_biv_fit_ok(
+  ok <- PPDisentangle:::.etas_biv_fit_ok(
     fit, BETA_GR, ETAS_BRANCHING_MAX, biv_names
   )
+  if (!isTRUE(ok) && !is.null(fit)) {
+    conv <- if (is.null(fit$convergence)) NA_integer_ else as.integer(fit$convergence)[1L]
+    val <- suppressWarnings(as.numeric(fit$value)[1L])
+    rho <- suppressWarnings(as.numeric(fit$branching_radius)[1L])
+    cat(sprintf(
+      "  valid_biv_fit rejected: conv=%s value=%s rho=%s\n",
+      as.character(conv),
+      if (is.finite(val)) format(val, digits = 6) else "NA",
+      if (is.finite(rho)) format(rho, digits = 4) else "NA"
+    ))
+  }
+  ok
 }
 valid_biv_sem <- function(sem) {
   PPDisentangle:::.etas_biv_sem_ok(
@@ -1933,6 +1954,8 @@ run_sem_fit <- function(pp_data_in,
         force_param_update_flip_frac = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
         require_monotone_complete_ll = SEM_MONOTONE_COMPLETE_LL,
+        include_sequential_map_proposal = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
+        allow_improving_teleport = SEM_ALLOW_IMPROVING_TELEPORT,
         proposal_method = "simulation",
         single_flip_from_iter = SEM_SINGLE_FLIP_FROM_ITER,
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV,
@@ -3599,7 +3622,7 @@ if (length(KDE_BW_SENS_KM) > 0L) {
   )
 } else {
   kde_bandwidth_specs <- list()
-  cat("  Sensitivity disabled: skipping KDE bandwidth and partition sensitivity fits.\n")
+  cat("  KDE bandwidth sensitivity disabled: skipping bandwidth refits.\n")
 }
 
 run_kde_bandwidth_fit <- function(spec) {
@@ -3779,11 +3802,9 @@ candidate_partitions <- c(
 )
 all_partitions <- candidate_partitions[intersect(sens_ids, names(candidate_partitions))]
 
-if (!RUN_SENSITIVITY || !RUN_PARTITION_SENSITIVITY) {
+if (!RUN_PARTITION_SENSITIVITY) {
   all_partitions <- list()
-  if (RUN_SENSITIVITY && !RUN_PARTITION_SENSITIVITY) {
-    cat("  Partition sensitivity disabled: skipping county/grid/AOI refits.\n")
-  }
+  cat("  Partition sensitivity disabled: skipping county/grid/AOI refits.\n")
 }
 cat(sprintf("  Total partition schemes scheduled: %d\n", length(all_partitions)))
 
@@ -4723,6 +4744,8 @@ results_pre_sensitivity <- list(
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
     SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
     SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
+    SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
@@ -5437,6 +5460,8 @@ results_pre_bootstrap <- list(
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
     SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
     SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
+    SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
@@ -6800,6 +6825,8 @@ results <- list(
     SEM_OPTIM_METHOD = SEM_OPTIM_METHOD,
     SEM_MONOTONE_COMPLETE_LL = SEM_MONOTONE_COMPLETE_LL,
     SEM_START_FROM_C = SEM_START_FROM_C,
+    SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
+    SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
