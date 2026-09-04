@@ -93,7 +93,9 @@ sacct_line="$(ssh_nesi "sacct -n -X -j ${JOB_ID} -o State,ExitCode --parsable2 2
 echo "sacct: ${sacct_line:-unavailable}"
 state_main="${sacct_line%%|*}"
 if [ -n "$state_main" ] && ! echo "$state_main" | grep -Eqi 'COMPLETED|COMPLETING'; then
-  echo "WARNING: job did not report COMPLETED (state=${state_main}). Continuing fetch anyway."
+  echo "ERROR: job ${JOB_ID} did not complete (state=${state_main}). Not promoting for_paper.rds."
+  echo "OKLAHOMA_PUBLISH_FAILED {\"job_id\":\"${JOB_ID}\",\"reason\":\"job_${state_main}\"}"
+  exit 2
 fi
 
 # --- fetch ---

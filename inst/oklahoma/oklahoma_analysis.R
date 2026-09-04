@@ -2913,6 +2913,14 @@ ensure_ate_psock_pool <- function() {
       }
       NULL
     })
+    ate_flag_nms <- intersect(
+      c("OK_ATE_USE_CRN", "OK_ATE_CRN_PAIR", "OK_ATE_CONDITIONAL_ON_PRE",
+        "OK_ATE_BIVARIATE", "OK_ATE_CONTRAST", "ATE_N_SIMS", "SEM_T_TRUNC_DAYS"),
+      ls(envir = .GlobalEnv, all.names = TRUE)
+    )
+    if (length(ate_flag_nms) > 0L) {
+      parallel::clusterExport(ate_cl_reuse, varlist = ate_flag_nms, envir = .GlobalEnv)
+    }
   }
   invisible(NULL)
 }
@@ -4517,7 +4525,11 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
   t_fitvar <- proc.time()[["elapsed"]]
   cat(sprintf("\n--- Step 6a: Fit variability (C/D all_free repeats; reps=%d, cores=%d) ---\n",
               FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
-  ensure_ate_psock_pool()
+  # Same 128-connection cap as bootstrap (job 8804584: 64 ATE sockets + 64
+  # fitvar workers => socketAccept "all connections are in use"). Fitvar ATE
+  # runs sequentially inside each outer worker, so the reusable pool is unused.
+  stop_ate_psock_pool()
+  cat("  Closed reusable ATE PSOCK pool before fit-variability outer workers.\n")
 
   fitvar_ate_stats <- function(ate_obj, n_tiles = partition$n) {
     out <- list(
