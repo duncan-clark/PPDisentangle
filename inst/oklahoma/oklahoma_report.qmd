@@ -3254,109 +3254,158 @@ if (!is.null(boot_naive_df) && !is.null(boot_sem_df) &&
 #| fig-cap: "Bias-corrected bootstrap replicate distribution for the bivariate observed-vs-control-everywhere contrast (C/D), using all finite ATEs retained after failed or explosive refits are excluded. Same display conventions as the all-or-nothing bootstrap figure."
 #| fig-height: 4
 #| eval: !expr '!using_pre_bootstrap && !is.null(boot_obj)'
-# Companion scenario RDS written by launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
-biv_obs_candidates <- unique(c(
-  file.path(OUT_DIR, "for_paper_biv_obs.rds"),
-  file.path(OUT_DIR, "ate_scenarios", "biv_obs", "for_paper.rds"),
-  unlist(lapply(candidate_out_dirs, function(d) {
-    c(
-      file.path(d, "for_paper_biv_obs.rds"),
-      file.path(d, "ate_scenarios", "biv_obs", "for_paper.rds")
-    )
-  }), use.names = FALSE)
-))
-biv_obs_file <- biv_obs_candidates[file.exists(biv_obs_candidates)][1]
-if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
-  res_obs <- normalize_oklahoma_fit_letters(readRDS(biv_obs_file))
-  boot_obs <- res_obs$bootstrap_ate
-  fit_C_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$C else NULL
-  fit_D_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$D else NULL
-  boot_C_blk <- if (!is.null(boot_obs$fit_C)) boot_obs$fit_C else boot_obs$fit_E
-  boot_D_blk <- if (!is.null(boot_obs$fit_D)) boot_obs$fit_D else boot_obs$fit_F
-  boot_C_obs <- if (!is.null(boot_C_blk)) boot_C_blk$replicate_summary else NULL
-  boot_D_obs <- if (!is.null(boot_D_blk)) boot_D_blk$replicate_summary else NULL
-  if (!is.null(boot_C_obs) && "is_stable" %in% names(boot_C_obs)) {
-    boot_C_obs <- boot_C_obs[
-      !is.na(boot_C_obs$is_stable) & boot_C_obs$is_stable, , drop = FALSE
-    ]
-  }
-  if (!is.null(boot_D_obs) && "is_stable" %in% names(boot_D_obs)) {
-    boot_D_obs <- boot_D_obs[
-      !is.na(boot_D_obs$is_stable) & boot_D_obs$is_stable, , drop = FALSE
-    ]
-  }
-  if (!is.null(boot_C_obs) && !is.null(boot_D_obs) &&
-      nrow(boot_C_obs) > 0 && nrow(boot_D_obs) > 0 &&
-      "ate_total_mean" %in% names(boot_C_obs) && "ate_total_mean" %in% names(boot_D_obs)) {
-    obs_ate_mean_from_fit <- function(fit_obj) {
-      if (is.null(fit_obj) || is.null(fit_obj$ate)) return(NA_real_)
-      vals <- get_total_effect_sim(fit_obj$ate, n_tiles = n_cty)
-      vals <- suppressWarnings(as.numeric(vals))
-      vals <- vals[is.finite(vals)]
-      if (length(vals) < 1L) return(NA_real_)
-      mean(vals, na.rm = TRUE)
+fitvar_helper <- file.path(SCRIPT_DIR, "oklahoma_fitvar_report.R")
+if (file.exists(fitvar_helper) && !exists("oklahoma_boot_vals_for_contrast", mode = "function")) {
+  source(fitvar_helper, local = FALSE)
+}
+if (!exists("oklahoma_boot_vals_for_contrast", mode = "function")) {
+  oklahoma_boot_vals_for_contrast <- function(df, contrast = "observed") {
+    if (is.null(df) || !is.data.frame(df)) return(numeric(0))
+    col <- if (identical(contrast, "observed") &&
+               "ate_total_mean_observed" %in% names(df)) {
+      "ate_total_mean_observed"
+    } else {
+      NA_character_
     }
-    recenter_boot_obs <- function(boot_vals, target_mean) {
-      bv <- suppressWarnings(as.numeric(boot_vals))
-      if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
-      bmean <- mean(bv, na.rm = TRUE)
-      if (!is.finite(bmean) || is.na(bmean)) return(bv)
-      bv + (target_mean - bmean)
+    if (is.na(col)) return(numeric(0))
+    vals <- suppressWarnings(as.numeric(df[[col]]))
+    vals[is.finite(vals)]
+  }
+}
+obs_ate_mean_from_fit <- function(fit_obj) {
+  ate_use <- pick_ate_contrast(if (!is.null(fit_obj)) fit_obj$ate else NULL, "observed")
+  if (is.null(ate_use)) return(NA_real_)
+  vals <- get_total_effect_sim(ate_use, n_tiles = n_cty)
+  vals <- suppressWarnings(as.numeric(vals))
+  vals <- vals[is.finite(vals)]
+  if (length(vals) < 1L) return(NA_real_)
+  mean(vals, na.rm = TRUE)
+}
+recenter_boot_obs <- function(boot_vals, target_mean) {
+  bv <- suppressWarnings(as.numeric(boot_vals))
+  if (!is.finite(target_mean) || is.na(target_mean)) return(bv)
+  bmean <- mean(bv, na.rm = TRUE)
+  if (!is.finite(bmean) || is.na(bmean)) return(bv)
+  bv + (target_mean - bmean)
+}
+plot_obs_boot <- function(vals_C, vals_D, mean_C, mean_D, source_lab, ate_days_obs) {
+  lab_C <- "C: Naive Biv+KDE (all-free)"
+  lab_D <- "D: SEM Biv+KDE (all-free)"
+  filt_C_obs <- retain_boot_vals(vals_C)
+  filt_D_obs <- retain_boot_vals(vals_D)
+  boot_cd_obs <- rbind(
+    data.frame(Model = lab_C, TotalATE = recenter_boot_obs(filt_C_obs$vals, mean_C)),
+    data.frame(Model = lab_D, TotalATE = recenter_boot_obs(filt_D_obs$vals, mean_D))
+  )
+  boot_cd_obs <- boot_cd_obs[is.finite(boot_cd_obs$TotalATE), , drop = FALSE]
+  if (nrow(boot_cd_obs) < 1L) {
+    plot.new()
+    text(0.5, 0.5, "Bivariate observed bootstrap replicate means are present but non-finite.")
+    return(invisible(NULL))
+  }
+  boot_means_obs <- aggregate(TotalATE ~ Model, boot_cd_obs, mean)
+  n_drop_obs <- filt_C_obs$n_out + filt_D_obs$n_out
+  print(
+    ggplot(boot_cd_obs, aes(x = TotalATE, fill = Model)) +
+      geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_vline(data = boot_means_obs, aes(xintercept = TotalATE, colour = Model),
+                 linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
+      scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(lab_C, lab_D))) +
+      scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(lab_C, lab_D))) +
+      coord_cartesian(xlim = c(-1000, 1000)) +
+      labs(
+        x = bquote(hat(Delta)[obs] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days_obs) ~ "days)"),
+        y = "Bootstrap replicate count",
+        title = "Bias-corrected bootstrap observed-vs-control distribution (C/D, bivariate)",
+        subtitle = sprintf(
+          "Contrast: bivariate/observed; centers C=%.1f, D=%.1f; retained stable finite ATEs %d/%d (C) and %d/%d (D); omitted %d non-finite; source %s",
+          mean_C, mean_D,
+          length(filt_C_obs$vals), filt_C_obs$n_in,
+          length(filt_D_obs$vals), filt_D_obs$n_in,
+          n_drop_obs,
+          source_lab
+        )
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "top",
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10)
+      )
+  )
+}
+
+injob_C <- if (!is.null(boot_naive_df)) {
+  oklahoma_boot_vals_for_contrast(boot_naive_df, "observed")
+} else {
+  numeric(0)
+}
+injob_D <- if (!is.null(boot_sem_df)) {
+  oklahoma_boot_vals_for_contrast(boot_sem_df, "observed")
+} else {
+  numeric(0)
+}
+if (length(injob_C) > 0L && length(injob_D) > 0L) {
+  plot_obs_boot(
+    injob_C, injob_D,
+    obs_ate_mean_from_fit(fit_C_obj),
+    obs_ate_mean_from_fit(fit_D_obj),
+    "in-job bootstrap",
+    ate_days
+  )
+} else {
+  # Companion scenario RDS from launch_ate_scenarios_nesi.sh / bootstrap-only jobs.
+  biv_obs_candidates <- unique(c(
+    file.path(OUT_DIR, "for_paper_biv_obs.rds"),
+    file.path(OUT_DIR, "ate_scenarios", "biv_obs", "for_paper.rds"),
+    unlist(lapply(candidate_out_dirs, function(d) {
+      c(
+        file.path(d, "for_paper_biv_obs.rds"),
+        file.path(d, "ate_scenarios", "biv_obs", "for_paper.rds")
+      )
+    }), use.names = FALSE)
+  ))
+  biv_obs_file <- biv_obs_candidates[file.exists(biv_obs_candidates)][1]
+  if (!using_pre_bootstrap && !is.na(biv_obs_file) && nzchar(biv_obs_file)) {
+    res_obs <- normalize_oklahoma_fit_letters(readRDS(biv_obs_file))
+    boot_obs <- res_obs$bootstrap_ate
+    fit_C_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$C else NULL
+    fit_D_obs <- if (!is.null(res_obs$fits_named)) res_obs$fits_named$D else NULL
+    boot_C_blk <- if (!is.null(boot_obs$fit_C)) boot_obs$fit_C else boot_obs$fit_E
+    boot_D_blk <- if (!is.null(boot_obs$fit_D)) boot_obs$fit_D else boot_obs$fit_F
+    boot_C_obs <- if (!is.null(boot_C_blk)) boot_C_blk$replicate_summary else NULL
+    boot_D_obs <- if (!is.null(boot_D_blk)) boot_D_blk$replicate_summary else NULL
+    if (!is.null(boot_C_obs) && "is_stable" %in% names(boot_C_obs)) {
+      boot_C_obs <- boot_C_obs[
+        !is.na(boot_C_obs$is_stable) & boot_C_obs$is_stable, , drop = FALSE
+      ]
     }
-    lab_C <- "C: Naive Biv+KDE (all-free)"
-    lab_D <- "D: SEM Biv+KDE (all-free)"
-    mean_C_obs <- obs_ate_mean_from_fit(fit_C_obs)
-    mean_D_obs <- obs_ate_mean_from_fit(fit_D_obs)
-    filt_C_obs <- retain_boot_vals(boot_C_obs$ate_total_mean)
-    filt_D_obs <- retain_boot_vals(boot_D_obs$ate_total_mean)
-    boot_cd_obs <- rbind(
-      data.frame(Model = lab_C, TotalATE = recenter_boot_obs(filt_C_obs$vals, mean_C_obs)),
-      data.frame(Model = lab_D, TotalATE = recenter_boot_obs(filt_D_obs$vals, mean_D_obs))
-    )
-    boot_cd_obs <- boot_cd_obs[is.finite(boot_cd_obs$TotalATE), , drop = FALSE]
-    if (nrow(boot_cd_obs) > 0) {
-      boot_means_obs <- aggregate(TotalATE ~ Model, boot_cd_obs, mean)
-      n_drop_obs <- filt_C_obs$n_out + filt_D_obs$n_out
+    if (!is.null(boot_D_obs) && "is_stable" %in% names(boot_D_obs)) {
+      boot_D_obs <- boot_D_obs[
+        !is.na(boot_D_obs$is_stable) & boot_D_obs$is_stable, , drop = FALSE
+      ]
+    }
+    if (!is.null(boot_C_obs) && !is.null(boot_D_obs) &&
+        nrow(boot_C_obs) > 0 && nrow(boot_D_obs) > 0 &&
+        "ate_total_mean" %in% names(boot_C_obs) && "ate_total_mean" %in% names(boot_D_obs)) {
       ate_days_obs <- suppressWarnings(as.numeric(res_obs$config$ATE_WINDOW_DAYS))
       if (!is.finite(ate_days_obs)) ate_days_obs <- ate_days
-      ggplot(boot_cd_obs, aes(x = TotalATE, fill = Model)) +
-        geom_histogram(bins = 30, alpha = 0.55, position = "identity") +
-        geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
-        geom_vline(data = boot_means_obs, aes(xintercept = TotalATE, colour = Model),
-                   linetype = "solid", linewidth = 0.9, show.legend = FALSE) +
-        scale_fill_manual(values = setNames(c("#fdb462", "#80b1d3"), c(lab_C, lab_D))) +
-        scale_colour_manual(values = setNames(c("#e6550d", "#3182bd"), c(lab_C, lab_D))) +
-        coord_cartesian(xlim = c(-1000, 1000)) +
-        labs(
-          x = bquote(hat(Delta)[obs] ~ "(bias-corrected bootstrap replicate mean total saved /" ~ .(ate_days_obs) ~ "days)"),
-          y = "Bootstrap replicate count",
-          title = "Bias-corrected bootstrap observed-vs-control distribution (C/D, bivariate)",
-          subtitle = sprintf(
-            "Contrast: bivariate/observed; centers C=%.1f, D=%.1f; retained stable finite ATEs %d/%d (C) and %d/%d (D); omitted %d non-finite; source %s",
-            mean_C_obs, mean_D_obs,
-            length(filt_C_obs$vals), filt_C_obs$n_in,
-            length(filt_D_obs$vals), filt_D_obs$n_in,
-            n_drop_obs,
-            basename(biv_obs_file)
-          )
-        ) +
-        theme_minimal(base_size = 13) +
-        theme(
-          legend.position = "top",
-          plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5, size = 10)
-        )
+      plot_obs_boot(
+        boot_C_obs$ate_total_mean, boot_D_obs$ate_total_mean,
+        obs_ate_mean_from_fit(fit_C_obs),
+        obs_ate_mean_from_fit(fit_D_obs),
+        basename(biv_obs_file),
+        ate_days_obs
+      )
     } else {
       plot.new()
-      text(0.5, 0.5, "Bivariate observed bootstrap replicate means are present but non-finite.")
+      text(0.5, 0.5, sprintf("Bivariate observed bootstrap C/D summaries missing in %s.", basename(biv_obs_file)))
     }
   } else {
     plot.new()
-    text(0.5, 0.5, sprintf("Bivariate observed bootstrap C/D summaries missing in %s.", basename(biv_obs_file)))
+    text(0.5, 0.5, "Observed bootstrap columns are not in this job and no for_paper_biv_obs.rds companion was found.")
   }
-} else {
-  plot.new()
-  text(0.5, 0.5, "Bivariate observed scenario RDS not found (expected for_paper_biv_obs.rds).")
 }
 ```
 
@@ -4053,15 +4102,24 @@ if (!exists("oklahoma_fitvar_d_ates", mode = "function")) {
 }
 fitvar_d_df <- oklahoma_fitvar_d_summary(results)
 fitvar_d_ates <- oklahoma_fitvar_d_ates(results)
+fitvar_d_ates_obs <- tryCatch(
+  oklahoma_fitvar_d_ates(results, "observed"),
+  error = function(e) numeric(0)
+)
 fitvar_cfg <- results$fit_variability$config
-d_point_ate <- if (!is.null(fit_D_obj) && !is.null(fit_D_obj$ate)) {
-  vals <- get_total_effect_sim(fit_D_obj$ate, n_tiles = n_cty)
+fitvar_point_ate <- function(contrast) {
+  ate_use <- pick_ate_contrast(
+    if (!is.null(fit_D_obj)) fit_D_obj$ate else NULL,
+    contrast
+  )
+  if (is.null(ate_use)) return(NA_real_)
+  vals <- get_total_effect_sim(ate_use, n_tiles = n_cty)
   vals <- suppressWarnings(as.numeric(vals))
   vals <- vals[is.finite(vals)]
   if (length(vals) > 0L) mean(vals) else NA_real_
-} else {
-  NA_real_
 }
+d_point_ate <- fitvar_point_ate("all_or_nothing")
+d_point_ate_obs <- fitvar_point_ate("observed")
 if (length(fitvar_d_ates) > 0L) {
   n_ok <- length(fitvar_d_ates)
   n_att <- if (!is.null(fitvar_cfg$reps)) as.integer(fitvar_cfg$reps) else n_ok
@@ -4129,8 +4187,32 @@ if (length(fitvar_d_ates) > 0L) {
       stringsAsFactors = FALSE
     )
     knitr::kable(sm, align = "lc",
-                 caption = "Fit D sequential-Bernoulli initialization variability.") |>
+                 caption = "Fit D sequential-Bernoulli initialization variability (all-or-nothing).") |>
       kableExtra::kable_styling(bootstrap_options = "striped", full_width = FALSE)
+  }
+  if (length(fitvar_d_ates_obs) > 0L) {
+    hist_obs <- data.frame(TotalATE = fitvar_d_ates_obs)
+    p_fitvar_obs <- ggplot(hist_obs, aes(x = TotalATE)) +
+      geom_histogram(bins = min(20L, max(8L, length(fitvar_d_ates_obs) %/% 3L)),
+                     fill = "#fdb462", colour = "white", alpha = 0.85) +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+      labs(
+        x = bquote(hat(Delta)[obs] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
+        y = "Initialization count",
+        subtitle = sprintf("n = %d successful D initializations (observed vs control)",
+                           length(fitvar_d_ates_obs))
+      ) +
+      theme_minimal(base_size = 12)
+    if (is.finite(d_point_ate_obs)) {
+      p_fitvar_obs <- p_fitvar_obs +
+        geom_vline(xintercept = d_point_ate_obs, colour = "#e6550d", linewidth = 0.9) +
+        annotate(
+          "text", x = d_point_ate_obs, y = Inf, vjust = 1.4, hjust = -0.05,
+          colour = "#e6550d", size = 3.2,
+          label = sprintf("primary D obs = %.0f", d_point_ate_obs)
+        )
+    }
+    print(p_fitvar_obs)
   }
 } else {
   cat("Fit-variability D ATEs are unavailable in this results file (stage not run, or every replicate failed).\n")

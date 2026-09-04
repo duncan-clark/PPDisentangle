@@ -2771,6 +2771,101 @@ ate_estim_fast <- function(ctrl_pp, treat_pp, observed_data, label,
          contrast = contrast)
   }, error = function(e) { cat("    Error:", e$message, "\n"); NULL })
 }
+
+# Primary payload follows OK_ATE_CONTRAST; both estimands live on $by_contrast.
+ate_with_both_contrasts <- function(compute_one) {
+  ate_aon <- tryCatch(
+    compute_one("all_or_nothing"),
+    error = function(e) {
+      cat("    ATE all_or_nothing error:", e$message, "\n")
+      NULL
+    }
+  )
+  ate_obs <- tryCatch(
+    compute_one("observed"),
+    error = function(e) {
+      cat("    ATE observed error:", e$message, "\n")
+      NULL
+    }
+  )
+  primary <- if (identical(OK_ATE_CONTRAST, "observed")) ate_obs else ate_aon
+  if (!is.null(primary)) {
+    primary$by_contrast <- list(
+      all_or_nothing = ate_aon,
+      observed = ate_obs
+    )
+  }
+  primary
+}
+ate_sim_total_mean <- function(ate_obj) {
+  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(NA_real_)
+  vals <- suppressWarnings(as.numeric(ate_obj$all_nothing_sim$total_saved))
+  vals <- vals[is.finite(vals)]
+  if (length(vals) < 1L) return(NA_real_)
+  mean(vals)
+}
+ate_contrast_total_mean <- function(ate_obj, contrast) {
+  if (is.null(ate_obj)) return(NA_real_)
+  bc <- ate_obj$by_contrast
+  if (is.list(bc) && !is.null(bc[[contrast]])) {
+    return(ate_sim_total_mean(bc[[contrast]]))
+  }
+  if (!is.null(ate_obj$contrast) && identical(as.character(ate_obj$contrast)[1], contrast)) {
+    return(ate_sim_total_mean(ate_obj))
+  }
+  NA_real_
+}
+eval_ate_both <- function(biv_params, marg, observed_data, label,
+                          filtration_history = NULL,
+                          n_cores = 1L,
+                          quiet = TRUE,
+                          crn_base_seed = NULL,
+                          covariate_lookup = KDE_BG_LOOKUP,
+                          parallel_cluster = NULL,
+                          n_tiles_used = partition$n,
+                          treated_idx_used = treated_idx,
+                          phase = "ate") {
+  ate_with_both_contrasts(function(contrast) {
+    if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
+      ate_estim_bivariate(
+        biv_params = biv_params,
+        windowT = windowT_ate,
+        windowS = win_km,
+        state_spaces_obs = state_spaces,
+        label = label,
+        n_sims = ATE_N_SIMS,
+        n_cores = n_cores,
+        m0 = ETAS_M0,
+        beta_gr = BETA_GR,
+        filtration_history = filtration_history,
+        t_trunc = SEM_T_TRUNC_DAYS,
+        n_tiles = n_tiles_used,
+        crn_base_seed = crn_base_seed,
+        use_crn = OK_ATE_USE_CRN,
+        crn_pair = OK_ATE_CRN_PAIR,
+        parallel_cluster = parallel_cluster,
+        quiet = quiet,
+        contrast = contrast,
+        covariate_lookup = covariate_lookup
+      )
+    } else if (!is.null(marg)) {
+      ate_estim_fast(
+        marg$ctrl, marg$treat, observed_data, label,
+        filtration_history = filtration_history,
+        crn_base_seed = crn_base_seed,
+        phase = phase,
+        n_tiles_used = n_tiles_used,
+        treated_idx_used = treated_idx_used,
+        quiet = quiet,
+        contrast = contrast,
+        covariate_lookup = covariate_lookup,
+        t_trunc = SEM_T_TRUNC_DAYS
+      )
+    } else {
+      NULL
+    }
+  })
+}
 ate_cl_reuse <- NULL
 ate_cl_reuse_guard <- new.env(parent = emptyenv())
 ate_cl_reuse_guard$cluster <- NULL
@@ -4168,32 +4263,6 @@ K_marginals <- extract_marginals_indep(K_params)
 L_marginals <- extract_marginals_indep(L_params)
 
 ensure_ate_psock_pool()
-# Compute both AoN and observed contrasts; attach under $by_contrast.
-# Primary payload (backward-compatible fields) follows OK_ATE_CONTRAST.
-ate_with_both_contrasts <- function(compute_one) {
-  ate_aon <- tryCatch(
-    compute_one("all_or_nothing"),
-    error = function(e) {
-      cat("    ATE all_or_nothing error:", e$message, "\n")
-      NULL
-    }
-  )
-  ate_obs <- tryCatch(
-    compute_one("observed"),
-    error = function(e) {
-      cat("    ATE observed error:", e$message, "\n")
-      NULL
-    }
-  )
-  primary <- if (identical(OK_ATE_CONTRAST, "observed")) ate_obs else ate_aon
-  if (!is.null(primary)) {
-    primary$by_contrast <- list(
-      all_or_nothing = ate_aon,
-      observed = ate_obs
-    )
-  }
-  primary
-}
 ate_biv_or_marginal <- function(biv_params, marg, observed_data, label,
                                 bg_lookup = NULL,
                                 state_spaces_in = state_spaces,
@@ -4455,6 +4524,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       raw_total_saved = NA_real_,
       mc_total_saved_mean = NA_real_,
       mc_total_saved_sd = NA_real_,
+      mc_total_saved_mean_all_or_nothing = NA_real_,
+      mc_total_saved_mean_observed = NA_real_,
       eta_ctrl = NA_real_,
       eta_treat = NA_real_
     )
@@ -4472,6 +4543,12 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       out$mc_total_saved_mean <- mean(sim_total, na.rm = TRUE)
       out$mc_total_saved_sd <- if (length(sim_total) > 1L) stats::sd(sim_total, na.rm = TRUE) else 0
     }
+    out$mc_total_saved_mean_all_or_nothing <- ate_contrast_total_mean(
+      ate_obj, "all_or_nothing"
+    )
+    out$mc_total_saved_mean_observed <- ate_contrast_total_mean(
+      ate_obj, "observed"
+    )
     out
   }
 
@@ -4548,16 +4625,16 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       )
       E_params_var <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
       E_marg_var <- extract_marginals(E_params_var)
-      ate_E_var <- if (is.null(E_marg_var)) NULL else tryCatch(
-        ate_estim_fast(
-          E_marg_var$ctrl, E_marg_var$treat, pp_post_bg,
+      ate_E_var <- if (is.null(E_params_var) && is.null(E_marg_var)) NULL else tryCatch(
+        eval_ate_both(
+          biv_params = E_params_var,
+          marg = E_marg_var,
+          observed_data = pp_post_bg,
           label = sprintf("FitVar E #%d", rep_id),
-          phase = "fit_variability",
-          n_tiles_used = partition$n,
-          treated_idx_used = treated_idx,
+          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+          n_cores = 1L,
           quiet = TRUE,
-          covariate_lookup = KDE_BG_LOOKUP,
-          t_trunc = SEM_T_TRUNC_DAYS
+          phase = "fit_variability"
         ),
         error = function(e) NULL
       )
@@ -4607,16 +4684,16 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       NA_integer_
     }
     F_marg_var <- extract_marginals(F_params_var)
-    ate_F_var <- if (is.null(F_marg_var)) NULL else tryCatch(
-      ate_estim_fast(
-        F_marg_var$ctrl, F_marg_var$treat, pp_post_sem_var,
+    ate_F_var <- if (is.null(F_params_var) && is.null(F_marg_var)) NULL else tryCatch(
+      eval_ate_both(
+        biv_params = F_params_var,
+        marg = F_marg_var,
+        observed_data = pp_post_sem_var,
         label = sprintf("FitVar F #%d", rep_id),
-        phase = "fit_variability",
-        n_tiles_used = partition$n,
-        treated_idx_used = treated_idx,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        n_cores = 1L,
         quiet = TRUE,
-        covariate_lookup = KDE_BG_LOOKUP,
-        t_trunc = SEM_T_TRUNC_DAYS
+        phase = "fit_variability"
       ),
       error = function(e) NULL
     )
@@ -4692,6 +4769,12 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         raw_total_saved = as.numeric(zi$ate_stats$raw_total_saved),
         mc_total_saved_mean = as.numeric(zi$ate_stats$mc_total_saved_mean),
         mc_total_saved_sd = as.numeric(zi$ate_stats$mc_total_saved_sd),
+        mc_total_saved_mean_all_or_nothing = as.numeric(
+          zi$ate_stats$mc_total_saved_mean_all_or_nothing
+        ),
+        mc_total_saved_mean_observed = as.numeric(
+          zi$ate_stats$mc_total_saved_mean_observed
+        ),
         eta_ctrl = as.numeric(zi$ate_stats$eta_ctrl),
         eta_treat = as.numeric(zi$ate_stats$eta_treat),
         mu_0 = fitvar_param(zi$params, "mu_0"),
@@ -6116,6 +6199,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       n_post_ctrl_sim = as.integer(nrow(post_ctrl_df))[1L],
       n_post_treat_sim = as.integer(nrow(post_treat_df))[1L],
       ate_total_mean = as.numeric(mean(total_saved))[1L],
+      ate_total_mean_all_or_nothing = as.numeric(
+        ate_contrast_total_mean(ate_obj, "all_or_nothing")
+      )[1L],
+      ate_total_mean_observed = as.numeric(
+        ate_contrast_total_mean(ate_obj, "observed")
+      )[1L],
       ate_total_sd = as.numeric(stats::sd(total_saved))[1L],
       ate_tile_mean = as.numeric(mean(tile_ate))[1L],
       fit_law = stability$law,
@@ -6206,43 +6295,19 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         } else {
           list(ctrl = c_params_boot$control, treat = c_params_boot$treated)
         }
-        ate_c_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
-          ate_estim_bivariate(
-            biv_params = c_params_boot,
-            windowT = windowT_ate,
-            windowS = win_km,
-            state_spaces_obs = state_spaces,
-            label = sprintf("Boot C #%d", rep_id),
-            n_sims = ATE_N_SIMS,
-            # Nested under bootstrap outer parallel: keep ATE sims sequential.
-            n_cores = 1L,
-            m0 = ETAS_M0,
-            beta_gr = BETA_GR,
-            filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_C$pre_df else NULL,
-            t_trunc = SEM_T_TRUNC_DAYS,
-            n_tiles = partition$n,
-            crn_base_seed = boot_ate_crn_seed,
-            use_crn = OK_ATE_USE_CRN,
-            crn_pair = OK_ATE_CRN_PAIR,
-            quiet = TRUE,
-            contrast = OK_ATE_CONTRAST,
-            covariate_lookup = boot_covariate_lookup
-          )
-        } else {
-          ate_estim_fast(
-            c_marg_boot$ctrl, c_marg_boot$treat, sim_C$pp_post_bg_sim,
-            label = sprintf("Boot C #%d", rep_id),
-            filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_C$pre_df else NULL,
-            crn_base_seed = boot_ate_crn_seed,
-            phase = "bootstrap",
-            n_tiles_used = partition$n,
-            treated_idx_used = treated_idx,
-            quiet = TRUE,
-            contrast = OK_ATE_CONTRAST,
-            covariate_lookup = boot_covariate_lookup,
-            t_trunc = SEM_T_TRUNC_DAYS
-          )
-        }
+        # Nested under bootstrap outer parallel: keep ATE sims sequential.
+        ate_c_boot <- eval_ate_both(
+          biv_params = if (isTRUE(OK_ATE_BIVARIATE)) c_params_boot else NULL,
+          marg = c_marg_boot,
+          observed_data = sim_C$pp_post_bg_sim,
+          label = sprintf("Boot C #%d", rep_id),
+          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_C$pre_df else NULL,
+          n_cores = 1L,
+          quiet = TRUE,
+          crn_base_seed = boot_ate_crn_seed,
+          covariate_lookup = boot_covariate_lookup,
+          phase = "bootstrap"
+        )
         summarize_boot(
           ate_c_boot, rep_id,
           sim_C$pre_df, sim_C$post_ctrl_df, sim_C$post_treat_df,
@@ -6315,43 +6380,19 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         } else {
           list(ctrl = d_params_boot$control, treat = d_params_boot$treated)
         }
-        ate_d_boot <- if (isTRUE(OK_ATE_BIVARIATE)) {
-          ate_estim_bivariate(
-            biv_params = d_params_boot,
-            windowT = windowT_ate,
-            windowS = win_km,
-            state_spaces_obs = state_spaces,
-            label = sprintf("Boot D #%d", rep_id),
-            n_sims = ATE_N_SIMS,
-            # Nested under bootstrap outer parallel: keep ATE sims sequential.
-            n_cores = 1L,
-            m0 = ETAS_M0,
-            beta_gr = BETA_GR,
-            filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_D$pre_df else NULL,
-            t_trunc = SEM_T_TRUNC_DAYS,
-            n_tiles = partition$n,
-            crn_base_seed = boot_ate_crn_seed,
-            use_crn = OK_ATE_USE_CRN,
-            crn_pair = OK_ATE_CRN_PAIR,
-            quiet = TRUE,
-            contrast = OK_ATE_CONTRAST,
-            covariate_lookup = boot_covariate_lookup
-          )
-        } else {
-          ate_estim_fast(
-            d_marg_boot$ctrl, d_marg_boot$treat, pp_post_d_boot,
-            label = sprintf("Boot D #%d", rep_id),
-            filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_D$pre_df else NULL,
-            crn_base_seed = boot_ate_crn_seed,
-            phase = "bootstrap",
-            n_tiles_used = partition$n,
-            treated_idx_used = treated_idx,
-            quiet = TRUE,
-            contrast = OK_ATE_CONTRAST,
-            covariate_lookup = boot_covariate_lookup,
-            t_trunc = SEM_T_TRUNC_DAYS
-          )
-        }
+        # Nested under bootstrap outer parallel: keep ATE sims sequential.
+        ate_d_boot <- eval_ate_both(
+          biv_params = if (isTRUE(OK_ATE_BIVARIATE)) d_params_boot else NULL,
+          marg = d_marg_boot,
+          observed_data = pp_post_d_boot,
+          label = sprintf("Boot D #%d", rep_id),
+          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) sim_D$pre_df else NULL,
+          n_cores = 1L,
+          quiet = TRUE,
+          crn_base_seed = boot_ate_crn_seed,
+          covariate_lookup = boot_covariate_lookup,
+          phase = "bootstrap"
+        )
         summarize_boot(
           ate_d_boot, rep_id,
           sim_D$pre_df, sim_D$post_ctrl_df, sim_D$post_treat_df,
@@ -6417,6 +6458,12 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
           n_post_ctrl_sim = as.integer(scalar1(z$n_post_ctrl_sim, NA_integer_)),
           n_post_treat_sim = as.integer(scalar1(z$n_post_treat_sim, NA_integer_)),
           ate_total_mean = as.numeric(scalar1(z$ate_total_mean, NA_real_)),
+          ate_total_mean_all_or_nothing = as.numeric(
+            scalar1(z$ate_total_mean_all_or_nothing, NA_real_)
+          ),
+          ate_total_mean_observed = as.numeric(
+            scalar1(z$ate_total_mean_observed, NA_real_)
+          ),
           ate_total_sd = as.numeric(scalar1(z$ate_total_sd, NA_real_)),
           ate_tile_mean = as.numeric(scalar1(z$ate_tile_mean, NA_real_)),
           fit_law = as.character(scalar1(z$fit_law, NA_character_)),
@@ -6437,6 +6484,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
         n_post_ctrl_sim = integer(),
         n_post_treat_sim = integer(),
         ate_total_mean = numeric(),
+        ate_total_mean_all_or_nothing = numeric(),
+        ate_total_mean_observed = numeric(),
         ate_total_sd = numeric(),
         ate_tile_mean = numeric(),
         fit_law = character(),
@@ -6489,7 +6538,8 @@ if (RUN_BOOTSTRAP_ATE && BOOT_N_REPS > 0L && length(boot_targets_run) > 0L) {
       refit_law = if (isTRUE(OK_ATE_BIVARIATE)) "bivariate" else "univariate",
       stability_fit_margin = BOOT_BRANCHING_MAX,
       explosive_drop_threshold = 1,
-      bias_correction_stage = "after_stability_filter"
+      bias_correction_stage = "after_stability_filter",
+      ate_both_contrasts = TRUE
     )
   )
   if ("C" %in% boot_targets_run) bootstrap_ate$fit_C <- make_boot_block("C")
@@ -6589,36 +6639,18 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     100000L
   }
   recompute_point_ate <- function(biv_params, marg, observed_data, label) {
-    if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
-      ate_estim_bivariate(
-        biv_params = biv_params,
-        windowT = windowT_ate,
-        windowS = win_km,
-        state_spaces_obs = state_spaces,
-        label = label,
-        n_sims = ATE_N_SIMS,
-        n_cores = ATE_SIM_CORES,
-        m0 = ETAS_M0,
-        beta_gr = BETA_GR,
-        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-        t_trunc = SEM_T_TRUNC_DAYS,
-        n_tiles = partition$n,
-        crn_base_seed = ate_crn_base_seed_bootonly,
-        use_crn = OK_ATE_USE_CRN,
-        crn_pair = OK_ATE_CRN_PAIR,
-        contrast = OK_ATE_CONTRAST,
-        covariate_lookup = KDE_BG_LOOKUP
-      )
-    } else {
-      ate_estim_fast(
-        marg$ctrl, marg$treat, observed_data, label,
-        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-        crn_base_seed = ate_crn_base_seed_bootonly,
-        contrast = OK_ATE_CONTRAST,
-        covariate_lookup = KDE_BG_LOOKUP,
-        t_trunc = SEM_T_TRUNC_DAYS
-      )
-    }
+    eval_ate_both(
+      biv_params = biv_params,
+      marg = marg,
+      observed_data = observed_data,
+      label = label,
+      filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+      n_cores = ATE_SIM_CORES,
+      quiet = FALSE,
+      crn_base_seed = ate_crn_base_seed_bootonly,
+      covariate_lookup = KDE_BG_LOOKUP,
+      parallel_cluster = ate_cl_reuse
+    )
   }
   ate_E <- recompute_point_ate(
     E_params, E_marginals, pp_post,
@@ -6669,6 +6701,7 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
     bias_correction_stage = "after_stability_filter",
     ate_bivariate = isTRUE(OK_ATE_BIVARIATE),
     ate_contrast = OK_ATE_CONTRAST,
+    ate_both_contrasts = TRUE,
     ate_method = OK_ATE_METHOD_LABEL,
     ate_scenario = if (nzchar(OK_ATE_SCENARIO)) OK_ATE_SCENARIO else NA_character_
   )

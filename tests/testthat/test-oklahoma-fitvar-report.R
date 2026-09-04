@@ -39,3 +39,39 @@ test_that("fitvar D ATE helper is empty when the stage was not run", {
   expect_equal(oklahoma_fitvar_d_ates(list()), numeric(0))
   expect_equal(nrow(oklahoma_fitvar_d_summary(list(fit_variability = NULL))), 0L)
 })
+
+test_that("fitvar D helper can return the observed contrast without falling back to AoN", {
+  results <- list(
+    fit_variability = list(
+      replicate_summary = data.frame(
+        rep = 1:2,
+        model = c("F", "F"),
+        success = c(TRUE, TRUE),
+        mc_total_saved_mean = c(211.4, 198.2),
+        mc_total_saved_mean_all_or_nothing = c(211.4, 198.2),
+        mc_total_saved_mean_observed = c(163.8, 150.1),
+        raw_total_saved = c(200, 190),
+        n_relabel = c(288L, 301L),
+        n_label_init_flips = c(285L, 301L),
+        stringsAsFactors = FALSE
+      )
+    )
+  )
+  expect_equal(oklahoma_fitvar_d_ates(results, "all_or_nothing"), c(211.4, 198.2))
+  expect_equal(oklahoma_fitvar_d_ates(results, "observed"), c(163.8, 150.1))
+})
+
+test_that("bootstrap contrast helper uses observed columns and does not fall back", {
+  df <- data.frame(
+    ate_total_mean = c(-64, 211),
+    ate_total_mean_all_or_nothing = c(-64, 211),
+    ate_total_mean_observed = c(-51.5, 163.8),
+    stringsAsFactors = FALSE
+  )
+  expect_equal(oklahoma_boot_vals_for_contrast(df, "all_or_nothing"), c(-64, 211))
+  expect_equal(oklahoma_boot_vals_for_contrast(df, "observed"), c(-51.5, 163.8))
+  expect_equal(
+    oklahoma_boot_vals_for_contrast(df["ate_total_mean"], "observed"),
+    numeric(0)
+  )
+})

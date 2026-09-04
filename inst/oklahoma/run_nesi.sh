@@ -212,8 +212,10 @@ done
 if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
   mode_norm="$(echo "$PP_MODE" | tr '[:upper:]' '[:lower:]')"
   apply_paper_science_suite() {
-    # Publication science: county primary, t_trunc=250, gated D from that C,
-    # A–J (not C/D-only), scott-iso, bandwidth + partition C/D, no t-trunc grid.
+    # Publication science: county, t_trunc=250, C/D only (G-J/t-trunc
+    # paths stay in the script but are off), gated D from that C,
+    # sequential-Bernoulli init, multi-flip throughout, scott-iso,
+    # Diggle bandwidth + partition C/D. Main/init SEM=2000; bootstrap=500.
     if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
     if [ "$CORES_EXPLICIT" -ne 1 ]; then PP_CORES=64; fi
     if [ "$SEM_N_ITER_EXPLICIT" -ne 1 ]; then PP_SEM_N_ITER=1; fi
@@ -225,7 +227,10 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
     if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=500; fi
     if [ "$MEM_EXPLICIT" -ne 1 ]; then PP_MEM=200G; fi
     if [ "$BOOT_TARGETS_EXPLICIT" -ne 1 ]; then PP_BOOT_TARGETS="C,D"; fi
-    if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=0; fi
+    if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=1; fi
+    if [ "$FIT_VARIABILITY_REPS_EXPLICIT" -ne 1 ]; then PP_FIT_VARIABILITY_REPS=64; fi
+    if [ "$FIT_VARIABILITY_CORES_EXPLICIT" -ne 1 ]; then PP_FIT_VARIABILITY_CORES=64; fi
+    PP_FIT_VARIABILITY_D_ONLY=1
     PP_RUN_SENSITIVITY=1
     RUN_SENS_EXPLICIT=1
     PP_RUN_PARTITION_SENSITIVITY=1
@@ -238,50 +243,42 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
     PP_SEM_MONOTONE_COMPLETE_LL=1
     PP_SEM_START_FROM_C=1
     PP_SEM_BIV_N_THREADS=1
+    # Multi-flip the whole way (empty => Inf in oklahoma_analysis.R).
     if [ -z "${PP_SEM_SINGLE_FLIP_FROM_ITER:-}" ]; then
-      PP_SEM_SINGLE_FLIP_FROM_ITER=1001
+      PP_SEM_SINGLE_FLIP_FROM_ITER=""
     fi
+    if [ -z "${PP_SEM_LABEL_INIT}" ]; then PP_SEM_LABEL_INIT="sequential_bernoulli"; fi
+    if [ -z "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL}" ]; then PP_SEM_SEQUENTIAL_MAP_PROPOSAL=false; fi
+    if [ -z "${PP_SEM_MAP_TELEPORT_ONCE}" ]; then PP_SEM_MAP_TELEPORT_ONCE=false; fi
+    if [ -z "${PP_SEM_ALLOW_IMPROVING_TELEPORT}" ]; then PP_SEM_ALLOW_IMPROVING_TELEPORT=false; fi
     PP_SKIP_FULL_REPORT=1
-    PP_CD_ONLY=0
+    PP_CD_ONLY=1
     PP_UNIV_KDE_ONLY=0
     if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
   }
+  apply_paper_2000_500() {
+    # Main / init-sensitivity SEM at 2000; bandwidth+partition and bootstrap stay 500.
+    if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+    if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=500; fi
+    if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=500; fi
+    if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=512; fi
+    if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
+    if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=64; fi
+    if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="20:00:00"; fi
+  }
   case "$mode_norm" in
-    paper|paper-final|publication)
+    paper|paper-final|publication|paper-cd|paper_cd|paper-overnight|paper_overnight)
       apply_paper_science_suite
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1250; fi
-      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1250; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=256; fi
-      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=64; fi
-      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="24:00:00"; fi
+      apply_paper_2000_500
       ;;
     paper-quick|paper_quick|preview)
       apply_paper_science_suite
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=1250; fi
-      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=1250; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=1000; fi
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=500; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=500; fi
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="12:00:00"; fi
-      ;;
-    paper-cd|paper_cd|paper-overnight|paper_overnight)
-      # Publication science, C/D only: Bernoulli sequential init, then
-      # discrepancy polish. Overnight-safe inners (not paper 1250/1000).
-      apply_paper_science_suite
-      PP_CD_ONLY=1
-      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=200; fi
-      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=200; fi
-      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
-      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=512; fi
-      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
-      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=64; fi
-      if [ -z "${PP_SEM_LABEL_INIT}" ]; then PP_SEM_LABEL_INIT="sequential_bernoulli"; fi
-      if [ -z "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL}" ]; then PP_SEM_SEQUENTIAL_MAP_PROPOSAL=false; fi
-      if [ -z "${PP_SEM_MAP_TELEPORT_ONCE}" ]; then PP_SEM_MAP_TELEPORT_ONCE=false; fi
-      if [ -z "${PP_SEM_ALLOW_IMPROVING_TELEPORT}" ]; then PP_SEM_ALLOW_IMPROVING_TELEPORT=false; fi
-      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="16:00:00"; fi
       ;;
     init-smoke|init_smoke|bernoulli-smoke|bernoulli_smoke|bernoulli-init-smoke)
       # Same C MLE, 64 independent sequential-Bernoulli D inits, 2000-step polish.
@@ -1044,6 +1041,8 @@ fi
 export OK_SEM_BIV_N_THREADS="$PP_SEM_BIV_N_THREADS"
 if [ -n "${PP_SEM_SINGLE_FLIP_FROM_ITER:-}" ]; then
   export OK_SEM_SINGLE_FLIP_FROM_ITER="$PP_SEM_SINGLE_FLIP_FROM_ITER"
+else
+  unset OK_SEM_SINGLE_FLIP_FROM_ITER
 fi
 if [ "$PP_RUN_SEM_PILOT" = "1" ] || [ "$PP_RUN_SEM_PILOT" = "true" ] || [ "$PP_RUN_SEM_PILOT" = "yes" ]; then
   export OK_RUN_SEM_PILOT=true
