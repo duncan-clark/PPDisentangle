@@ -52,6 +52,12 @@ fmt_num <- function(x, digits = 4) {
   x <- safe_num(x)
   if (!is.finite(x)) "N/A" else format(round(x, digits), nsmall = digits, trim = TRUE)
 }
+fmt_t_trunc_cfg <- function(x, digits = 4) {
+  tryCatch(
+    PPDisentangle:::.etas_format_t_trunc_days(x, digits = digits),
+    error = function(e) "none"
+  )
+}
 fmt_ate <- function(x) {
   x <- safe_num(x)
   if (!is.finite(x)) "N/A" else sprintf("%.1f", x)
@@ -191,7 +197,7 @@ settings_df <- data.frame(
     "RUN_T_TRUNC_SENSITIVITY"
   ),
   Value = c(
-    fmt_num(cfg$SEM_T_TRUNC_DAYS, 4),
+    fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS),
     scalar_chr(cfg$SEM_T_TRUNC_SOURCE),
     fmt_num(cfg$SEM_T_TRUNC_REL, 4),
     fmt_num(cfg$BETA_GR, 6),
@@ -375,6 +381,91 @@ get_sem_metric_trace <- function(fit) {
   }
   NULL
 }
+# Drop the left prefix of scale-breaking SEM jumps (C-lock / MAP teleport)
+# so later variation is visible. Keep original iteration indices.
+sem_first_kept_iter <- function(y, frac = 0.10, range_keep = 0.25,
+                                min_keep = 8L, early_frac = 0.2) {
+  y <- as.numeric(y)
+  n <- length(y)
+  if (n < 3L) return(1L)
+  finite <- is.finite(y)
+  if (sum(finite) < 3L) return(1L)
+  span <- diff(range(y[finite], na.rm = TRUE))
+  final <- y[max(which(finite))]
+  thresh <- if (is.finite(span) && span > 0) frac * span else Inf
+  min_keep <- min(as.integer(min_keep), n)
+  max_drop <- n - min_keep
+  i <- 1L
+  early_n <- max(2L, min(n - min_keep, ceiling(early_frac * n)))
+  if (is.finite(thresh) && early_n >= 1L) {
+    early_idx <- seq_len(early_n)
+    early_idx <- early_idx[is.finite(y[early_idx])]
+    if (length(early_idx)) {
+      worst <- early_idx[which.max(abs(y[early_idx] - final))]
+      if (abs(y[worst] - final) > thresh) i <- max(i, as.integer(worst) + 1L)
+    }
+  }
+  i <- min(i, max_drop + 1L)
+  while (i <= max_drop) {
+    if (!is.finite(y[i])) { i <- i + 1L; next }
+    if (is.finite(thresh) && abs(y[i] - final) > thresh) { i <- i + 1L; next }
+    break
+  }
+  while (i <= max_drop) {
+    rest <- y[i:n]
+    rest <- rest[is.finite(rest)]
+    rest2 <- y[(i + 1L):n]
+    rest2 <- rest2[is.finite(rest2)]
+    if (length(rest) < 2L || length(rest2) < 1L) break
+    r1 <- diff(range(rest))
+    r2 <- diff(range(rest2))
+    if (is.finite(r1) && r1 > 0 && is.finite(r2) && (r2 / r1) < range_keep) {
+      i <- i + 1L
+      next
+    }
+    break
+  }
+  as.integer(i)
+}
+
+drop_sem_scale_prefix <- function(df, value_col, iter_col = "Iteration",
+                                  group_cols = NULL) {
+  if (is.null(df) || !is.data.frame(df) || nrow(df) < 1L) return(df)
+  if (!value_col %in% names(df) || !iter_col %in% names(df)) return(df)
+  if (is.null(group_cols)) {
+    group_cols <- intersect(c("Model", "Metric", "entry"), names(df))
+  }
+  group_cols <- intersect(group_cols, names(df))
+  split_keys <- if (length(group_cols)) {
+    interaction(df[group_cols], drop = TRUE, lex.order = TRUE)
+  } else {
+    rep("all", nrow(df))
+  }
+  parts <- split(df, split_keys, drop = TRUE)
+  out <- lapply(parts, function(d) {
+    d <- d[order(as.numeric(d[[iter_col]])), , drop = FALSE]
+    keep_from <- sem_first_kept_iter(d[[value_col]])
+    if (keep_from > 1L && keep_from <= nrow(d)) {
+      d <- d[seq.int(keep_from, nrow(d)), , drop = FALSE]
+    }
+    d
+  })
+  do.call(rbind, out)
+}
+
+get_sem_proposal_trace <- function(fit) {
+  sem_obj <- sem_fit_obj(fit)
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive$all_metrics)) return(NULL)
+  am <- sem_obj$adaptive$all_metrics
+  rows <- lapply(seq_along(am), function(i) {
+    v <- as.numeric(am[[i]])
+    if (!length(v)) return(NULL)
+    data.frame(Iteration = i, Proposal = seq_along(v), LogLik = v)
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(NULL)
+  do.call(rbind, rows)
+}
 extract_selected_confusion_trace <- function(sem_obj, model_label) {
   ad <- if (!is.null(sem_obj$adaptive)) sem_obj$adaptive else sem_obj$fit$adaptive
   if (is.null(ad) || is.null(ad$class_results) || is.null(ad$all_metrics)) return(NULL)
@@ -461,8 +552,8 @@ if (length(sum_rows) > 0) {
 
 ```{r fig-sem-confusion}
 #| label: fig-sem-confusion
-#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration."
-#| fig-height: 4
+#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration. The initial scale-breaking MAP/C-lock jump is omitted so later 1-count changes are visible; each entry has its own y-scale."
+#| fig-height: 8
 trace_rows <- list()
 for (info in sem_specs) {
   sem_obj <- sem_fit_obj(info$fit)
@@ -489,9 +580,12 @@ if (length(trace_rows) > 0) {
     levels = c("control_as_control", "control_as_treated", "treated_as_control", "treated_as_treated"),
     labels = c("Control -> Control", "Control -> Treated", "Treated -> Control", "Treated -> Treated")
   )
+  trace_long <- drop_sem_scale_prefix(trace_long, value_col = "count", iter_col = "iteration")
+}
+if (length(trace_rows) > 0 && !is.null(trace_long) && nrow(trace_long) > 0) {
   ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(~ Model, scales = "free_y") +
+    facet_grid(entry ~ Model, scales = "free_y") +
     scale_color_manual(name = "Confusion entry", values = c(
       "Control -> Control" = "#1f78b4",
       "Control -> Treated" = "#e31a1c",
@@ -500,7 +594,7 @@ if (length(trace_rows) > 0) {
     )) +
     labs(x = "Iteration", y = "Count") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none", strip.text.y = element_text(size = 8))
 } else {
   plot.new()
   text(0.5, 0.5, "No SEM confusion-matrix trace found.")
@@ -509,9 +603,10 @@ if (length(trace_rows) > 0) {
 
 ```{r fig-sem-adaptive-loglik}
 #| label: fig-sem-adaptive-loglik
-#| fig-cap: "Adaptive SEM selected-proposal score (solid) and running best (dashed). This trace is stochastic and is not expected to be monotone."
-#| fig-height: 4
+#| fig-cap: "Adaptive SEM selected-proposal score (solid) after omitting the initial scale-breaking MAP/C-lock jump. Grey points are other proposals in the same zoom window. Running best is dashed."
+#| fig-height: 4.5
 sem_metric_rows <- list()
+sem_prop_rows <- list()
 for (info in sem_specs) {
   tr <- get_sem_metric_trace(info$fit)
   if (!is.null(tr) && length(tr) > 0) {
@@ -521,15 +616,51 @@ for (info in sem_specs) {
       Model = info$lab
     )
   }
+  pr <- get_sem_proposal_trace(info$fit)
+  if (!is.null(pr) && nrow(pr) > 0) {
+    pr$Model <- info$lab
+    sem_prop_rows[[length(sem_prop_rows) + 1]] <- pr
+  }
 }
 if (length(sem_metric_rows) > 0) {
   sem_metric_df <- do.call(rbind, sem_metric_rows)
   sem_metric_df <- sem_metric_df[is.finite(sem_metric_df$LogLik), , drop = FALSE]
+  sem_metric_df <- drop_sem_scale_prefix(sem_metric_df, value_col = "LogLik")
+}
+if (length(sem_metric_rows) > 0 && !is.null(sem_metric_df) && nrow(sem_metric_df) > 0) {
   sem_metric_df$RunningBest <- ave(sem_metric_df$LogLik, sem_metric_df$Model, FUN = cummax)
   last_idx <- !duplicated(sem_metric_df$Model, fromLast = TRUE)
   sem_metric_last <- sem_metric_df[last_idx, , drop = FALSE]
   sem_metric_last$lbl <- sprintf("final = %.2f", sem_metric_last$LogLik)
-  ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
+  sem_prop_zoom <- NULL
+  if (length(sem_prop_rows) > 0) {
+    sem_prop_df <- do.call(rbind, sem_prop_rows)
+    kept <- unique(sem_metric_df[, c("Model", "Iteration")])
+    sem_prop_df <- merge(sem_prop_df, kept, by = c("Model", "Iteration"))
+    lims <- do.call(rbind, lapply(split(sem_metric_df, sem_metric_df$Model, drop = TRUE), function(d) {
+      ymin <- min(d$LogLik, na.rm = TRUE)
+      ymax <- max(d$LogLik, na.rm = TRUE)
+      pad <- max(0.08 * (ymax - ymin), 0.2)
+      data.frame(Model = d$Model[[1]], ymin = ymin - pad, ymax = ymax + pad)
+    }))
+    sem_prop_df <- merge(sem_prop_df, lims, by = "Model")
+    sem_prop_zoom <- sem_prop_df[
+      is.finite(sem_prop_df$LogLik) &
+        sem_prop_df$LogLik >= sem_prop_df$ymin &
+        sem_prop_df$LogLik <= sem_prop_df$ymax,
+      , drop = FALSE
+    ]
+  }
+  p_ll <- ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model))
+  if (!is.null(sem_prop_zoom) && nrow(sem_prop_zoom) > 0) {
+    p_ll <- p_ll + geom_point(
+      data = sem_prop_zoom,
+      aes(x = Iteration, y = LogLik),
+      inherit.aes = FALSE,
+      alpha = 0.18, size = 0.55, colour = "grey30"
+    )
+  }
+  p_ll +
     geom_line(linewidth = 0.9) +
     geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
     geom_text(
@@ -550,8 +681,8 @@ if (length(sem_metric_rows) > 0) {
 
 ```{r fig-sem-cumulative-flips}
 #| label: fig-sem-cumulative-flips
-#| fig-cap: "Per-iteration SEM label flips (average over proposals vs accepted proposal)."
-#| fig-height: 4.5
+#| fig-cap: "Per-iteration SEM label flips after omitting the initial MAP Hamming spike. Average and accepted flips have separate y-scales so later 0–2 flip noise is visible."
+#| fig-height: 6
 flip_rows <- list()
 for (info in sem_specs) {
   sem_obj <- sem_fit_obj(info$fit)
@@ -580,16 +711,19 @@ if (length(flip_rows) > 0) {
     levels = c("AverageFlips", "AcceptedFlips"),
     labels = c("Average flips", "Accepted flips")
   )
+  flip_long <- drop_sem_scale_prefix(flip_long, value_col = "Flips")
+}
+if (length(flip_rows) > 0 && !is.null(flip_long) && nrow(flip_long) > 0) {
   ggplot(flip_long, aes(x = Iteration, y = Flips, colour = Metric)) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(~ Model, scales = "free_y") +
+    facet_grid(Metric ~ Model, scales = "free_y") +
     scale_colour_manual(values = c(
       "Average flips" = "#08519c",
       "Accepted flips" = "#a50f15"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Flips per iteration") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none")
 } else {
   plot.new()
   text(0.5, 0.5, "No SEM flip traces found.")
@@ -629,14 +763,14 @@ if (is.null(prev)) {
   diff_settings <- data.frame(
     Setting = c("SEM_T_TRUNC_DAYS", "SEM_INNER_ITER", "SEM_OUTER_MAXIT_BIV", "ATE_N_SIMS", "BETA_GR"),
     Previous = c(
-      fmt_num(prev_cfg$SEM_T_TRUNC_DAYS, 4),
+      fmt_t_trunc_cfg(prev_cfg$SEM_T_TRUNC_DAYS),
       scalar_chr(prev_cfg$SEM_INNER_ITER %||% prev_cfg$SEM_INNER),
       scalar_chr(prev_cfg$SEM_OUTER_MAXIT_BIV),
       scalar_chr(prev_cfg$ATE_N_SIMS),
       fmt_num(prev_cfg$BETA_GR, 6)
     ),
     Current = c(
-      fmt_num(cfg$SEM_T_TRUNC_DAYS, 4),
+      fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS),
       scalar_chr(cfg$SEM_INNER_ITER %||% cfg$SEM_INNER),
       scalar_chr(cfg$SEM_OUTER_MAXIT_BIV),
       scalar_chr(cfg$ATE_N_SIMS),

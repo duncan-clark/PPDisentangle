@@ -19,6 +19,9 @@
 # Usage:
 #   Rscript oklahoma_analysis.R
 #   Rscript oklahoma_analysis.R --test
+#
+# Temporal truncation: OK_SEM_T_TRUNC_DAYS is a positive horizon in days, or
+# none/off/-1 for untruncated Omori (p > 1). Empty is an error.
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -231,11 +234,49 @@ if (!is.finite(SEM_MAX_RELABEL_STEP_FRAC) || is.na(SEM_MAX_RELABEL_STEP_FRAC) ||
   SEM_MAX_RELABEL_STEP_FRAC <- 0.05
 }
 SEM_MAX_RELABEL_STEP_FRAC <- min(SEM_MAX_RELABEL_STEP_FRAC, 1.0)
-SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL <- tolower(Sys.getenv(
-  "OK_SEM_SEQUENTIAL_MAP_PROPOSAL", "true"
-)) %in% c("1", "true", "yes", "y")
+SEM_MAX_MAP_RELABEL_STEP_FRAC_RAW <- trimws(Sys.getenv("OK_SEM_MAX_MAP_RELABEL_STEP_FRAC", ""))
+if (nzchar(SEM_MAX_MAP_RELABEL_STEP_FRAC_RAW)) {
+  SEM_MAX_MAP_RELABEL_STEP_FRAC <- suppressWarnings(as.numeric(SEM_MAX_MAP_RELABEL_STEP_FRAC_RAW))
+  if (!is.finite(SEM_MAX_MAP_RELABEL_STEP_FRAC) || is.na(SEM_MAX_MAP_RELABEL_STEP_FRAC) ||
+      SEM_MAX_MAP_RELABEL_STEP_FRAC <= 0) {
+    SEM_MAX_MAP_RELABEL_STEP_FRAC <- SEM_MAX_RELABEL_STEP_FRAC
+  }
+} else {
+  SEM_MAX_MAP_RELABEL_STEP_FRAC <- SEM_MAX_RELABEL_STEP_FRAC
+}
+SEM_MAX_MAP_RELABEL_STEP_FRAC <- min(SEM_MAX_MAP_RELABEL_STEP_FRAC, 1.0)
+SEM_LABEL_INIT_RAW <- trimws(Sys.getenv("OK_SEM_LABEL_INIT", "current"))
+SEM_LABEL_INIT <- {
+  x <- tolower(SEM_LABEL_INIT_RAW)
+  if (!nzchar(x) || x %in% c("current", "location", "location_labels", "none", "off")) {
+    "current"
+  } else if (x %in% c("sequential_bernoulli", "bernoulli", "seq_bernoulli", "soft")) {
+    "sequential_bernoulli"
+  } else if (x %in% c("sequential_map", "map", "seq_map", "hard_map")) {
+    "sequential_map"
+  } else {
+    stop(
+      "OK_SEM_LABEL_INIT must be current, sequential_bernoulli, or sequential_map (got ",
+      SEM_LABEL_INIT_RAW, ")."
+    )
+  }
+}
+SEM_MAP_PROP_RAW <- trimws(Sys.getenv("OK_SEM_SEQUENTIAL_MAP_PROPOSAL", ""))
+if (nzchar(SEM_MAP_PROP_RAW)) {
+  SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL <- tolower(SEM_MAP_PROP_RAW) %in%
+    c("1", "true", "yes", "y")
+} else if (!identical(SEM_LABEL_INIT, "current")) {
+  # Sequential init already places the walk at the start; do not also
+  # keep hard MAP in the proposal pool unless the user asks.
+  SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL <- FALSE
+} else {
+  SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL <- TRUE
+}
 SEM_ALLOW_IMPROVING_TELEPORT <- tolower(Sys.getenv(
   "OK_SEM_ALLOW_IMPROVING_TELEPORT", "true"
+)) %in% c("1", "true", "yes", "y")
+SEM_MAP_TELEPORT_ONCE <- tolower(Sys.getenv(
+  "OK_SEM_MAP_TELEPORT_ONCE", "false"
 )) %in% c("1", "true", "yes", "y")
 SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC", "0.05")))
 if (!is.finite(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || is.na(SEM_FORCE_PARAM_UPDATE_FLIP_FRAC) || SEM_FORCE_PARAM_UPDATE_FLIP_FRAC <= 0) {
@@ -263,20 +304,29 @@ SEM_TEMPORAL_WEIGHT <- min(max(SEM_TEMPORAL_WEIGHT, 0), 1)
 SEM_TEMPORAL_SCALE_DAYS <- 15
 SEM_T_TRUNC_RAW <- trimws(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "90"))
 if (!nzchar(SEM_T_TRUNC_RAW)) {
-  stop("OK_SEM_T_TRUNC_DAYS is empty; auto t_trunc is disabled. Set a positive number of days (typically 90).")
+  stop("OK_SEM_T_TRUNC_DAYS is empty; auto t_trunc is disabled. Set a positive number of days or none.")
 }
-SEM_T_TRUNC_DAYS <- suppressWarnings(as.numeric(SEM_T_TRUNC_RAW))
-if (!is.finite(SEM_T_TRUNC_DAYS) || is.na(SEM_T_TRUNC_DAYS) || SEM_T_TRUNC_DAYS <= 0) {
-  stop(sprintf(
-    "OK_SEM_T_TRUNC_DAYS must be a positive number of days (got %s). Auto t_trunc is disabled.",
-    SEM_T_TRUNC_RAW
-  ))
-}
+SEM_T_TRUNC_DAYS <- tryCatch(
+  PPDisentangle:::.etas_parse_t_trunc_days(SEM_T_TRUNC_RAW, empty_is_none = FALSE),
+  error = function(e) {
+    stop(sprintf(
+      "OK_SEM_T_TRUNC_DAYS must be a positive number of days or none/off/-1 (got %s).",
+      SEM_T_TRUNC_RAW
+    ))
+  }
+)
+SEM_NO_TRUNCATION <- !PPDisentangle:::.etas_trunc_active(SEM_T_TRUNC_DAYS)
 SEM_T_TRUNC_SOURCE <- if (nzchar(trimws(Sys.getenv("OK_SEM_T_TRUNC_DAYS", "")))) "env" else "default_90"
 # Kept only for saved-config / report compatibility; auto t_trunc is disabled.
 SEM_T_TRUNC_REL <- suppressWarnings(as.numeric(Sys.getenv("OK_SEM_T_TRUNC_REL", "0.05")))
 if (!is.finite(SEM_T_TRUNC_REL) || is.na(SEM_T_TRUNC_REL) || SEM_T_TRUNC_REL <= 0 || SEM_T_TRUNC_REL >= 1) {
   SEM_T_TRUNC_REL <- 0.05
+}
+fmt_t_trunc <- function(x) PPDisentangle:::.etas_format_t_trunc_days(x)
+fmt_t_trunc_grid <- function(xs) PPDisentangle:::.etas_format_t_trunc_grid(xs)
+t_trunc_num <- function(x) PPDisentangle:::.etas_t_trunc_as_numeric(x)
+p_bound_for_trunc <- function(t_trunc, requested = ETAS_P_LOWER_BOUND_REQUESTED) {
+  PPDisentangle:::.etas_p_lower_bound_for_trunc(t_trunc, requested)
 }
 SEM_PARAM_UPDATE  <- if (QUICK_CHECK) 10 else if (TEST_MODE) 10 else 25
 SEM_OUTER_MAXIT       <- if (QUICK_CHECK) 40 else if (TEST_MODE) 200 else 5000
@@ -306,14 +356,19 @@ KDE_BW_SENS_KM <- if (nzchar(KDE_BW_SENS_KM_RAW)) {
 }
 KDE_BW_SENS_KM <- sort(unique(KDE_BW_SENS_KM[is.finite(KDE_BW_SENS_KM) & KDE_BW_SENS_KM > 0]))
 # Fit C/D temporal-truncation sensitivity (independent of bandwidth/partition sens).
+# Grid tokens may include none/off/-1 for an untruncated Omori (p > 1) cell.
 T_TRUNC_SENS_DAYS_RAW <- trimws(Sys.getenv("OK_T_TRUNC_SENS_DAYS", "1,5,7,10,14,21"))
-T_TRUNC_SENS_DAYS <- suppressWarnings(as.numeric(unlist(strsplit(T_TRUNC_SENS_DAYS_RAW, "[,;|\\s]+"))))
-T_TRUNC_SENS_DAYS <- sort(unique(T_TRUNC_SENS_DAYS[is.finite(T_TRUNC_SENS_DAYS) & T_TRUNC_SENS_DAYS > 0]))
+T_TRUNC_SENS_DAYS <- tryCatch(
+  PPDisentangle:::.etas_parse_t_trunc_grid(T_TRUNC_SENS_DAYS_RAW),
+  error = function(e) {
+    stop("OK_T_TRUNC_SENS_DAYS must be a comma-separated list of positive days or none: ", e$message)
+  }
+)
 RUN_T_TRUNC_SENSITIVITY <- tolower(Sys.getenv(
   "OK_RUN_T_TRUNC_SENSITIVITY",
   if (length(T_TRUNC_SENS_DAYS) > 0L) "true" else "false"
 )) %in% c("1", "true", "yes", "y")
-if (!RUN_T_TRUNC_SENSITIVITY) T_TRUNC_SENS_DAYS <- numeric(0)
+if (!RUN_T_TRUNC_SENSITIVITY) T_TRUNC_SENS_DAYS <- list()
 RUN_FIT_VARIABILITY <- tolower(Sys.getenv("OK_RUN_FIT_VARIABILITY", "false")) %in% c("1", "true", "yes", "y")
 FIT_VARIABILITY_REPS <- suppressWarnings(as.integer(Sys.getenv("OK_FIT_VARIABILITY_REPS", "")))
 if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIABILITY_REPS < 1L) {
@@ -322,6 +377,8 @@ if (!is.finite(FIT_VARIABILITY_REPS) || is.na(FIT_VARIABILITY_REPS) || FIT_VARIA
 FIT_VARIABILITY_CORES_RAW <- Sys.getenv("OK_FIT_VARIABILITY_CORES", "")
 FIT_VARIABILITY_PATCH_FILE <- trimws(Sys.getenv("OK_FIT_VARIABILITY_PATCH_FILE", ""))
 FIT_VARIABILITY_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
+FIT_VARIABILITY_D_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_D_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
 BOOTSTRAP_PATCH_FILE <- trimws(Sys.getenv("OK_BOOTSTRAP_PATCH_FILE", ""))
 BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
@@ -352,10 +409,10 @@ SMOKE_SEM_D_SEEDS <- suppressWarnings(as.integer(Sys.getenv("OK_SMOKE_SEM_D_SEED
 if (!is.finite(SMOKE_SEM_D_SEEDS) || is.na(SMOKE_SEM_D_SEEDS) || SMOKE_SEM_D_SEEDS < 0L) {
   SMOKE_SEM_D_SEEDS <- 0L
 }
-SMOKE_SEM_D_TRUNC <- suppressWarnings(as.numeric(Sys.getenv("OK_SMOKE_SEM_D_TRUNC", "3")))
-if (!is.finite(SMOKE_SEM_D_TRUNC) || is.na(SMOKE_SEM_D_TRUNC) || SMOKE_SEM_D_TRUNC <= 0) {
-  SMOKE_SEM_D_TRUNC <- 3
-}
+SMOKE_SEM_D_TRUNC <- tryCatch(
+  PPDisentangle:::.etas_parse_t_trunc_days(Sys.getenv("OK_SMOKE_SEM_D_TRUNC", "3"), empty_is_none = FALSE),
+  error = function(e) 3
+)
 # Multi-seed Fit D smoke reuses the trunc-only skip path (no main fits / ATE / bootstrap).
 if (SMOKE_SEM_D_SEEDS > 0L) {
   T_TRUNC_SENS_ONLY <- TRUE
@@ -482,8 +539,20 @@ ETAS_Q_LOWER_BOUND <- suppressWarnings(as.numeric(Sys.getenv(
 if (!is.finite(ETAS_P_LOWER_BOUND) || ETAS_P_LOWER_BOUND < 0) {
   ETAS_P_LOWER_BOUND <- 0
 }
+ETAS_P_LOWER_BOUND_REQUESTED <- ETAS_P_LOWER_BOUND
 if (!is.finite(ETAS_Q_LOWER_BOUND) || ETAS_Q_LOWER_BOUND < 1) {
   ETAS_Q_LOWER_BOUND <- 1
+}
+# Untruncated Omori is only a density for p > 1. Raise the bound if needed.
+if (isTRUE(SEM_NO_TRUNCATION)) {
+  p_floor <- PPDisentangle:::.etas_p_lower_bound_for_trunc(NULL, ETAS_P_LOWER_BOUND)
+  if (ETAS_P_LOWER_BOUND < p_floor) {
+    cat(sprintf(
+      "Untruncated Omori: raising OK_ETAS_P_LOWER_BOUND from %.4g to %.4g (p > 1 required).\n",
+      ETAS_P_LOWER_BOUND, p_floor
+    ))
+    ETAS_P_LOWER_BOUND <- p_floor
+  }
 }
 BOOT_BRANCHING_MAX <- suppressWarnings(as.numeric(Sys.getenv(
   "OK_BOOT_BRANCHING_MAX", as.character(ETAS_BRANCHING_MAX)
@@ -589,7 +658,7 @@ if (exclusive_only_modes > 1L) {
 if (isTRUE(T_TRUNC_SENS_ONLY)) {
   RUN_T_TRUNC_SENSITIVITY <- TRUE
   if (length(T_TRUNC_SENS_DAYS) < 1L) {
-    T_TRUNC_SENS_DAYS <- c(1, 5, 7, 10, 14, 21)
+    T_TRUNC_SENS_DAYS <- PPDisentangle:::.etas_parse_t_trunc_grid("1,5,7,10,14,21")
   }
   RUN_SENSITIVITY <- FALSE
   RUN_FIT_VARIABILITY <- FALSE
@@ -883,9 +952,10 @@ cat(sprintf("SEM selection: method=%s | temperature=%.3f | monotone=%s | start_f
               "off"
             },
             SEM_BIV_N_THREADS))
-cat(sprintf("SEM sequential MAP proposal=%s | improving teleport=%s | max_relabel_step_frac=%.3f\n",
+cat(sprintf("SEM sequential MAP proposal=%s | improving teleport=%s | map teleport once=%s | label_init=%s | max_relabel_step_frac=%.3f | max_map_relabel_step_frac=%.3f\n",
             SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL, SEM_ALLOW_IMPROVING_TELEPORT,
-            SEM_MAX_RELABEL_STEP_FRAC))
+            SEM_MAP_TELEPORT_ONCE, SEM_LABEL_INIT,
+            SEM_MAX_RELABEL_STEP_FRAC, SEM_MAX_MAP_RELABEL_STEP_FRAC))
 cat(sprintf("SEM change-factor bounds: min_mult=%.3f | max_mult=%.3f\n",
             SEM_CHANGE_FACTOR_MIN_MULT, SEM_CHANGE_FACTOR_MAX_MULT))
 cat(sprintf("SEM relabel controls: max_step_frac=%.3f | force_param_update_flip_frac=%.3f\n",
@@ -913,8 +983,9 @@ cat(sprintf("SEM inner iters: main=%d, sensitivity=%d, bootstrap=%d\n",
 cat(sprintf("Targets (shared): sensitivity=%s | bootstrap=%s\n",
             paste(SENS_TARGETS, collapse = ","),
             paste(BOOT_TARGETS, collapse = ",")))
-cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d\n",
-            RUN_FIT_VARIABILITY, FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
+cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d | d_only=%s\n",
+            RUN_FIT_VARIABILITY, FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES,
+            FIT_VARIABILITY_D_ONLY))
 if (isTRUE(FIT_VARIABILITY_ONLY)) {
   cat(sprintf("Fit variability ONLY mode: will skip main county fits; patch into %s\n",
               FIT_VARIABILITY_PATCH_FILE))
@@ -928,19 +999,20 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
 if (isTRUE(T_TRUNC_SENS_ONLY)) {
   if (SMOKE_SEM_D_SEEDS > 0L) {
     cat(sprintf(
-      "Fit D SEM smoke: %d seeds at t_trunc=%.4g; SEM inner=%d; no ATE; patch source %s\n",
-      SMOKE_SEM_D_SEEDS, SMOKE_SEM_D_TRUNC, SEM_INNER_ITER, T_TRUNC_SENS_PATCH_FILE
+      "Fit D SEM smoke: %d seeds at t_trunc=%s; SEM inner=%d; no ATE; patch source %s\n",
+      SMOKE_SEM_D_SEEDS, fmt_t_trunc(SMOKE_SEM_D_TRUNC), SEM_INNER_ITER, T_TRUNC_SENS_PATCH_FILE
     ))
   } else {
     cat(sprintf(
       "t_trunc sensitivity ONLY mode: skip main county fits/ATEs/bootstrap; SEM inner=%d; grid=%s; patch into %s\n",
-      SEM_INNER_ITER, paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ","), T_TRUNC_SENS_PATCH_FILE
+      SEM_INNER_ITER, fmt_t_trunc_grid(T_TRUNC_SENS_DAYS), T_TRUNC_SENS_PATCH_FILE
     ))
   }
 }
 cat(sprintf("SEM warm-start fixed adaptive step: %s\n", SEM_WARMSTART_FIXED))
-cat(sprintf("SEM proposal/event t_trunc (days): %s (source=%s)\n",
-            as.character(signif(SEM_T_TRUNC_DAYS, 4)), SEM_T_TRUNC_SOURCE))
+cat(sprintf("SEM proposal/event t_trunc (days): %s (source=%s%s)\n",
+            fmt_t_trunc(SEM_T_TRUNC_DAYS), SEM_T_TRUNC_SOURCE,
+            if (isTRUE(SEM_NO_TRUNCATION)) "; untruncated Omori p>1" else ""))
 cat(sprintf("SEM temporal relabel weight: %.3f\n", SEM_TEMPORAL_WEIGHT))
 cat(sprintf("B/D SEM verbose tracing: %s\n", DF_VERBOSE))
 cat(sprintf("Verbose optimizer/SEM tracing: %s\n", OK_VERBOSE))
@@ -1350,7 +1422,9 @@ cat(sprintf("  Pre-treatment full ETAS init (all pre, whole-domain control): mu=
             PRE_CTRL_BOOT_PARAMS$mu, PRE_CTRL_BOOT_PARAMS$A, PRE_CTRL_BOOT_PARAMS$alpha_m,
             PRE_CTRL_BOOT_PARAMS$c, PRE_CTRL_BOOT_PARAMS$p, PRE_CTRL_BOOT_PARAMS$D,
             PRE_CTRL_BOOT_PARAMS$gamma, PRE_CTRL_BOOT_PARAMS$q))
-cat(sprintf("  SEM t_trunc: %.4f days (source=%s)\n", SEM_T_TRUNC_DAYS, SEM_T_TRUNC_SOURCE))
+cat(sprintf("  SEM t_trunc: %s (source=%s%s)\n",
+            fmt_t_trunc(SEM_T_TRUNC_DAYS), SEM_T_TRUNC_SOURCE,
+            if (isTRUE(SEM_NO_TRUNCATION)) "; untruncated Omori p>1" else ""))
 
 # Data-informed triggering range from the KDE holdout sample (Q90 NN).
 # Needed before the primary grid tessellation is built.
@@ -1666,7 +1740,7 @@ for (nm in names(control_snapshot_fits)) {
 
 if (length(T_TRUNC_SENS_DAYS) > 0L) {
   cat(sprintf("  Fit C/D t_trunc sensitivity grid (days): %s | SEM inner=%d\n",
-              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", "),
+              fmt_t_trunc_grid(T_TRUNC_SENS_DAYS),
               as.integer(SENS_SEM_INNER_ITER)))
 }
 
@@ -1951,11 +2025,14 @@ run_sem_fit <- function(pp_data_in,
         update_starting_data = TRUE, include_starting_data = TRUE,
         include_starting_first_n = sem_inner_iter_in,
         max_relabel_step_frac = SEM_MAX_RELABEL_STEP_FRAC,
+        max_map_relabel_step_frac = SEM_MAX_MAP_RELABEL_STEP_FRAC,
         force_param_update_flip_frac = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
         update_control_params = TRUE, fixed_params = fixed_params_sem,
         require_monotone_complete_ll = SEM_MONOTONE_COMPLETE_LL,
         include_sequential_map_proposal = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
         allow_improving_teleport = SEM_ALLOW_IMPROVING_TELEPORT,
+        map_teleport_once = SEM_MAP_TELEPORT_ONCE,
+        label_init = SEM_LABEL_INIT,
         proposal_method = "simulation",
         single_flip_from_iter = SEM_SINGLE_FLIP_FROM_ITER,
         outer_maxit = SEM_OUTER_MAXIT, outer_maxit_biv = SEM_OUTER_MAXIT_BIV,
@@ -1963,7 +2040,7 @@ run_sem_fit <- function(pp_data_in,
       ),
       m0 = ETAS_M0, beta_gr = BETA_GR,
       enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
-      p_lower_bound = ETAS_P_LOWER_BOUND,
+      p_lower_bound = p_bound_for_trunc(sem_t_trunc_in),
       q_lower_bound = ETAS_Q_LOWER_BOUND,
       max_branching_ratio = ETAS_BRANCHING_MAX,
       max_branching_radius = ETAS_BRANCHING_MAX,
@@ -3610,9 +3687,9 @@ if (length(KDE_BW_SENS_KM) > 0L) {
       sigma_km = as.numeric(km)
     )
   })
-  cat(sprintf("  Absolute-km bandwidth grid: %s (SEM inner=%d, t_trunc=%.4g days)\n",
+  cat(sprintf("  Absolute-km bandwidth grid: %s (SEM inner=%d, t_trunc=%s days)\n",
               paste(vapply(kde_bandwidth_specs, `[[`, character(1), "label"), collapse = ", "),
-              as.integer(SENS_SEM_INNER_ITER), as.numeric(SEM_T_TRUNC_DAYS)))
+              as.integer(SENS_SEM_INNER_ITER), fmt_t_trunc(SEM_T_TRUNC_DAYS)))
 } else if (RUN_SENSITIVITY) {
   kde_bandwidth_specs <- list(
     list(label = "diggle", multiplier = 1),
@@ -4327,11 +4404,18 @@ if (exists("t_ate_L", inherits = FALSE)) {
     ate_F <- boot_patch$fits_named$D$ate
     if (is.null(ate_F)) ate_F <- boot_patch$fits_named$F$ate
     if (is.null(ate_F)) ate_F <- boot_patch$fitF$ate
-    trunc_from_patch <- suppressWarnings(as.numeric(boot_patch$config$SEM_T_TRUNC_DAYS))
-    if (length(trunc_from_patch) == 1L && is.finite(trunc_from_patch) && trunc_from_patch > 0) {
-      SEM_T_TRUNC_DAYS <- trunc_from_patch
+    if (!is.null(boot_patch$config) && "SEM_T_TRUNC_DAYS" %in% names(boot_patch$config)) {
+      SEM_T_TRUNC_DAYS <- tryCatch(
+        PPDisentangle:::.etas_parse_t_trunc_days(
+          boot_patch$config$SEM_T_TRUNC_DAYS, empty_is_none = TRUE
+        ),
+        error = function(e) SEM_T_TRUNC_DAYS
+      )
+      SEM_NO_TRUNCATION <- !PPDisentangle:::.etas_trunc_active(SEM_T_TRUNC_DAYS)
       SEM_T_TRUNC_SOURCE <- "patch"
-      cat(sprintf("  Using SEM_T_TRUNC_DAYS=%.4f from patch config\n", SEM_T_TRUNC_DAYS))
+      ETAS_P_LOWER_BOUND <- p_bound_for_trunc(SEM_T_TRUNC_DAYS)
+      cat(sprintf("  Using SEM_T_TRUNC_DAYS=%s from patch config\n",
+                  fmt_t_trunc(SEM_T_TRUNC_DAYS)))
     }
     cat(sprintf(
       "  Hydrated C/D (all_free) params for bivariate bootstrap (C ate_method=%s, D ate_method=%s)\n",
@@ -4391,46 +4475,97 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     out
   }
 
+  fitvar_d_init <- biv_init_F
+  fitvar_d_ctrl <- A_ctrl
+  fitvar_d_treat <- A_treat
+  fitvar_d_from_c <- FALSE
+  if (isTRUE(SEM_START_FROM_C)) {
+    c_par_var <- NULL
+    if (exists("E_params", inherits = TRUE) && !is.null(E_params)) {
+      c_par_var <- E_params
+    }
+    if (is.null(c_par_var) && exists("c_start_params", inherits = TRUE) &&
+        length(c_start_params) > 0L) {
+      vid <- if (exists("kde_primary_variant_id", inherits = TRUE)) {
+        as.character(kde_primary_variant_id)
+      } else {
+        NA_character_
+      }
+      if (length(vid) == 1L && !is.na(vid) && nzchar(vid)) {
+        c_par_var <- c_start_params[[vid]]
+      }
+      if (is.null(c_par_var)) {
+        for (nm in names(c_start_params)) {
+          if (!is.null(c_start_params[[nm]])) {
+            c_par_var <- c_start_params[[nm]]
+            break
+          }
+        }
+      }
+    }
+    if (!is.null(c_par_var) && valid_biv_params(c_par_var)) {
+      fitvar_d_init <- c_par_var
+      fitvar_d_from_c <- TRUE
+      marg_c <- extract_marginals(c_par_var)
+      if (!is.null(marg_c)) {
+        fitvar_d_ctrl <- marg_c$ctrl
+        fitvar_d_treat <- marg_c$treat
+      }
+    } else {
+      warning("SEM_START_FROM_C is on but no C MLE was available for fit-variability D; using biv_init_F.")
+    }
+  }
+  cat(sprintf(
+    "  Fit-variability D: label_init=%s start_from_c=%s d_only=%s sem_inner=%d\n",
+    SEM_LABEL_INIT, fitvar_d_from_c, isTRUE(FIT_VARIABILITY_D_ONLY), SEM_INNER_ITER
+  ))
+
   run_fitvar_rep <- function(rep_id) {
     t0_rep <- proc.time()[["elapsed"]]
     cat(sprintf("    [fitvar:%d] start pid=%d mem=%s\n",
                 as.integer(rep_id), Sys.getpid(), mem_snapshot()))
     out <- list(rep = as.integer(rep_id))
 
-    fitE_var <- tryCatch(
-      fit_etas_bivariate(
-        params_init = biv_init_E, realiz = pp_all_bg,
-        windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
-        control_state_space = control_ss, treated_state_space = treated_ss,
-        background_rate_var = "W",
-        treated_background_zero_before = 0,
-        control_background_everywhere_before = 0,
-        control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
-        beta_gr = BETA_GR,
-        enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
-        p_lower_bound = ETAS_P_LOWER_BOUND,
-        q_lower_bound = ETAS_Q_LOWER_BOUND,
-        max_branching_radius = ETAS_BRANCHING_MAX,
-        maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
-        t_trunc = SEM_T_TRUNC_DAYS
-      ),
-      error = function(e) NULL
-    )
-    E_params_var <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
-    E_marg_var <- extract_marginals(E_params_var)
-    ate_E_var <- if (is.null(E_marg_var)) NULL else tryCatch(
-      ate_estim_fast(
-        E_marg_var$ctrl, E_marg_var$treat, pp_post_bg,
-        label = sprintf("FitVar E #%d", rep_id),
-        phase = "fit_variability",
-        n_tiles_used = partition$n,
-        treated_idx_used = treated_idx,
-        quiet = TRUE,
-        covariate_lookup = KDE_BG_LOOKUP,
-        t_trunc = SEM_T_TRUNC_DAYS
-      ),
-      error = function(e) NULL
-    )
+    if (!isTRUE(FIT_VARIABILITY_D_ONLY)) {
+      fitE_var <- tryCatch(
+        fit_etas_bivariate(
+          params_init = biv_init_E, realiz = pp_all_bg,
+          windowT = windowT_fit, windowS = win_km, m0 = ETAS_M0,
+          control_state_space = control_ss, treated_state_space = treated_ss,
+          background_rate_var = "W",
+          treated_background_zero_before = 0,
+          control_background_everywhere_before = 0,
+          control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
+          beta_gr = BETA_GR,
+          enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
+          p_lower_bound = ETAS_P_LOWER_BOUND,
+          q_lower_bound = ETAS_Q_LOWER_BOUND,
+          max_branching_radius = ETAS_BRANCHING_MAX,
+          maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
+          t_trunc = SEM_T_TRUNC_DAYS
+        ),
+        error = function(e) NULL
+      )
+      E_params_var <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
+      E_marg_var <- extract_marginals(E_params_var)
+      ate_E_var <- if (is.null(E_marg_var)) NULL else tryCatch(
+        ate_estim_fast(
+          E_marg_var$ctrl, E_marg_var$treat, pp_post_bg,
+          label = sprintf("FitVar E #%d", rep_id),
+          phase = "fit_variability",
+          n_tiles_used = partition$n,
+          treated_idx_used = treated_idx,
+          quiet = TRUE,
+          covariate_lookup = KDE_BG_LOOKUP,
+          t_trunc = SEM_T_TRUNC_DAYS
+        ),
+        error = function(e) NULL
+      )
+    } else {
+      fitE_var <- NULL
+      E_params_var <- NULL
+      ate_E_var <- NULL
+    }
 
     semF_var <- tryCatch(
       run_sem_fit(
@@ -4438,7 +4573,9 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         partition_in = partition,
         partition_processes_in = partition_processes,
         state_spaces_in = state_spaces,
-        init_params_in = biv_init_F,
+        init_params_in = fitvar_d_init,
+        init_ctrl_params_in = fitvar_d_ctrl,
+        init_treat_params_in = fitvar_d_treat,
         fixed_params_in = SENSITIVITY_FIXED_PARAMS,
         background_rate_var_in = "W",
         control_background_pre_mass_ratio_in = CTRL_BG_PRE_MASS_RATIO,
@@ -4464,6 +4601,11 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       lp <- lp[lp$t >= 0, , drop = FALSE]
       sum(lp$location_process != lp$inferred_process, na.rm = TRUE)
     } else { 0L }
+    n_label_init_var <- if (!is.null(semF_var) && !is.null(semF_var$adaptive$n_label_init_flips)) {
+      as.integer(semF_var$adaptive$n_label_init_flips)[1L]
+    } else {
+      NA_integer_
+    }
     F_marg_var <- extract_marginals(F_params_var)
     ate_F_var <- if (is.null(F_marg_var)) NULL else tryCatch(
       ate_estim_fast(
@@ -4480,24 +4622,32 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     )
 
     elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
-    out$E <- list(
-      ok = !is.null(E_params_var),
-      params = E_params_var,
-      ate = ate_E_var,
-      ate_stats = fitvar_ate_stats(ate_E_var),
-      loglik = if (!is.null(fitE_var) && !is.null(fitE_var$value)) as.numeric(fitE_var$value) else NA_real_
-    )
+    if (!isTRUE(FIT_VARIABILITY_D_ONLY)) {
+      out$E <- list(
+        ok = !is.null(E_params_var),
+        params = E_params_var,
+        ate = ate_E_var,
+        ate_stats = fitvar_ate_stats(ate_E_var),
+        loglik = if (!is.null(fitE_var) && !is.null(fitE_var$value)) as.numeric(fitE_var$value) else NA_real_
+      )
+    }
     out$F <- list(
       ok = !is.null(F_params_var),
       params = F_params_var,
       ate = ate_F_var,
       ate_stats = fitvar_ate_stats(ate_F_var),
-      n_relabel = as.integer(n_relabel_var)
+      n_relabel = as.integer(n_relabel_var),
+      n_label_init_flips = n_label_init_var
     )
     out$elapsed_sec <- elapsed_rep
-    cat(sprintf("    [fitvar:%d] done in %.1fs E_ok=%s F_ok=%s relabel=%d mem=%s\n",
-                as.integer(rep_id), elapsed_rep, out$E$ok, out$F$ok,
-                as.integer(out$F$n_relabel), mem_snapshot()))
+    cat(sprintf(
+      "    [fitvar:%d] done in %.1fs E_ok=%s F_ok=%s relabel=%d init_flips=%s mem=%s\n",
+      as.integer(rep_id), elapsed_rep,
+      if (!is.null(out$E)) out$E$ok else NA,
+      out$F$ok, as.integer(out$F$n_relabel),
+      if (is.finite(n_label_init_var)) as.character(n_label_init_var) else "NA",
+      mem_snapshot()
+    ))
     out
   }
 
@@ -4518,8 +4668,9 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     value <- suppressWarnings(as.numeric(params[[name]]))
     if (length(value) != 1L || !is.finite(value)) NA_real_ else value
   }
+  fitvar_models <- if (isTRUE(FIT_VARIABILITY_D_ONLY)) "F" else c("E", "F")
   for (z in fitvar_out) {
-    for (model_nm in c("E", "F")) {
+    for (model_nm in fitvar_models) {
       zi <- z[[model_nm]]
       if (is.null(zi)) next
       fitvar_rows[[length(fitvar_rows) + 1L]] <- data.frame(
@@ -4530,6 +4681,11 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         loglik = if (!is.null(zi$loglik)) as.numeric(zi$loglik) else NA_real_,
         n_relabel = if (identical(model_nm, "F")) {
           if (!is.null(zi$n_relabel)) as.integer(zi$n_relabel) else NA_integer_
+        } else {
+          NA_integer_
+        },
+        n_label_init_flips = if (identical(model_nm, "F")) {
+          if (!is.null(zi$n_label_init_flips)) as.integer(zi$n_label_init_flips) else NA_integer_
         } else {
           NA_integer_
         },
@@ -4560,7 +4716,10 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       cores = FIT_VARIABILITY_CORES,
       sem_inner_iter = SEM_INNER_ITER,
       ate_n_sims = ATE_N_SIMS,
-      seed = OK_GLOBAL_SEED
+      seed = OK_GLOBAL_SEED,
+      d_only = isTRUE(FIT_VARIABILITY_D_ONLY),
+      d_started_from_c = isTRUE(fitvar_d_from_c),
+      label_init = SEM_LABEL_INIT
     ),
     replicate_summary = fitvar_df,
     replicates = fitvar_out
@@ -4599,6 +4758,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         patched$config$FIT_VARIABILITY_REPS <- FIT_VARIABILITY_REPS
         patched$config$FIT_VARIABILITY_CORES <- FIT_VARIABILITY_CORES
         patched$config$FIT_VARIABILITY_ONLY <- isTRUE(FIT_VARIABILITY_ONLY)
+        patched$config$FIT_VARIABILITY_D_ONLY <- isTRUE(FIT_VARIABILITY_D_ONLY)
         saveRDS(patched, patch_file)
         patch_ok <- TRUE
         cat(sprintf("Patched fit variability into existing results: %s\n", patch_file))
@@ -4746,6 +4906,8 @@ results_pre_sensitivity <- list(
     SEM_START_FROM_C = SEM_START_FROM_C,
     SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
     SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
+    SEM_MAP_TELEPORT_ONCE = SEM_MAP_TELEPORT_ONCE,
+    SEM_LABEL_INIT = SEM_LABEL_INIT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
@@ -4756,6 +4918,7 @@ results_pre_sensitivity <- list(
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_NO_TRUNCATION = SEM_NO_TRUNCATION,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
@@ -4764,6 +4927,7 @@ results_pre_sensitivity <- list(
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
+    FIT_VARIABILITY_D_ONLY = FIT_VARIABILITY_D_ONLY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
     PRIMARY_PARTITION = PRIMARY_PARTITION,
@@ -4782,6 +4946,7 @@ results_pre_sensitivity <- list(
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_MAX_MAP_RELABEL_STEP_FRAC = SEM_MAX_MAP_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
@@ -4798,6 +4963,7 @@ results_pre_sensitivity <- list(
     ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
     ETAS_P_LOWER_BOUND = ETAS_P_LOWER_BOUND,
+    ETAS_P_LOWER_BOUND_REQUESTED = ETAS_P_LOWER_BOUND_REQUESTED,
     ETAS_Q_LOWER_BOUND = ETAS_Q_LOWER_BOUND,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
@@ -4963,14 +5129,14 @@ ate_partitions <- Filter(Negate(is.null), ate_partitions)
 smoke_sem_d <- NULL
 t_trunc_sensitivity <- NULL
 if (SMOKE_SEM_D_SEEDS > 0L) {
-  cat(sprintf("\n--- Step 7a2-smoke: Fit D SEM multi-seed at t_trunc=%.4g (%d seeds, no ATE) ---\n",
-              SMOKE_SEM_D_TRUNC, SMOKE_SEM_D_SEEDS))
+  cat(sprintf("\n--- Step 7a2-smoke: Fit D SEM multi-seed at t_trunc=%s (%d seeds, no ATE) ---\n",
+              fmt_t_trunc(SMOKE_SEM_D_TRUNC), SMOKE_SEM_D_SEEDS))
   biv_init_trunc <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   cap_tol <- 1e-4
   run_smoke_d_seed <- function(seed_i) {
     seed_i <- as.integer(seed_i)
     t0 <- proc.time()[["elapsed"]]
-    rng_label <- sprintf("smoke_d_trunc%.4g_seed%d", SMOKE_SEM_D_TRUNC, seed_i)
+    rng_label <- sprintf("smoke_d_trunc%s_seed%d", fmt_t_trunc(SMOKE_SEM_D_TRUNC), seed_i)
     cat(sprintf("    [smoke_d:%s] start pid=%d mem=%s\n",
                 rng_label, Sys.getpid(), mem_snapshot()))
     sem_local <- tryCatch({
@@ -4987,7 +5153,7 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
         sem_inner_iter_in = SEM_INNER_ITER,
         verbose_in = FALSE,
         sem_rng_label_in = rng_label,
-        label = sprintf("Fit D smoke trunc %.4g seed %d", SMOKE_SEM_D_TRUNC, seed_i)
+        label = sprintf("Fit D smoke trunc %s seed %d", fmt_t_trunc(SMOKE_SEM_D_TRUNC), seed_i)
       )
     }, error = function(e) {
       cat(sprintf("    [smoke_d:%s] SEM error: %s\n", rng_label, e$message))
@@ -5021,7 +5187,7 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
     list(
       seed = seed_i,
       rng_label = rng_label,
-      t_trunc_days = as.numeric(SMOKE_SEM_D_TRUNC),
+      t_trunc_days = t_trunc_num(SMOKE_SEM_D_TRUNC),
       status = status_local,
       elapsed_sec = as.numeric(elapsed),
       rho = as.numeric(rho_local),
@@ -5088,6 +5254,7 @@ if (SMOKE_SEM_D_SEEDS > 0L) {
       ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
       ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
       ETAS_P_LOWER_BOUND = ETAS_P_LOWER_BOUND,
+      ETAS_P_LOWER_BOUND_REQUESTED = ETAS_P_LOWER_BOUND_REQUESTED,
       ETAS_Q_LOWER_BOUND = ETAS_Q_LOWER_BOUND
     )
   ), out_file)
@@ -5103,11 +5270,12 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   cat("  Skipping Fit C/D t_trunc sensitivity (empty grid / disabled).\n")
 } else {
   cat(sprintf("  Refitting Fit C (naive) and Fit D (SEM) + AoN ATE at t_trunc days: %s\n",
-              paste(signif(T_TRUNC_SENS_DAYS, 4), collapse = ", ")))
+              fmt_t_trunc_grid(T_TRUNC_SENS_DAYS)))
   biv_init_trunc <- apply_pre_init_biv(init_bivariate_from_independent(A_ctrl, A_treat))
   run_t_trunc_sens_job <- function(t_trunc_val) {
     t0 <- proc.time()[["elapsed"]]
-    label <- sprintf("t_trunc=%.4g", t_trunc_val)
+    label <- sprintf("t_trunc=%s", fmt_t_trunc(t_trunc_val))
+    p_bound_local <- p_bound_for_trunc(t_trunc_val)
     cat(sprintf("    [t_trunc_sens:%s] start pid=%d mem=%s\n",
                 label, Sys.getpid(), mem_snapshot()))
     cap_tol <- 1e-4
@@ -5181,7 +5349,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
         control_background_pre_mass_ratio = CTRL_BG_PRE_MASS_RATIO,
         beta_gr = BETA_GR,
         enforce_finite_trigger_moments = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
-        p_lower_bound = ETAS_P_LOWER_BOUND,
+        p_lower_bound = p_bound_local,
         q_lower_bound = ETAS_Q_LOWER_BOUND,
         max_branching_radius = ETAS_BRANCHING_MAX,
         maxit = VANILLA_MAXIT, fixed_params = SENSITIVITY_FIXED_PARAMS, trace = 0,
@@ -5197,7 +5365,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
     ate_c_local <- NULL
     if (!is.null(c_params_local) && !isTRUE(c_explosive)) {
       ate_c_local <- tryCatch({
-        ate_at_trunc(c_params_local, sprintf("Fit C t_trunc %.4g", t_trunc_val))
+        ate_at_trunc(c_params_local, sprintf("Fit C t_trunc %s", fmt_t_trunc(t_trunc_val)))
       }, error = function(e) {
         cat(sprintf("    [t_trunc_sens:%s] Fit C ATE error: %s\n", label, e$message))
         NULL
@@ -5226,7 +5394,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
         verbose_in = FALSE,
         # Hold SEM RNG fixed across the trunc grid; vary only t_trunc.
         sem_rng_label_in = OK_BW_SEM_RNG_LABEL,
-        label = sprintf("Fit D t_trunc %.4g", t_trunc_val)
+        label = sprintf("Fit D t_trunc %s", fmt_t_trunc(t_trunc_val))
       )
     }, error = function(e) {
       cat(sprintf("    [t_trunc_sens:%s] SEM error: %s\n", label, e$message))
@@ -5240,7 +5408,7 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
     ate_local <- NULL
     if (!is.null(params_local) && !isTRUE(is_explosive)) {
       ate_local <- tryCatch({
-        ate_at_trunc(params_local, sprintf("Fit D t_trunc %.4g", t_trunc_val))
+        ate_at_trunc(params_local, sprintf("Fit D t_trunc %s", fmt_t_trunc(t_trunc_val)))
       }, error = function(e) {
         cat(sprintf("    [t_trunc_sens:%s] Fit D ATE error: %s\n", label, e$message))
         NULL
@@ -5260,7 +5428,9 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
       status_local, format(rho_local, digits = 6), mem_snapshot()
     ))
     list(
-      t_trunc_days = as.numeric(t_trunc_val),
+      t_trunc_days = t_trunc_num(t_trunc_val),
+      t_trunc_label = fmt_t_trunc(t_trunc_val),
+      p_lower_bound = p_bound_local,
       status = status_local,
       C_status = c_status_local,
       D_status = status_local,
@@ -5298,7 +5468,9 @@ if (length(T_TRUNC_SENS_DAYS) < 1L) {
   } else {
     lapply(trunc_jobs, run_t_trunc_sens_job)
   }
-  names(t_trunc_sensitivity) <- sprintf("t_trunc_%.4g", T_TRUNC_SENS_DAYS)
+  names(t_trunc_sensitivity) <- paste0(
+    "t_trunc_", vapply(as.list(T_TRUNC_SENS_DAYS), fmt_t_trunc, character(1))
+  )
   sens_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "ok"), logical(1)))
   sens_explosive <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$status, "explosive"), logical(1)))
   sens_c_ok <- sum(vapply(t_trunc_sensitivity, function(x) identical(x$C_status, "ok"), logical(1)))
@@ -5462,6 +5634,8 @@ results_pre_bootstrap <- list(
     SEM_START_FROM_C = SEM_START_FROM_C,
     SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
     SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
+    SEM_MAP_TELEPORT_ONCE = SEM_MAP_TELEPORT_ONCE,
+    SEM_LABEL_INIT = SEM_LABEL_INIT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
@@ -5472,6 +5646,7 @@ results_pre_bootstrap <- list(
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_NO_TRUNCATION = SEM_NO_TRUNCATION,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
@@ -5480,6 +5655,7 @@ results_pre_bootstrap <- list(
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
+    FIT_VARIABILITY_D_ONLY = FIT_VARIABILITY_D_ONLY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
     PRIMARY_PARTITION = PRIMARY_PARTITION,
@@ -5498,6 +5674,7 @@ results_pre_bootstrap <- list(
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_MAX_MAP_RELABEL_STEP_FRAC = SEM_MAX_MAP_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
@@ -5514,6 +5691,7 @@ results_pre_bootstrap <- list(
     ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
     ETAS_P_LOWER_BOUND = ETAS_P_LOWER_BOUND,
+    ETAS_P_LOWER_BOUND_REQUESTED = ETAS_P_LOWER_BOUND_REQUESTED,
     ETAS_Q_LOWER_BOUND = ETAS_Q_LOWER_BOUND,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,
@@ -6511,7 +6689,10 @@ if (isTRUE(BOOTSTRAP_ONLY)) {
   results_final$config$ETAS_BRANCHING_MAX <- ETAS_BRANCHING_MAX
   results_final$config$ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS <- ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS
   results_final$config$ETAS_P_LOWER_BOUND <- ETAS_P_LOWER_BOUND
+  results_final$config$ETAS_P_LOWER_BOUND_REQUESTED <- ETAS_P_LOWER_BOUND_REQUESTED
   results_final$config$ETAS_Q_LOWER_BOUND <- ETAS_Q_LOWER_BOUND
+  results_final$config$SEM_T_TRUNC_DAYS <- SEM_T_TRUNC_DAYS
+  results_final$config$SEM_NO_TRUNCATION <- SEM_NO_TRUNCATION
   results_final$config$BOOT_BRANCHING_MAX <- BOOT_BRANCHING_MAX
   results_final$config$RUN_BOOTSTRAP_ATE <- TRUE
   # Strip any interim recompute/bootstrap-only markers so the artifact matches
@@ -6827,6 +7008,8 @@ results <- list(
     SEM_START_FROM_C = SEM_START_FROM_C,
     SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL = SEM_INCLUDE_SEQUENTIAL_MAP_PROPOSAL,
     SEM_ALLOW_IMPROVING_TELEPORT = SEM_ALLOW_IMPROVING_TELEPORT,
+    SEM_MAP_TELEPORT_ONCE = SEM_MAP_TELEPORT_ONCE,
+    SEM_LABEL_INIT = SEM_LABEL_INIT,
     SEM_BIV_N_THREADS = SEM_BIV_N_THREADS,
     SEM_SINGLE_FLIP_FROM_ITER = SEM_SINGLE_FLIP_FROM_ITER,
     SEM_SELECTION_TEMPERATURE = SEM_SELECTION_TEMPERATURE,
@@ -6837,6 +7020,7 @@ results <- list(
     SEM_TEMPORAL_WEIGHT = SEM_TEMPORAL_WEIGHT,
     SEM_TEMPORAL_SCALE_DAYS = SEM_TEMPORAL_SCALE_DAYS,
     SEM_T_TRUNC_DAYS = SEM_T_TRUNC_DAYS,
+    SEM_NO_TRUNCATION = SEM_NO_TRUNCATION,
     SEM_T_TRUNC_SOURCE = SEM_T_TRUNC_SOURCE,
     SEM_T_TRUNC_REL = SEM_T_TRUNC_REL,
     T_TRUNC_SENS_DAYS = T_TRUNC_SENS_DAYS,
@@ -6845,6 +7029,7 @@ results <- list(
     RUN_FIT_VARIABILITY = RUN_FIT_VARIABILITY,
     FIT_VARIABILITY_REPS = FIT_VARIABILITY_REPS,
     FIT_VARIABILITY_CORES = FIT_VARIABILITY_CORES,
+    FIT_VARIABILITY_D_ONLY = FIT_VARIABILITY_D_ONLY,
     KDE_VARIANT_MODE = KDE_VARIANT_MODE,
     KDE_BW_METHOD = KDE_BW_METHOD,
     PRIMARY_PARTITION = PRIMARY_PARTITION,
@@ -6863,6 +7048,7 @@ results <- list(
     ATE_CONDITIONAL_ON_PRE = OK_ATE_CONDITIONAL_ON_PRE,
     ATE_CRN_BASE = OK_ATE_CRN_BASE,
     SEM_MAX_RELABEL_STEP_FRAC = SEM_MAX_RELABEL_STEP_FRAC,
+    SEM_MAX_MAP_RELABEL_STEP_FRAC = SEM_MAX_MAP_RELABEL_STEP_FRAC,
     SEM_FORCE_PARAM_UPDATE_FLIP_FRAC = SEM_FORCE_PARAM_UPDATE_FLIP_FRAC,
     ATE_N_SIMS = ATE_N_SIMS, ATE_WINDOW_DAYS = ATE_WINDOW_DAYS,
     ATE_BIVARIATE = OK_ATE_BIVARIATE, ATE_CONTRAST = OK_ATE_CONTRAST,
@@ -6879,6 +7065,7 @@ results <- list(
     ETAS_BRANCHING_MAX = ETAS_BRANCHING_MAX,
     ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS = ETAS_ENFORCE_FINITE_TRIGGER_MOMENTS,
     ETAS_P_LOWER_BOUND = ETAS_P_LOWER_BOUND,
+    ETAS_P_LOWER_BOUND_REQUESTED = ETAS_P_LOWER_BOUND_REQUESTED,
     ETAS_Q_LOWER_BOUND = ETAS_Q_LOWER_BOUND,
     BOOT_BRANCHING_MAX = BOOT_BRANCHING_MAX,
     BOOT_MAX_PRE_EVENTS = BOOT_MAX_PRE_EVENTS,

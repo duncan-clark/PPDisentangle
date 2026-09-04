@@ -93,3 +93,39 @@ test_that("truncated Omori simulation with p < 1 stays inside t_trunc", {
     expect_true(all(sim$t <= 8))
   }
 })
+
+test_that("t_trunc parser accepts none-tokens and rejects empty", {
+  parse_one <- PPDisentangle:::.etas_parse_t_trunc_days
+  parse_grid <- PPDisentangle:::.etas_parse_t_trunc_grid
+  fmt <- PPDisentangle:::.etas_format_t_trunc_days
+  p_bound <- PPDisentangle:::.etas_p_lower_bound_for_trunc
+
+  expect_null(parse_one("none"))
+  expect_null(parse_one("off"))
+  expect_null(parse_one(-1))
+  expect_null(parse_one(0))
+  expect_null(parse_one(Inf))
+  expect_equal(parse_one("250"), 250)
+  expect_equal(parse_one(90), 90)
+  expect_error(parse_one(""), "empty")
+  expect_error(parse_one("   "), "empty")
+  expect_null(parse_one("", empty_is_none = TRUE))
+
+  grid <- parse_grid("250, none, 500")
+  expect_equal(length(grid), 3L)
+  expect_equal(grid[[1]], 250)
+  expect_null(grid[[2]])
+  expect_equal(grid[[3]], 500)
+  expect_equal(parse_grid(list(90, NULL)), list(90, NULL))
+  expect_equal(parse_grid(""), list())
+
+  expect_equal(fmt(NULL), "none")
+  expect_equal(fmt("none"), "none")
+  expect_equal(fmt(250), "250")
+
+  expect_equal(p_bound(250, 0), 0)
+  expect_equal(p_bound(NULL, 0), PPDisentangle:::.etas_untruncated_p_min)
+  expect_equal(p_bound(NULL, 2), 2)
+  expect_false(PPDisentangle:::.etas_trunc_active(NULL))
+  expect_true(PPDisentangle:::.etas_trunc_active(250))
+})

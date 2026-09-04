@@ -31,6 +31,95 @@
   p > 1
 }
 
+# Untruncated Omori density is only a probability density for p > 1.
+.etas_untruncated_p_min <- 1.001
+
+.etas_t_trunc_none_tokens <- c(
+  "none", "off", "null", "na", "inf", "infinity",
+  "untruncated", "notrunc", "no-trunc", "no_trunc", "false"
+)
+
+# Parse a single t_trunc token. NULL means no temporal truncation.
+# Positive finite numbers are days. Tokens such as none/off/-1/0/Inf disable it.
+.etas_parse_t_trunc_days <- function(x, empty_is_none = FALSE) {
+  if (is.list(x) && !is.data.frame(x)) {
+    if (length(x) < 1L) {
+      if (isTRUE(empty_is_none)) return(NULL)
+      stop("t_trunc token is empty.")
+    }
+    x <- x[[1L]]
+  }
+  if (is.null(x) || length(x) < 1L) {
+    if (isTRUE(empty_is_none)) return(NULL)
+    stop("t_trunc token is empty.")
+  }
+  if (is.numeric(x) || is.integer(x)) {
+    v <- suppressWarnings(as.numeric(x)[1L])
+    if (!is.finite(v) || is.na(v) || v <= 0) return(NULL)
+    return(v)
+  }
+  s <- tolower(trimws(as.character(x)[1L]))
+  if (is.na(s) || !nzchar(s)) {
+    if (isTRUE(empty_is_none)) return(NULL)
+    stop("t_trunc token is empty.")
+  }
+  if (s %in% .etas_t_trunc_none_tokens) return(NULL)
+  v <- suppressWarnings(as.numeric(s))
+  if (!is.finite(v) || is.na(v)) {
+    stop("Unrecognized t_trunc token: ", as.character(x)[1L])
+  }
+  if (v <= 0) return(NULL)
+  v
+}
+
+.etas_parse_t_trunc_grid <- function(raw) {
+  if (is.null(raw) || length(raw) < 1L) return(list())
+  if (is.character(raw) && length(raw) == 1L && !nzchar(trimws(raw))) {
+    return(list())
+  }
+  if (is.list(raw) && !is.data.frame(raw)) {
+    return(lapply(raw, function(tok) .etas_parse_t_trunc_days(tok, empty_is_none = TRUE)))
+  }
+  if (is.numeric(raw) || is.integer(raw)) {
+    return(lapply(as.numeric(raw), function(tok) .etas_parse_t_trunc_days(tok, empty_is_none = TRUE)))
+  }
+  toks <- unlist(strsplit(paste(as.character(raw), collapse = ","), "[,;|\\s]+"), use.names = FALSE)
+  toks <- trimws(toks)
+  toks <- toks[nzchar(toks)]
+  lapply(toks, function(tok) .etas_parse_t_trunc_days(tok, empty_is_none = FALSE))
+}
+
+.etas_format_t_trunc_days <- function(x, digits = 4) {
+  parsed <- tryCatch(
+    .etas_parse_t_trunc_days(x, empty_is_none = TRUE),
+    error = function(e) NULL
+  )
+  if (!.etas_trunc_active(parsed)) return("none")
+  format(signif(as.numeric(parsed), digits), scientific = FALSE, trim = TRUE)
+}
+
+.etas_format_t_trunc_grid <- function(xs, digits = 4) {
+  if (is.null(xs) || length(xs) < 1L) return("(empty)")
+  paste(vapply(as.list(xs), function(x) .etas_format_t_trunc_days(x, digits = digits), character(1)),
+        collapse = ",")
+}
+
+.etas_p_lower_bound_for_trunc <- function(t_trunc, requested = 0) {
+  req <- suppressWarnings(as.numeric(requested)[1L])
+  if (!is.finite(req) || is.na(req) || req < 0) req <- 0
+  if (.etas_trunc_active(t_trunc)) return(req)
+  max(req, .etas_untruncated_p_min)
+}
+
+.etas_t_trunc_as_numeric <- function(x) {
+  parsed <- tryCatch(
+    .etas_parse_t_trunc_days(x, empty_is_none = TRUE),
+    error = function(e) NULL
+  )
+  if (!.etas_trunc_active(parsed)) return(NA_real_)
+  as.numeric(parsed)
+}
+
 .etas_param_vector <- function(params, context = "ETAS parameters") {
   pv <- if (is.list(params)) unlist(params, use.names = TRUE) else params
   if (is.null(names(pv))) {

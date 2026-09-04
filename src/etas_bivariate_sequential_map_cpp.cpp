@@ -4,12 +4,13 @@
 #include "omori_kernel.h"
 using namespace Rcpp;
 
-//' Sequential MAP process labels for bivariate ETAS
+//' Sequential MAP or Bernoulli process labels for bivariate ETAS
 //'
 //' Walks events in time order. Rows with \code{assignable==0} keep
-//' \code{process_id_init}. Assignable rows get
-//' \code{argmax_k \lambda_k(t_i | H_{t_i})} using already-assigned parents,
-//' matching the intensity in \code{etas_bivariate_loglik_cpp}.
+//' \code{process_id_init}. Assignable rows use already-assigned parents.
+//' If \code{sample_bernoulli} is false, assign
+//' \code{argmax_k \lambda_k(t_i | H_{t_i})}. If true, draw
+//' \code{Z_i ~ Bern(\lambda_1 / (\lambda_0 + \lambda_1))}.
 //'
 //' @keywords internal
 // [[Rcpp::export]]
@@ -26,7 +27,8 @@ IntegerVector etas_bivariate_sequential_map_cpp(
     double cc, double p, double D, double gamma_par, double q,
     double m0,
     double areaS_0, double areaS_1,
-    double t_trunc = -1.0) {
+    double t_trunc = -1.0,
+    bool sample_bernoulli = false) {
 
   const int n = t.size();
   IntegerVector pid(n);
@@ -113,7 +115,13 @@ IntegerVector etas_bivariate_sequential_map_cpp(
       }
     }
 
-    pid[i] = (lam1 > lam0) ? 1 : 0;
+    if (sample_bernoulli) {
+      const double den = lam0 + lam1;
+      const double p1 = (den > 0.0) ? (lam1 / den) : 0.5;
+      pid[i] = (R::unif_rand() < p1) ? 1 : 0;
+    } else {
+      pid[i] = (lam1 > lam0) ? 1 : 0;
+    }
     fill_parent_const(i);
   }
 

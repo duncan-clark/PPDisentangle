@@ -90,8 +90,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // etas_bivariate_sequential_map_cpp
-IntegerVector etas_bivariate_sequential_map_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector mag, IntegerVector assignable, IntegerVector process_id_init, NumericVector W_val_0, NumericVector W_val_1, double mu_0, double mu_1, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double areaS_0, double areaS_1, double t_trunc);
-RcppExport SEXP _PPDisentangle_etas_bivariate_sequential_map_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP magSEXP, SEXP assignableSEXP, SEXP process_id_initSEXP, SEXP W_val_0SEXP, SEXP W_val_1SEXP, SEXP mu_0SEXP, SEXP mu_1SEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP areaS_0SEXP, SEXP areaS_1SEXP, SEXP t_truncSEXP) {
+IntegerVector etas_bivariate_sequential_map_cpp(NumericVector t, NumericVector x, NumericVector y, NumericVector mag, IntegerVector assignable, IntegerVector process_id_init, NumericVector W_val_0, NumericVector W_val_1, double mu_0, double mu_1, double A_00, double alpha_m_00, double A_11, double alpha_m_11, double A_01, double alpha_m_01, double A_10, double alpha_m_10, double cc, double p, double D, double gamma_par, double q, double m0, double areaS_0, double areaS_1, double t_trunc, bool sample_bernoulli);
+RcppExport SEXP _PPDisentangle_etas_bivariate_sequential_map_cpp(SEXP tSEXP, SEXP xSEXP, SEXP ySEXP, SEXP magSEXP, SEXP assignableSEXP, SEXP process_id_initSEXP, SEXP W_val_0SEXP, SEXP W_val_1SEXP, SEXP mu_0SEXP, SEXP mu_1SEXP, SEXP A_00SEXP, SEXP alpha_m_00SEXP, SEXP A_11SEXP, SEXP alpha_m_11SEXP, SEXP A_01SEXP, SEXP alpha_m_01SEXP, SEXP A_10SEXP, SEXP alpha_m_10SEXP, SEXP ccSEXP, SEXP pSEXP, SEXP DSEXP, SEXP gamma_parSEXP, SEXP qSEXP, SEXP m0SEXP, SEXP areaS_0SEXP, SEXP areaS_1SEXP, SEXP t_truncSEXP, SEXP sample_bernoulliSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -122,7 +122,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type areaS_0(areaS_0SEXP);
     Rcpp::traits::input_parameter< double >::type areaS_1(areaS_1SEXP);
     Rcpp::traits::input_parameter< double >::type t_trunc(t_truncSEXP);
-    rcpp_result_gen = Rcpp::wrap(etas_bivariate_sequential_map_cpp(t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc));
+    Rcpp::traits::input_parameter< bool >::type sample_bernoulli(sample_bernoulliSEXP);
+    rcpp_result_gen = Rcpp::wrap(etas_bivariate_sequential_map_cpp(t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc, sample_bernoulli));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -393,7 +394,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_PPDisentangle_etas_bivariate_loglik_batch_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_batch_cpp, 30},
     {"_PPDisentangle_etas_bivariate_loglik_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_loglik_cpp, 29},
-    {"_PPDisentangle_etas_bivariate_sequential_map_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_sequential_map_cpp, 27},
+    {"_PPDisentangle_etas_bivariate_sequential_map_cpp", (DL_FUNC) &_PPDisentangle_etas_bivariate_sequential_map_cpp, 28},
     {"_PPDisentangle_sim_etas_bivariate_children_cpp", (DL_FUNC) &_PPDisentangle_sim_etas_bivariate_children_cpp, 29},
     {"_PPDisentangle_etas_loglik_inhom_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_cpp, 17},
     {"_PPDisentangle_etas_loglik_inhom_filtration_cpp", (DL_FUNC) &_PPDisentangle_etas_loglik_inhom_filtration_cpp, 21},

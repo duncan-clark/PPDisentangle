@@ -916,10 +916,11 @@ loglik_etas_bivariate_batch <- function(params,
 #' @param t_trunc Temporal truncation; \code{NULL} disables.
 #' @return Integer vector of process ids (0 = control, 1 = treated).
 #' @keywords internal
-sequential_map_etas_bivariate <- function(params, t, x, y, mag,
-                                          assignable, process_id_init,
-                                          W0, W1, areaS_0, areaS_1,
-                                          m0, t_trunc = NULL) {
+.sequential_label_etas_bivariate <- function(params, t, x, y, mag,
+                                             assignable, process_id_init,
+                                             W0, W1, areaS_0, areaS_1,
+                                             m0, t_trunc = NULL,
+                                             sample_bernoulli = FALSE) {
   pv <- if (is.list(params) && !is.null(names(params))) unlist(params) else {
     v <- as.numeric(params)
     if (is.null(names(v))) names(v) <- .etas_bivariate_par_names
@@ -940,7 +941,36 @@ sequential_map_etas_bivariate <- function(params, t, x, y, mag,
     cc = pv[["c"]], p = pv[["p"]], D = pv[["D"]],
     gamma_par = if (is.finite(pv[["gamma"]])) pv[["gamma"]] else 0,
     q = pv[["q"]],
-    m0 = m0, areaS_0 = areaS_0, areaS_1 = areaS_1, t_trunc = tt
+    m0 = m0, areaS_0 = areaS_0, areaS_1 = areaS_1, t_trunc = tt,
+    sample_bernoulli = isTRUE(sample_bernoulli)
+  )
+}
+
+sequential_map_etas_bivariate <- function(params, t, x, y, mag,
+                                          assignable, process_id_init,
+                                          W0, W1, areaS_0, areaS_1,
+                                          m0, t_trunc = NULL) {
+  .sequential_label_etas_bivariate(
+    params, t, x, y, mag, assignable, process_id_init,
+    W0, W1, areaS_0, areaS_1, m0, t_trunc = t_trunc,
+    sample_bernoulli = FALSE
+  )
+}
+
+#' Sequential Bernoulli process labels for bivariate ETAS
+#'
+#' Same walk as \code{sequential_map_etas_bivariate}, but each assignable
+#' event is drawn \code{Z_i ~ Bern(\lambda_1 / (\lambda_0 + \lambda_1))}
+#' using already-sampled parents.
+#' @keywords internal
+sequential_bernoulli_etas_bivariate <- function(params, t, x, y, mag,
+                                               assignable, process_id_init,
+                                               W0, W1, areaS_0, areaS_1,
+                                               m0, t_trunc = NULL) {
+  .sequential_label_etas_bivariate(
+    params, t, x, y, mag, assignable, process_id_init,
+    W0, W1, areaS_0, areaS_1, m0, t_trunc = t_trunc,
+    sample_bernoulli = TRUE
   )
 }
 

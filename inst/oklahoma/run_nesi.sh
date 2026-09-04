@@ -19,6 +19,9 @@ PP_SEM_N_ITER="${PP_SEM_N_ITER:-}"
 PP_SEM_N_LABELLINGS="${PP_SEM_N_LABELLINGS:-}"
 PP_SEM_OUTER_MAXIT="${PP_SEM_OUTER_MAXIT:-}"
 PP_SEM_OUTER_MAXIT_BIV="${PP_SEM_OUTER_MAXIT_BIV:-}"
+# Positive days, or none/off/-1 for untruncated Omori (forces p > 1).
+# Record a pre-set env so paper mode does not overwrite none/off.
+if [ -n "${PP_SEM_T_TRUNC_DAYS+x}" ]; then SEM_T_TRUNC_FROM_ENV=1; else SEM_T_TRUNC_FROM_ENV=0; fi
 PP_SEM_T_TRUNC_DAYS="${PP_SEM_T_TRUNC_DAYS:-90}"
 PP_SEM_T_TRUNC_REL="${PP_SEM_T_TRUNC_REL:-0.05}"
 PP_T_TRUNC_SENS_DAYS="${PP_T_TRUNC_SENS_DAYS:-1,5,7,10,14,21}"
@@ -29,6 +32,10 @@ PP_SEM_SELECTION_TEMPERATURE="${PP_SEM_SELECTION_TEMPERATURE:-0.2}"
 PP_SEM_CHANGE_FACTOR_MIN_MULT="${PP_SEM_CHANGE_FACTOR_MIN_MULT:-1.0}"
 PP_SEM_CHANGE_FACTOR_MAX_MULT="${PP_SEM_CHANGE_FACTOR_MAX_MULT:-5.0}"
 PP_SEM_MAX_RELABEL_STEP_FRAC="${PP_SEM_MAX_RELABEL_STEP_FRAC:-0.05}"
+PP_SEM_ALLOW_IMPROVING_TELEPORT="${PP_SEM_ALLOW_IMPROVING_TELEPORT:-}"
+PP_SEM_MAP_TELEPORT_ONCE="${PP_SEM_MAP_TELEPORT_ONCE:-}"
+PP_SEM_LABEL_INIT="${PP_SEM_LABEL_INIT:-}"
+PP_SEM_SEQUENTIAL_MAP_PROPOSAL="${PP_SEM_SEQUENTIAL_MAP_PROPOSAL:-}"
 PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="${PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC:-0.05}"
 PP_SEM_MONOTONE_COMPLETE_LL="${PP_SEM_MONOTONE_COMPLETE_LL:-0}"
 PP_SEM_START_FROM_C="${PP_SEM_START_FROM_C:-0}"
@@ -64,6 +71,7 @@ PP_FIT_VARIABILITY_REPS="${PP_FIT_VARIABILITY_REPS:-}"
 PP_FIT_VARIABILITY_CORES="${PP_FIT_VARIABILITY_CORES:-}"
 PP_FIT_VARIABILITY_PATCH_FILE="${PP_FIT_VARIABILITY_PATCH_FILE:-}"
 PP_FIT_VARIABILITY_ONLY="${PP_FIT_VARIABILITY_ONLY:-0}"
+PP_FIT_VARIABILITY_D_ONLY="${PP_FIT_VARIABILITY_D_ONLY:-0}"
 PP_BOOTSTRAP_PATCH_FILE="${PP_BOOTSTRAP_PATCH_FILE:-}"
 PP_BOOTSTRAP_ONLY="${PP_BOOTSTRAP_ONLY:-0}"
 PP_T_TRUNC_SENS_PATCH_FILE="${PP_T_TRUNC_SENS_PATCH_FILE:-}"
@@ -89,7 +97,7 @@ SEM_INNER_EXPLICIT=0
 SEM_WARMSTART_EXPLICIT=0
 SEM_N_ITER_EXPLICIT=0
 SEM_N_LABELLINGS_EXPLICIT=0
-SEM_T_TRUNC_EXPLICIT=0
+SEM_T_TRUNC_EXPLICIT="${SEM_T_TRUNC_FROM_ENV:-0}"
 SEM_OUTER_MAXIT_EXPLICIT=0
 SEM_OUTER_MAXIT_BIV_EXPLICIT=0
 SEM_OPTIM_METHOD_EXPLICIT=0
@@ -132,9 +140,9 @@ while [[ "$#" -gt 0 ]]; do
     --sem-n-labellings) PP_SEM_N_LABELLINGS="$2"; SEM_N_LABELLINGS_EXPLICIT=1; shift 2 ;;
     --sem-outer-maxit) PP_SEM_OUTER_MAXIT="$2"; SEM_OUTER_MAXIT_EXPLICIT=1; shift 2 ;;
     --sem-outer-maxit-biv) PP_SEM_OUTER_MAXIT_BIV="$2"; SEM_OUTER_MAXIT_BIV_EXPLICIT=1; shift 2 ;;
-    --sem-t-trunc-days) PP_SEM_T_TRUNC_DAYS="$2"; SEM_T_TRUNC_EXPLICIT=1; shift 2 ;;
+    --sem-t-trunc-days) PP_SEM_T_TRUNC_DAYS="$2"; SEM_T_TRUNC_EXPLICIT=1; shift 2 ;; # days or none/off/-1
     --sem-t-trunc-rel) PP_SEM_T_TRUNC_REL="$2"; shift 2 ;;
-    --t-trunc-sens-days) PP_T_TRUNC_SENS_DAYS="$2"; shift 2 ;;
+    --t-trunc-sens-days) PP_T_TRUNC_SENS_DAYS="$2"; shift 2 ;; # e.g. 250,500,none
     --run-t-trunc-sensitivity) PP_RUN_T_TRUNC_SENSITIVITY="$2"; shift 2 ;;
     --t-trunc-sens-patch-file) PP_T_TRUNC_SENS_PATCH_FILE="$2"; shift 2 ;;
     --t-trunc-sens-only) PP_T_TRUNC_SENS_ONLY=1; shift ;;
@@ -146,6 +154,10 @@ while [[ "$#" -gt 0 ]]; do
     --sem-change-factor-min-mult) PP_SEM_CHANGE_FACTOR_MIN_MULT="$2"; SEM_MIN_MULT_EXPLICIT=1; shift 2 ;;
     --sem-change-factor-max-mult) PP_SEM_CHANGE_FACTOR_MAX_MULT="$2"; SEM_MAX_MULT_EXPLICIT=1; shift 2 ;;
     --sem-max-relabel-step-frac) PP_SEM_MAX_RELABEL_STEP_FRAC="$2"; shift 2 ;;
+    --sem-allow-improving-teleport) PP_SEM_ALLOW_IMPROVING_TELEPORT="$2"; shift 2 ;;
+    --sem-map-teleport-once) PP_SEM_MAP_TELEPORT_ONCE="$2"; shift 2 ;;
+    --sem-label-init) PP_SEM_LABEL_INIT="$2"; shift 2 ;;
+    --sem-sequential-map-proposal) PP_SEM_SEQUENTIAL_MAP_PROPOSAL="$2"; shift 2 ;;
     --sem-force-param-update-flip-frac) PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="$2"; shift 2 ;;
     --sem-monotone-complete-ll) PP_SEM_MONOTONE_COMPLETE_LL="$2"; shift 2 ;;
     --sem-start-from-c) PP_SEM_START_FROM_C="$2"; shift 2 ;;
@@ -181,6 +193,7 @@ while [[ "$#" -gt 0 ]]; do
     --fit-variability-cores) PP_FIT_VARIABILITY_CORES="$2"; FIT_VARIABILITY_CORES_EXPLICIT=1; shift 2 ;;
     --fit-variability-patch-file) PP_FIT_VARIABILITY_PATCH_FILE="$2"; shift 2 ;;
     --fit-variability-only) PP_FIT_VARIABILITY_ONLY=1; shift ;;
+    --fit-variability-d-only) PP_FIT_VARIABILITY_D_ONLY=1; shift ;;
     --bootstrap-patch-file) PP_BOOTSTRAP_PATCH_FILE="$2"; shift 2 ;;
     --bootstrap-only) PP_BOOTSTRAP_ONLY=1; shift ;;
     --ate-n-sims) PP_ATE_N_SIMS="$2"; ATE_N_SIMS_EXPLICIT=1; shift 2 ;;
@@ -252,6 +265,49 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
       if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
       if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="12:00:00"; fi
+      ;;
+    paper-cd|paper_cd|paper-overnight|paper_overnight)
+      # Publication science, C/D only: Bernoulli sequential init, then
+      # discrepancy polish. Overnight-safe inners (not paper 1250/1000).
+      apply_paper_science_suite
+      PP_CD_ONLY=1
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=200; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=200; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=200; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=512; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="full"; fi
+      if [ "$BOOT_OUTER_CORES_EXPLICIT" -ne 1 ]; then PP_BOOT_OUTER_CORES=64; fi
+      if [ -z "${PP_SEM_LABEL_INIT}" ]; then PP_SEM_LABEL_INIT="sequential_bernoulli"; fi
+      if [ -z "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL}" ]; then PP_SEM_SEQUENTIAL_MAP_PROPOSAL=false; fi
+      if [ -z "${PP_SEM_MAP_TELEPORT_ONCE}" ]; then PP_SEM_MAP_TELEPORT_ONCE=false; fi
+      if [ -z "${PP_SEM_ALLOW_IMPROVING_TELEPORT}" ]; then PP_SEM_ALLOW_IMPROVING_TELEPORT=false; fi
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="16:00:00"; fi
+      ;;
+    init-smoke|init_smoke|bernoulli-smoke|bernoulli_smoke|bernoulli-init-smoke)
+      # Same C MLE, 64 independent sequential-Bernoulli D inits, 2000-step polish.
+      # No bootstrap or KDE/partition grids. Histogram of D ATEs is the deliverable.
+      apply_paper_science_suite
+      PP_CD_ONLY=1
+      PP_RUN_SENSITIVITY=0
+      RUN_SENS_EXPLICIT=1
+      PP_RUN_PARTITION_SENSITIVITY=0
+      PP_RUN_T_TRUNC_SENSITIVITY=0
+      if [ "$SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SEM_INNER=2000; fi
+      if [ "$SENS_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_SENS_SEM_INNER=2000; fi
+      if [ "$BOOT_SEM_INNER_EXPLICIT" -ne 1 ]; then PP_BOOT_SEM_INNER=2000; fi
+      if [ "$BOOT_REPS_EXPLICIT" -ne 1 ]; then PP_BOOT_REPS=0; fi
+      if [ "$BOOT_REFIT_SCOPE_EXPLICIT" -ne 1 ]; then PP_BOOT_REFIT_SCOPE="none"; fi
+      if [ "$RUN_FIT_VARIABILITY_EXPLICIT" -ne 1 ]; then PP_RUN_FIT_VARIABILITY=1; fi
+      if [ "$FIT_VARIABILITY_REPS_EXPLICIT" -ne 1 ]; then PP_FIT_VARIABILITY_REPS=64; fi
+      if [ "$FIT_VARIABILITY_CORES_EXPLICIT" -ne 1 ]; then PP_FIT_VARIABILITY_CORES=64; fi
+      if [ "$ATE_N_SIMS_EXPLICIT" -ne 1 ]; then PP_ATE_N_SIMS=200; fi
+      if [ -z "${PP_SEM_LABEL_INIT}" ]; then PP_SEM_LABEL_INIT="sequential_bernoulli"; fi
+      if [ -z "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL}" ]; then PP_SEM_SEQUENTIAL_MAP_PROPOSAL=false; fi
+      if [ -z "${PP_SEM_MAP_TELEPORT_ONCE}" ]; then PP_SEM_MAP_TELEPORT_ONCE=false; fi
+      if [ -z "${PP_SEM_ALLOW_IMPROVING_TELEPORT}" ]; then PP_SEM_ALLOW_IMPROVING_TELEPORT=false; fi
+      PP_FIT_VARIABILITY_D_ONLY=1
+      PP_SKIP_FULL_REPORT=0
+      if [ -z "${PP_TIME:-}" ] || [ "$PP_TIME" = "72:00:00" ]; then PP_TIME="08:00:00"; fi
       ;;
     quick)
       if [ "$SETUP_TEST_EXPLICIT" -ne 1 ]; then PP_SETUP_TEST=0; fi
@@ -459,8 +515,18 @@ if [ -n "$PP_MODE" ] && [ -z "${SLURM_JOB_ID:-}" ]; then
       if [ -z "${PP_SKIP_CONTROL_SNAPSHOTS}" ]; then PP_SKIP_CONTROL_SNAPSHOTS=1; fi
       ;;
     *)
-      echo "Unknown --mode '$PP_MODE' (expected: paper | paper-quick | test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary | cd-only | univ-kde-only)"
+      echo "Unknown --mode '$PP_MODE' (expected: paper | paper-quick | paper-cd | init-smoke | test | quick | full | fit-variability | fit-variability-only | bootstrap-only | t-trunc-sens-only | smoke-sem-d | cd-primary | cd-only | univ-kde-only)"
       exit 1
+      ;;
+  esac
+fi
+
+# Sequential init already seeds labels; keep hard MAP out of the proposal
+# pool unless the caller explicitly asked for it.
+if [ -z "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL}" ]; then
+  case "$(echo "${PP_SEM_LABEL_INIT:-current}" | tr '[:upper:]' '[:lower:]')" in
+    sequential_bernoulli|bernoulli|seq_bernoulli|soft|sequential_map|map|seq_map|hard_map)
+      PP_SEM_SEQUENTIAL_MAP_PROPOSAL=false
       ;;
   esac
 fi
@@ -662,8 +728,8 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   export PP_SEM_WORKER_LOGS PP_SEM_WORKER_LOG_VERBOSE PP_SEM_WORKER_LOG_SPLIT PP_SEM_TIMING_VERBOSE PP_SEM_PROPOSAL_VERBOSE
   export PP_SIM_PROGRESS_EVERY PP_SENS_SEM_INNER PP_BOOT_SEM_INNER PP_BOOT_REFIT_SCOPE PP_BOOT_TARGETS PP_KDE_VARIANT_MODE PP_KDE_BW_METHOD PP_KDE_BW_SENS_KM PP_PRIMARY_PARTITION PP_RUN_PARTITION_SENSITIVITY
   export PP_BOOT_OUTER_CORES PP_ATE_N_SIMS PP_ATE_BIVARIATE PP_ATE_CONTRAST PP_ATE_SCENARIO
-  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_SMOKE_SEM_D_SEEDS PP_SMOKE_SEM_D_TRUNC PP_SKIP_FULL_REPORT PP_CD_ONLY PP_UNIV_KDE_ONLY PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
-  export PP_SEM_CHANGE_FACTOR_MIN_MULT PP_SEM_CHANGE_FACTOR_MAX_MULT PP_SEM_MAX_RELABEL_STEP_FRAC PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC
+  export PP_RUN_SENSITIVITY PP_RUN_FIT_VARIABILITY PP_FIT_VARIABILITY_REPS PP_FIT_VARIABILITY_CORES PP_FIT_VARIABILITY_PATCH_FILE PP_FIT_VARIABILITY_ONLY PP_FIT_VARIABILITY_D_ONLY PP_BOOTSTRAP_PATCH_FILE PP_BOOTSTRAP_ONLY PP_T_TRUNC_SENS_PATCH_FILE PP_T_TRUNC_SENS_ONLY PP_SMOKE_SEM_D_SEEDS PP_SMOKE_SEM_D_TRUNC PP_SKIP_FULL_REPORT PP_CD_ONLY PP_UNIV_KDE_ONLY PP_MEM PP_TIME PP_SEM_OPTIM_METHOD PP_SEM_SELECTION_TEMPERATURE
+  export PP_SEM_CHANGE_FACTOR_MIN_MULT PP_SEM_CHANGE_FACTOR_MAX_MULT PP_SEM_MAX_RELABEL_STEP_FRAC PP_SEM_ALLOW_IMPROVING_TELEPORT PP_SEM_MAP_TELEPORT_ONCE PP_SEM_LABEL_INIT PP_SEM_SEQUENTIAL_MAP_PROPOSAL PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC
   export PP_SEM_MONOTONE_COMPLETE_LL PP_SEM_START_FROM_C PP_SEM_BIV_N_THREADS PP_SEM_SINGLE_FLIP_FROM_ITER
   export PP_RUN_SEM_PILOT PP_SEM_PILOT_INNER PP_SEM_PILOT_CORES PP_SEM_PILOT_MAX_COMBOS PP_SEM_PILOT_CHANGE_FACTORS
   export PP_SEM_PILOT_MIN_MULTS PP_SEM_PILOT_MAX_MULTS PP_SEM_PILOT_TEMPS PP_SETUP_TEST
@@ -700,7 +766,7 @@ echo "CPUs: ${SLURM_CPUS_PER_TASK:-$PP_CORES}"
 echo "boot_reps=$PP_BOOT_REPS sem_n_iter=$PP_SEM_N_ITER sem_outer_maxit=$PP_SEM_OUTER_MAXIT sem_outer_maxit_biv=$PP_SEM_OUTER_MAXIT_BIV sem_t_trunc_days=$PP_SEM_T_TRUNC_DAYS sem_t_trunc_rel=$PP_SEM_T_TRUNC_REL sem_temporal_weight=$PP_SEM_TEMPORAL_WEIGHT sem_warmstart_fixed=$PP_SEM_WARMSTART_FIXED sem_optim=$PP_SEM_OPTIM_METHOD sem_temp=$PP_SEM_SELECTION_TEMPERATURE sem_cf_min=$PP_SEM_CHANGE_FACTOR_MIN_MULT sem_cf_max=$PP_SEM_CHANGE_FACTOR_MAX_MULT run_sem_pilot=$PP_RUN_SEM_PILOT sem_pilot_inner=$PP_SEM_PILOT_INNER sem_pilot_cores=${PP_SEM_PILOT_CORES:-auto} sem_pilot_max_combos=$PP_SEM_PILOT_MAX_COMBOS sem_worker_logs=$PP_SEM_WORKER_LOGS sem_worker_log_verbose=$PP_SEM_WORKER_LOG_VERBOSE sem_worker_log_split=$PP_SEM_WORKER_LOG_SPLIT sem_timing_verbose=$PP_SEM_TIMING_VERBOSE sem_proposal_verbose=$PP_SEM_PROPOSAL_VERBOSE sim_progress_every=$PP_SIM_PROGRESS_EVERY sem_inner=$PP_SEM_INNER sens_inner=$PP_SENS_SEM_INNER boot_inner=$PP_BOOT_SEM_INNER boot_refit_scope=$PP_BOOT_REFIT_SCOPE targets=$PP_BOOT_TARGETS kde_variants=$PP_KDE_VARIANT_MODE kde_bw=$PP_KDE_BW_METHOD primary_partition=$PP_PRIMARY_PARTITION kde_bw_sens_km=${PP_KDE_BW_SENS_KM:-} run_partition_sens=${PP_RUN_PARTITION_SENSITIVITY:-auto} run_fit_variability=$PP_RUN_FIT_VARIABILITY fit_variability_reps=$PP_FIT_VARIABILITY_REPS fit_variability_cores=$PP_FIT_VARIABILITY_CORES fit_variability_only=$PP_FIT_VARIABILITY_ONLY"
 echo "setup_test=$PP_SETUP_TEST mode=${PP_MODE:-manual}"
 echo "seed=$PP_SEED (fit jobs RNG de-correlated by model; bootstrap RNG de-correlated by replicate)"
-echo "ENV CHECK: PP_SEM_INNER=$PP_SEM_INNER | PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER | PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER | PP_SEM_MONOTONE_COMPLETE_LL=$PP_SEM_MONOTONE_COMPLETE_LL | PP_SEM_START_FROM_C=$PP_SEM_START_FROM_C | PP_SEM_BIV_N_THREADS=$PP_SEM_BIV_N_THREADS | PP_SEM_SINGLE_FLIP_FROM_ITER=${PP_SEM_SINGLE_FLIP_FROM_ITER:-}"
+echo "ENV CHECK: PP_SEM_INNER=$PP_SEM_INNER | PP_SENS_SEM_INNER=$PP_SENS_SEM_INNER | PP_BOOT_SEM_INNER=$PP_BOOT_SEM_INNER | PP_SEM_MONOTONE_COMPLETE_LL=$PP_SEM_MONOTONE_COMPLETE_LL | PP_SEM_START_FROM_C=$PP_SEM_START_FROM_C | PP_SEM_BIV_N_THREADS=$PP_SEM_BIV_N_THREADS | PP_SEM_SINGLE_FLIP_FROM_ITER=${PP_SEM_SINGLE_FLIP_FROM_ITER:-} | PP_SEM_ALLOW_IMPROVING_TELEPORT=${PP_SEM_ALLOW_IMPROVING_TELEPORT:-} | PP_SEM_MAP_TELEPORT_ONCE=${PP_SEM_MAP_TELEPORT_ONCE:-} | PP_SEM_LABEL_INIT=${PP_SEM_LABEL_INIT:-} | PP_SEM_SEQUENTIAL_MAP_PROPOSAL=${PP_SEM_SEQUENTIAL_MAP_PROPOSAL:-}"
 echo ""
 
 # Shared library path only; guard package install lock collisions.
@@ -943,6 +1009,27 @@ export OK_SEM_SELECTION_TEMPERATURE="$PP_SEM_SELECTION_TEMPERATURE"
 export OK_SEM_CHANGE_FACTOR_MIN_MULT="$PP_SEM_CHANGE_FACTOR_MIN_MULT"
 export OK_SEM_CHANGE_FACTOR_MAX_MULT="$PP_SEM_CHANGE_FACTOR_MAX_MULT"
 export OK_SEM_MAX_RELABEL_STEP_FRAC="$PP_SEM_MAX_RELABEL_STEP_FRAC"
+if [ -n "${PP_SEM_ALLOW_IMPROVING_TELEPORT:-}" ]; then
+  case "$(echo "$PP_SEM_ALLOW_IMPROVING_TELEPORT" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|n|off) export OK_SEM_ALLOW_IMPROVING_TELEPORT=false ;;
+    *) export OK_SEM_ALLOW_IMPROVING_TELEPORT=true ;;
+  esac
+fi
+if [ -n "${PP_SEM_MAP_TELEPORT_ONCE:-}" ]; then
+  case "$(echo "$PP_SEM_MAP_TELEPORT_ONCE" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|n|off) export OK_SEM_MAP_TELEPORT_ONCE=false ;;
+    *) export OK_SEM_MAP_TELEPORT_ONCE=true ;;
+  esac
+fi
+if [ -n "${PP_SEM_LABEL_INIT:-}" ]; then
+  export OK_SEM_LABEL_INIT="$PP_SEM_LABEL_INIT"
+fi
+if [ -n "${PP_SEM_SEQUENTIAL_MAP_PROPOSAL:-}" ]; then
+  case "$(echo "$PP_SEM_SEQUENTIAL_MAP_PROPOSAL" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|n|off) export OK_SEM_SEQUENTIAL_MAP_PROPOSAL=false ;;
+    *) export OK_SEM_SEQUENTIAL_MAP_PROPOSAL=true ;;
+  esac
+fi
 export OK_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC="$PP_SEM_FORCE_PARAM_UPDATE_FLIP_FRAC"
 if [ "$PP_SEM_MONOTONE_COMPLETE_LL" = "1" ] || [ "$PP_SEM_MONOTONE_COMPLETE_LL" = "true" ] || [ "$PP_SEM_MONOTONE_COMPLETE_LL" = "yes" ]; then
   export OK_SEM_MONOTONE_COMPLETE_LL=true
@@ -988,6 +1075,11 @@ if [ "${PP_FIT_VARIABILITY_ONLY:-0}" = "1" ] || [ "${PP_FIT_VARIABILITY_ONLY:-0}
   export OK_FIT_VARIABILITY_ONLY=true
 else
   export OK_FIT_VARIABILITY_ONLY=false
+fi
+if [ "${PP_FIT_VARIABILITY_D_ONLY:-0}" = "1" ] || [ "${PP_FIT_VARIABILITY_D_ONLY:-0}" = "true" ]; then
+  export OK_FIT_VARIABILITY_D_ONLY=true
+else
+  export OK_FIT_VARIABILITY_D_ONLY=false
 fi
 if [ -n "${PP_BOOTSTRAP_PATCH_FILE:-}" ]; then
   export OK_BOOTSTRAP_PATCH_FILE="$PP_BOOTSTRAP_PATCH_FILE"

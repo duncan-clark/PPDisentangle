@@ -318,6 +318,14 @@ fmt_scaled_num <- function(x, digits = 2) {
   as.character(round(xv[[1]], digits))
 }
 
+# NULL / none / non-positive SEM_T_TRUNC_DAYS means untruncated Omori (p > 1).
+fmt_t_trunc_cfg <- function(x, digits = 4) {
+  tryCatch(
+    PPDisentangle:::.etas_format_t_trunc_days(x, digits = digits),
+    error = function(e) "none"
+  )
+}
+
 has_fit <- function(fit_name) {
   !is.null(results[[fit_name]])
 }
@@ -826,7 +834,10 @@ $$
 
 so $p$ directly controls how much triggering mass remains inside the truncation
 window. Larger $p$ concentrates mass near zero lag (less tail), smaller $p$
-(still $>1$) leaves heavier temporal tails.
+leaves heavier temporal tails. With a finite horizon any $p>0$ is a valid
+density. When truncation is off (`SEM_T_TRUNC_DAYS = none`), the untruncated
+Omori law is used and the fit enforces $p>1$. Do not compare log-likelihoods
+across different truncation settings.
 
 The spatial exponent $q$ does **not** interact with temporal truncation directly.
 It continues to govern spatial tail decay in
@@ -857,10 +868,13 @@ kernel_rel_at_ttr <- if (is.finite(ttr) && is.finite(c_val) && is.finite(p_val) 
   (1 + ttr / c_val)^(-p_val)
 } else NA_real_
 
+p_bound <- safe_num(cfg$ETAS_P_LOWER_BOUND)
 trunc_df <- data.frame(
   Setting = c(
     "SEM t_trunc (days)",
     "SEM t_trunc source",
+    "Untruncated Omori (p > 1)",
+    "ETAS p lower bound",
     "Legacy auto-trunc rel level (unused)",
     "Structural c (Omori offset)",
     "Structural p (temporal exponent)",
@@ -870,8 +884,10 @@ trunc_df <- data.frame(
     "Relative Omori kernel at t_trunc: ((t_trunc+c)/c)^(-p)"
   ),
   Value = c(
-    if (is.finite(ttr)) sprintf("%.4f", ttr) else "N/A",
+    fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS),
     t_source,
+    if (isTRUE(cfg$SEM_NO_TRUNCATION)) "yes" else if (is.finite(ttr)) "no" else "N/A",
+    if (is.finite(p_bound)) sprintf("%.4f", p_bound) else "N/A",
     if (is.finite(rel_target)) sprintf("%.4f", rel_target) else "N/A",
     if (is.finite(c_val)) sprintf("%.4f", c_val) else "N/A",
     if (is.finite(p_val)) sprintf("%.4f", p_val) else "N/A",
@@ -932,7 +948,9 @@ if (!is.null(trunc_sens) && length(trunc_sens) >= 1L) {
   })
   trunc_sens_df <- do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
   if (!is.null(trunc_sens_df) && nrow(trunc_sens_df) >= 1L) {
-    trunc_sens_df <- trunc_sens_df[order(trunc_sens_df$t_trunc_days), , drop = FALSE]
+    trunc_ord <- trunc_sens_df$t_trunc_days
+    trunc_ord[!is.finite(trunc_ord)] <- Inf
+    trunc_sens_df <- trunc_sens_df[order(trunc_ord), , drop = FALSE]
     trunc_sens_has_c <- any(is.finite(trunc_sens_df$C_mean_saved) |
                               (!is.na(trunc_sens_df$C_status) & nzchar(trunc_sens_df$C_status)))
     plot_rows <- list(
@@ -973,13 +991,11 @@ if (is.null(trunc_sens_df)) {
   } else {
     "Fit D (SEM biv+KDE) all-or-nothing ATE vs temporal truncation horizon."
   }
-  if (is.finite(trunc_sens_main_ttr)) {
-    cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3f days.", trunc_sens_main_ttr))
-  }
+  cap <- paste0(cap, sprintf(" Main-run t_trunc=%s.", fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS)))
   tbl <- if (isTRUE(trunc_sens_has_c)) {
     trunc_sens_df |>
       transmute(
-        `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
+        `t_trunc (days)` = ifelse(is.finite(t_trunc_days), sprintf("%.3g", t_trunc_days), "none"),
         `C status` = ifelse(is.na(C_status) | !nzchar(C_status), "NA", C_status),
         `C mean saved` = ifelse(is.finite(C_mean_saved), sprintf("%.1f", C_mean_saved), "NA"),
         `C SD` = ifelse(is.finite(C_sd_saved), sprintf("%.1f", C_sd_saved), "NA"),
@@ -992,7 +1008,7 @@ if (is.null(trunc_sens_df)) {
   } else {
     trunc_sens_df |>
       transmute(
-        `t_trunc (days)` = sprintf("%.3g", t_trunc_days),
+        `t_trunc (days)` = ifelse(is.finite(t_trunc_days), sprintf("%.3g", t_trunc_days), "none"),
         Status = D_status,
         `Mean saved` = ifelse(is.finite(D_mean_saved), sprintf("%.1f", D_mean_saved), "NA"),
         `SD saved` = ifelse(is.finite(D_sd_saved), sprintf("%.1f", D_sd_saved), "NA"),
@@ -1226,9 +1242,7 @@ if (is.null(bw_sens_df)) {
   } else {
     "Fit D (SEM biv+KDE) all-or-nothing ATE vs isotropic KDE bandwidth."
   }
-  if (is.finite(suppressWarnings(as.numeric(cfg$SEM_T_TRUNC_DAYS)))) {
-    cap <- paste0(cap, sprintf(" Main-run t_trunc=%.3g days.", as.numeric(cfg$SEM_T_TRUNC_DAYS)))
-  }
+  cap <- paste0(cap, sprintf(" Main-run t_trunc=%s.", fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS)))
   tbl <- if (isTRUE(bw_sens_has_c)) {
     bw_sens_df |>
       transmute(
@@ -1664,6 +1678,99 @@ get_sem_metric_trace <- function(fit_obj) {
   }
   NULL
 }
+
+# Drop the left prefix of scale-breaking SEM jumps (C-lock / MAP teleport)
+# so later variation is visible. Keep original iteration indices.
+sem_first_kept_iter <- function(y, frac = 0.10, range_keep = 0.25,
+                                min_keep = 8L, early_frac = 0.2) {
+  y <- as.numeric(y)
+  n <- length(y)
+  if (n < 3L) return(1L)
+  finite <- is.finite(y)
+  if (sum(finite) < 3L) return(1L)
+  span <- diff(range(y[finite], na.rm = TRUE))
+  final <- y[max(which(finite))]
+  thresh <- if (is.finite(span) && span > 0) frac * span else Inf
+  min_keep <- min(as.integer(min_keep), n)
+  max_drop <- n - min_keep
+  i <- 1L
+  early_n <- max(2L, min(n - min_keep, ceiling(early_frac * n)))
+  if (is.finite(thresh) && early_n >= 1L) {
+    early_idx <- seq_len(early_n)
+    early_idx <- early_idx[is.finite(y[early_idx])]
+    if (length(early_idx)) {
+      worst <- early_idx[which.max(abs(y[early_idx] - final))]
+      if (abs(y[worst] - final) > thresh) i <- max(i, as.integer(worst) + 1L)
+    }
+  }
+  i <- min(i, max_drop + 1L)
+  while (i <= max_drop) {
+    if (!is.finite(y[i])) { i <- i + 1L; next }
+    if (is.finite(thresh) && abs(y[i] - final) > thresh) { i <- i + 1L; next }
+    break
+  }
+  while (i <= max_drop) {
+    rest <- y[i:n]
+    rest <- rest[is.finite(rest)]
+    rest2 <- y[(i + 1L):n]
+    rest2 <- rest2[is.finite(rest2)]
+    if (length(rest) < 2L || length(rest2) < 1L) break
+    r1 <- diff(range(rest))
+    r2 <- diff(range(rest2))
+    if (is.finite(r1) && r1 > 0 && is.finite(r2) && (r2 / r1) < range_keep) {
+      i <- i + 1L
+      next
+    }
+    break
+  }
+  as.integer(i)
+}
+
+drop_sem_scale_prefix <- function(df, value_col, iter_col = "Iteration",
+                                  group_cols = NULL) {
+  if (is.null(df) || !is.data.frame(df) || nrow(df) < 1L) return(df)
+  if (!value_col %in% names(df) || !iter_col %in% names(df)) return(df)
+  if (is.null(group_cols)) {
+    group_cols <- intersect(c("Model", "Metric", "entry"), names(df))
+  }
+  group_cols <- intersect(group_cols, names(df))
+  split_keys <- if (length(group_cols)) {
+    interaction(df[group_cols], drop = TRUE, lex.order = TRUE)
+  } else {
+    rep("all", nrow(df))
+  }
+  parts <- split(df, split_keys, drop = TRUE)
+  out <- lapply(parts, function(d) {
+    d <- d[order(as.numeric(d[[iter_col]])), , drop = FALSE]
+    keep_from <- sem_first_kept_iter(d[[value_col]])
+    if (keep_from > 1L && keep_from <= nrow(d)) {
+      d <- d[seq.int(keep_from, nrow(d)), , drop = FALSE]
+    }
+    d
+  })
+  do.call(rbind, out)
+}
+
+get_sem_proposal_trace <- function(fit_obj) {
+  if (is.null(fit_obj)) return(NULL)
+  sem_obj <- if (!is.null(fit_obj$fit) && !is.null(fit_obj$fit$adaptive)) {
+    fit_obj$fit
+  } else if (!is.null(fit_obj$sem) && !is.null(fit_obj$sem$adaptive)) {
+    fit_obj$sem
+  } else {
+    NULL
+  }
+  if (is.null(sem_obj) || is.null(sem_obj$adaptive$all_metrics)) return(NULL)
+  am <- sem_obj$adaptive$all_metrics
+  rows <- lapply(seq_along(am), function(i) {
+    v <- as.numeric(am[[i]])
+    if (!length(v)) return(NULL)
+    data.frame(Iteration = i, Proposal = seq_along(v), LogLik = v)
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(NULL)
+  do.call(rbind, rows)
+}
 ```
 
 ## Marginal Parameters
@@ -1786,8 +1893,8 @@ ggplot(pm, aes(x=Fit, y=Value, colour=Process)) +
 
 ```{r fig-flips}
 #| label: fig-flips
-#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration (county SEM fits)."
-#| fig-height: 4
+#| fig-cap: "Accepted SEM confusion-matrix entry counts by inner iteration (county SEM fits). The initial scale-breaking MAP/C-lock jump is omitted so later 1-count changes are visible; each entry has its own y-scale."
+#| fig-height: 8
 extract_selected_confusion_trace <- function(sem_obj, model_label) {
   ad <- sem_obj$fit$adaptive
   if (is.null(ad) || is.null(ad$class_results) || is.null(ad$all_metrics)) return(NULL)
@@ -1853,9 +1960,12 @@ if (length(trace_rows) > 0) {
     levels = c("control_as_control", "control_as_treated", "treated_as_control", "treated_as_treated"),
     labels = c("Control -> Control", "Control -> Treated", "Treated -> Control", "Treated -> Treated")
   )
+  trace_long <- drop_sem_scale_prefix(trace_long, value_col = "count", iter_col = "iteration")
+}
+if (length(trace_rows) > 0 && !is.null(trace_long) && nrow(trace_long) > 0) {
   ggplot(trace_long, aes(x = iteration, y = count, colour = entry)) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(~ Model, scales = "free_y") +
+    facet_grid(entry ~ Model, scales = "free_y") +
     scale_color_manual(name = "Confusion entry", values = c(
       "Control -> Control" = "#1f78b4",
       "Control -> Treated" = "#e31a1c",
@@ -1864,7 +1974,7 @@ if (length(trace_rows) > 0) {
     )) +
     labs(x = "Iteration", y = "Count") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none", strip.text.y = element_text(size = 8))
 } else {
   plot.new()
   text(0.5, 0.5, "No SEM confusion-matrix trace found for county SEM fits (B/D/F/H/J).")
@@ -1873,9 +1983,10 @@ if (length(trace_rows) > 0) {
 
 ```{r fig-sem-adaptive-loglik}
 #| label: fig-sem-adaptive-loglik
-#| fig-cap: "Adaptive SEM selected-proposal score progression (county SEM fits). This trace is stochastic and is not expected to be monotone."
-#| fig-height: 4
+#| fig-cap: "Adaptive SEM selected-proposal score (solid) after omitting the initial scale-breaking MAP/C-lock jump. Grey points are other proposals in the same zoom window. Running best is dashed."
+#| fig-height: 4.5
 sem_metric_rows <- list()
+sem_prop_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
   list(obj = fit_D_obj, lab = "D: SEM Biv+KDE (all-free)"),
@@ -1891,10 +2002,18 @@ for (info in list(
       Model = info$lab
     )
   }
+  pr <- get_sem_proposal_trace(info$obj)
+  if (!is.null(pr) && nrow(pr) > 0) {
+    pr$Model <- info$lab
+    sem_prop_rows[[length(sem_prop_rows) + 1]] <- pr
+  }
 }
 if (length(sem_metric_rows) > 0) {
   sem_metric_df <- do.call(rbind, sem_metric_rows)
   sem_metric_df <- sem_metric_df[is.finite(sem_metric_df$LogLik), , drop = FALSE]
+  sem_metric_df <- drop_sem_scale_prefix(sem_metric_df, value_col = "LogLik")
+}
+if (length(sem_metric_rows) > 0 && !is.null(sem_metric_df) && nrow(sem_metric_df) > 0) {
   sem_metric_df <- sem_metric_df |>
     dplyr::group_by(.data$Model) |>
     dplyr::arrange(.data$Iteration, .by_group = TRUE) |>
@@ -1906,7 +2025,41 @@ if (length(sem_metric_rows) > 0) {
     dplyr::slice_tail(n = 1) |>
     dplyr::ungroup() |>
     dplyr::mutate(lbl = sprintf("final = %.2f", .data$LogLik))
-  ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model)) +
+  sem_prop_zoom <- NULL
+  if (length(sem_prop_rows) > 0) {
+    sem_prop_df <- do.call(rbind, sem_prop_rows)
+    kept <- unique(sem_metric_df[, c("Model", "Iteration")])
+    sem_prop_df <- merge(sem_prop_df, kept, by = c("Model", "Iteration"))
+    lims <- sem_metric_df |>
+      dplyr::group_by(.data$Model) |>
+      dplyr::summarise(
+        ymin = min(.data$LogLik, na.rm = TRUE),
+        ymax = max(.data$LogLik, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      dplyr::mutate(
+        pad = pmax(0.08 * (.data$ymax - .data$ymin), 0.2),
+        ymin = .data$ymin - .data$pad,
+        ymax = .data$ymax + .data$pad
+      )
+    sem_prop_df <- merge(sem_prop_df, lims, by = "Model")
+    sem_prop_zoom <- sem_prop_df[
+      is.finite(sem_prop_df$LogLik) &
+        sem_prop_df$LogLik >= sem_prop_df$ymin &
+        sem_prop_df$LogLik <= sem_prop_df$ymax,
+      , drop = FALSE
+    ]
+  }
+  p_ll <- ggplot(sem_metric_df, aes(x = Iteration, y = LogLik, colour = Model))
+  if (!is.null(sem_prop_zoom) && nrow(sem_prop_zoom) > 0) {
+    p_ll <- p_ll + geom_point(
+      data = sem_prop_zoom,
+      aes(x = Iteration, y = LogLik),
+      inherit.aes = FALSE,
+      alpha = 0.18, size = 0.55, colour = "grey30"
+    )
+  }
+  p_ll +
     geom_line(linewidth = 0.9) +
     geom_line(aes(y = RunningBest), linewidth = 0.7, linetype = "dashed", alpha = 0.7) +
     geom_text(
@@ -1934,8 +2087,8 @@ if (length(sem_metric_rows) > 0) {
 
 ```{r fig-sem-cumulative-flips}
 #| label: fig-sem-cumulative-flips
-#| fig-cap: "Per-iteration SEM label flips by relabelling iteration for county SEM fits (faceted by model)."
-#| fig-height: 5
+#| fig-cap: "Per-iteration SEM label flips after omitting the initial MAP Hamming spike. Average and accepted flips have separate y-scales so later 0–2 flip noise is visible."
+#| fig-height: 6
 flip_rows <- list()
 for (info in list(
   list(obj = fit_B_obj, lab = "B: SEM Biv"),
@@ -1969,16 +2122,19 @@ if (length(flip_rows) > 0) {
     levels = c("AverageFlips", "AcceptedFlips"),
     labels = c("Average flips", "Accepted flips")
   )
+  flip_df <- drop_sem_scale_prefix(flip_df, value_col = "Flips")
+}
+if (length(flip_rows) > 0 && !is.null(flip_df) && nrow(flip_df) > 0) {
   ggplot(flip_df, aes(x = Iteration, y = Flips, colour = Metric)) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(~ Model, scales = "free_y") +
+    facet_grid(Metric ~ Model, scales = "free_y") +
     scale_colour_manual(values = c(
       "Average flips" = "#08519c",
       "Accepted flips" = "#a50f15"
     )) +
     labs(x = "Adaptive SEM iteration", y = "Flips per iteration") +
     theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    theme(legend.position = "none")
 } else {
   plot.new()
   text(0.5, 0.5, "No SEM flip traces found in this results file.")
@@ -3877,6 +4033,110 @@ if (length(part_sim_rows) > 0) {
 }
 ```
 
+# SEM initialization variability (Fit D)
+
+Each replicate below starts from **that tessellation's C MLE** $\theta$ and an independent sequential Bernoulli labelling of post-treatment events, then polishes for the configured SEM inner steps. This is initialization variability, not the parametric bootstrap.
+
+```{r fig-fitvar-d-ate}
+#| label: fig-fitvar-d-ate
+#| fig-cap: "Histogram of Fit D all-or-nothing ATE across independent sequential-Bernoulli initializations (same C MLE)."
+fitvar_helper <- file.path(SCRIPT_DIR, "oklahoma_fitvar_report.R")
+if (file.exists(fitvar_helper) && !exists("oklahoma_fitvar_d_ates", mode = "function")) {
+  source(fitvar_helper, local = FALSE)
+}
+if (!exists("oklahoma_fitvar_d_ates", mode = "function")) {
+  oklahoma_fitvar_d_ates <- function(results) numeric(0)
+  oklahoma_fitvar_d_summary <- function(results) {
+    data.frame(rep = integer(), success = logical(),
+               mc_total_saved_mean = numeric(), stringsAsFactors = FALSE)
+  }
+}
+fitvar_d_df <- oklahoma_fitvar_d_summary(results)
+fitvar_d_ates <- oklahoma_fitvar_d_ates(results)
+fitvar_cfg <- results$fit_variability$config
+d_point_ate <- if (!is.null(fit_D_obj) && !is.null(fit_D_obj$ate)) {
+  vals <- get_total_effect_sim(fit_D_obj$ate, n_tiles = n_cty)
+  vals <- suppressWarnings(as.numeric(vals))
+  vals <- vals[is.finite(vals)]
+  if (length(vals) > 0L) mean(vals) else NA_real_
+} else {
+  NA_real_
+}
+if (length(fitvar_d_ates) > 0L) {
+  n_ok <- length(fitvar_d_ates)
+  n_att <- if (!is.null(fitvar_cfg$reps)) as.integer(fitvar_cfg$reps) else n_ok
+  init_lab <- if (!is.null(fitvar_cfg$label_init)) {
+    as.character(fitvar_cfg$label_init)
+  } else if (!is.null(cfg$SEM_LABEL_INIT)) {
+    as.character(cfg$SEM_LABEL_INIT)
+  } else {
+    "sequential_bernoulli"
+  }
+  inner_n <- if (!is.null(fitvar_cfg$sem_inner_iter)) {
+    as.integer(fitvar_cfg$sem_inner_iter)
+  } else if (!is.null(cfg$SEM_INNER_ITER)) {
+    as.integer(cfg$SEM_INNER_ITER)
+  } else {
+    NA_integer_
+  }
+  cat(sprintf(
+    "Successful D inits: %d / %d. Mean ATE = %.1f (SD %.1f; range [%.1f, %.1f]). SEM inner = %s; label init = %s.\n",
+    n_ok, n_att, mean(fitvar_d_ates), stats::sd(fitvar_d_ates),
+    min(fitvar_d_ates), max(fitvar_d_ates),
+    if (is.finite(inner_n)) as.character(inner_n) else "NA",
+    init_lab
+  ))
+  hist_df <- data.frame(TotalATE = fitvar_d_ates)
+  p_fitvar <- ggplot(hist_df, aes(x = TotalATE)) +
+    geom_histogram(bins = min(20L, max(8L, n_ok %/% 3L)),
+                   fill = "#80b1d3", colour = "white", alpha = 0.85) +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+    labs(
+      x = bquote(hat(Delta)[AoN] ~ "(total earthquakes saved /" ~ .(ate_days) ~ "days)"),
+      y = "Initialization count",
+      subtitle = sprintf("n = %d successful D initializations", n_ok)
+    ) +
+    theme_minimal(base_size = 12)
+  if (is.finite(d_point_ate)) {
+    p_fitvar <- p_fitvar +
+      geom_vline(xintercept = d_point_ate, colour = "#3182bd", linewidth = 0.9) +
+      annotate(
+        "text", x = d_point_ate, y = Inf, vjust = 1.4, hjust = -0.05,
+        colour = "#3182bd", size = 3.2,
+        label = sprintf("primary D = %.0f", d_point_ate)
+      )
+  }
+  print(p_fitvar)
+  if (nrow(fitvar_d_df) > 0L) {
+    sm <- data.frame(
+      Setting = c("Successful D inits", "Mean ATE", "SD ATE", "Min ATE", "Max ATE",
+                  "Median ATE", "Median init Hamming vs location",
+                  "Primary D ATE (vline)"),
+      Value = c(
+        sprintf("%d / %d", n_ok, n_att),
+        sprintf("%.1f", mean(fitvar_d_ates)),
+        sprintf("%.1f", stats::sd(fitvar_d_ates)),
+        sprintf("%.1f", min(fitvar_d_ates)),
+        sprintf("%.1f", max(fitvar_d_ates)),
+        sprintf("%.1f", stats::median(fitvar_d_ates)),
+        {
+          ham <- fitvar_d_df$n_label_init_flips[fitvar_d_df$success %in% TRUE]
+          ham <- ham[is.finite(ham)]
+          if (length(ham) > 0L) sprintf("%.0f", stats::median(ham)) else "NA"
+        },
+        if (is.finite(d_point_ate)) sprintf("%.1f", d_point_ate) else "NA"
+      ),
+      stringsAsFactors = FALSE
+    )
+    knitr::kable(sm, align = "lc",
+                 caption = "Fit D sequential-Bernoulli initialization variability.") |>
+      kableExtra::kable_styling(bootstrap_options = "striped", full_width = FALSE)
+  }
+} else {
+  cat("Fit-variability D ATEs are unavailable in this results file (stage not run, or every replicate failed).\n")
+}
+```
+
 # Interpretation
 
 ```{r summaries, include=FALSE}
@@ -3987,7 +4247,7 @@ cdf <- data.frame(
               "Primary tiles (total / treated)",
               "Counties (total / treated)",
               "SEM outer iters","SEM inner iters","SEM inner proposals","SEM labellings",
-              "SEM change factor","SEM max relabel step frac","SEM forced refit flip frac","Fitting window (days)",
+              "SEM change factor","SEM max relabel step frac","SEM label init","SEM map teleport once","SEM forced refit flip frac","Fit-variability reps / cores","Fitting window (days)",
               "SEM t_trunc (days)","SEM t_trunc source","SEM t_trunc rel level",
               "ATE simulation window (days)","Simulation replicates",
               "Spatial scale D (km)", "Estimated triggering range (km)", "Grid diameters",
@@ -4000,9 +4260,12 @@ cdf <- data.frame(
             scalar_chr(cfg$SEM_N_ITER), scalar_chr(cfg$SEM_INNER_ITER), sem_inner_props, scalar_chr(cfg$SEM_N_LABELLINGS),
             scalar_chr(cfg$SEM_CHANGE_FACTOR),
             scalar_chr(cfg$SEM_MAX_RELABEL_STEP_FRAC),
+            scalar_chr(cfg$SEM_LABEL_INIT),
+            scalar_chr(cfg$SEM_MAP_TELEPORT_ONCE),
             scalar_chr(cfg$SEM_FORCE_PARAM_UPDATE_FLIP_FRAC),
+            paste0(scalar_chr(cfg$FIT_VARIABILITY_REPS), " / ", scalar_chr(cfg$FIT_VARIABILITY_CORES)),
             if (!is.null(cfg$windowT_post)) paste(unlist(cfg$windowT_post, use.names = FALSE), collapse=" \u2013 ") else "N/A",
-            scalar_chr(cfg$SEM_T_TRUNC_DAYS),
+            fmt_t_trunc_cfg(cfg$SEM_T_TRUNC_DAYS),
             scalar_chr(cfg$SEM_T_TRUNC_SOURCE),
             scalar_chr(cfg$SEM_T_TRUNC_REL),
             ate_win, scalar_chr(cfg$ATE_N_SIMS),

@@ -962,6 +962,22 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   return(dat)
 }
 
+.sem_subsample_disagreement <- function(current, proposed, max_flips) {
+  flip_idx <- which(current$inferred_process != proposed$inferred_process)
+  n_flip <- length(flip_idx)
+  max_flips <- suppressWarnings(as.integer(max_flips)[1L])
+  if (!is.finite(max_flips) || is.na(max_flips) || max_flips < 1L) {
+    max_flips <- 1L
+  }
+  if (n_flip <= max_flips) {
+    return(list(labelling = proposed, n_flip = as.integer(n_flip)))
+  }
+  keep_idx <- sample(flip_idx, size = max_flips, replace = FALSE)
+  out <- current
+  out$inferred_process[keep_idx] <- proposed$inferred_process[keep_idx]
+  list(labelling = out, n_flip = as.integer(max_flips))
+}
+
 .sem_maybe_cap_labelling <- function(current, proposed,
                                      max_flips_per_step,
                                      require_monotone_complete_ll,
@@ -979,17 +995,106 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
   if (!is.finite(cur_m)) cur_m <- -Inf
   improve <- is.finite(prop_m) &&
     (prop_m + monotone_ll_tol + monotone_estep_slack >= cur_m)
-  if (isTRUE(allow_improving_teleport) && isTRUE(improve)) {
-    return(list(labelling = proposed, n_flip = as.integer(n_flip), teleported = TRUE))
-  }
-  if (isTRUE(require_monotone_complete_ll)) {
+  if (isTRUE(require_monotone_complete_ll) && !isTRUE(improve)) {
     return(list(labelling = current, n_flip = 0L, teleported = FALSE))
   }
-  flip_idx <- which(current$inferred_process != proposed$inferred_process)
-  keep_idx <- sample(flip_idx, size = max_flips_per_step, replace = FALSE)
-  out <- current
-  out$inferred_process[keep_idx] <- proposed$inferred_process[keep_idx]
-  list(labelling = out, n_flip = as.integer(max_flips_per_step), teleported = FALSE)
+  if (isTRUE(allow_improving_teleport)) {
+    return(list(labelling = proposed, n_flip = as.integer(n_flip), teleported = TRUE))
+  }
+  # Improving proposals that are not allowed to teleport take a random
+  # subsample of the disagreement set instead of jumping past the cap.
+  capped <- .sem_subsample_disagreement(current, proposed, max_flips_per_step)
+  list(
+    labelling = capped$labelling,
+    n_flip = capped$n_flip,
+    teleported = FALSE
+  )
+}
+
+.sem_should_include_map_proposal <- function(include_sequential_map_proposal,
+                                            map_teleport_once,
+                                            map_attempted,
+                                            lock_starting_for_baseline) {
+  if (!isTRUE(include_sequential_map_proposal)) {
+    return(FALSE)
+  }
+  if (!isTRUE(map_teleport_once)) {
+    return(TRUE)
+  }
+  !isTRUE(map_attempted) && !isTRUE(lock_starting_for_baseline)
+}
+
+.sem_normalize_label_init <- function(label_init) {
+  if (is.null(label_init)) label_init <- "current"
+  x <- tolower(trimws(as.character(label_init)[[1]]))
+  if (!nzchar(x) || x %in% c("current", "location", "location_labels", "none", "off")) {
+    return("current")
+  }
+  if (x %in% c("sequential_bernoulli", "bernoulli", "seq_bernoulli", "soft")) {
+    return("sequential_bernoulli")
+  }
+  if (x %in% c("sequential_map", "map", "seq_map", "hard_map")) {
+    return("sequential_map")
+  }
+  stop(
+    "Unknown label_init '", label_init,
+    "'. Use current, sequential_bernoulli, or sequential_map."
+  )
+}
+
+.sem_current_biv_par <- function(biv_etas_params, control_par, treated_par,
+                                 fixed_params = NULL) {
+  biv_par <- if (!is.null(biv_etas_params)) {
+    unlist(biv_etas_params)
+  } else {
+    init_bivariate_from_independent(
+      control_par[[length(control_par)]],
+      treated_par[[length(treated_par)]]
+    )
+  }
+  if (!is.null(fixed_params)) {
+    for (nm in intersect(names(fixed_params), .etas_bivariate_par_names)) {
+      biv_par[[nm]] <- fixed_params[[nm]]
+    }
+  }
+  biv_par
+}
+
+.sem_sequential_relabel_post <- function(mode, post_data, biv_par,
+                                         biv_pid_base, biv_post_slot,
+                                         biv_geom_full, treatment_time,
+                                         biv_tt, biv_x, biv_y, biv_mag,
+                                         biv_W0, biv_W1, biv_aS0, biv_aS1,
+                                         biv_m0, t_trunc) {
+  map_init <- biv_pid_base
+  map_init[biv_post_slot] <- as.integer(post_data$inferred_process == "treated")
+  map_assign <- as.integer(biv_geom_full$t >= treatment_time)
+  pid <- if (identical(mode, "sequential_bernoulli")) {
+    sequential_bernoulli_etas_bivariate(
+      params = biv_par,
+      t = biv_tt, x = biv_x, y = biv_y, mag = biv_mag,
+      assignable = map_assign,
+      process_id_init = map_init,
+      W0 = biv_W0, W1 = biv_W1,
+      areaS_0 = biv_aS0, areaS_1 = biv_aS1,
+      m0 = biv_m0, t_trunc = t_trunc
+    )
+  } else {
+    sequential_map_etas_bivariate(
+      params = biv_par,
+      t = biv_tt, x = biv_x, y = biv_y, mag = biv_mag,
+      assignable = map_assign,
+      process_id_init = map_init,
+      W0 = biv_W0, W1 = biv_W1,
+      areaS_0 = biv_aS0, areaS_1 = biv_aS1,
+      m0 = biv_m0, t_trunc = t_trunc
+    )
+  }
+  out <- post_data
+  out$inferred_process <- ifelse(
+    as.integer(pid)[biv_post_slot] == 1L, "treated", "control"
+  )
+  out
 }
 
 #' EM-style iterative labeling with parameter updates
@@ -1013,7 +1118,10 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #' @param include_starting_first_n Integer; force-include starting data as a
 #'   candidate proposal for the first N inner iterations.
 #' @param max_relabel_step_frac Maximum fraction of post-treatment points that
-#'   can change labels in a single inner iteration.
+#'   can change labels in a single inner iteration (simulation proposals).
+#' @param max_map_relabel_step_frac Maximum fraction for sequential MAP
+#'   proposals when selected. Defaults to \code{max_relabel_step_frac} when
+#'   unset (\code{NA}).
 #' @param force_param_update_flip_frac Cumulative accepted-flip fraction
 #'   threshold that forces a parameter update once reached.
 #' @param optim_method One of "max", "sample_weighted", "mean", "truncated_mean"
@@ -1044,11 +1152,21 @@ simulation_labeling_hawkes_hawkes_fast <- function(pp_data,
 #'   log-likelihood falls. Default 0 preserves a hard E-step gate.
 #' @param include_sequential_map_proposal If \code{TRUE} (bivariate ETAS
 #'   only), add one extra proposal each inner iteration: sequential MAP
-#'   labels under the current \eqn{\theta}.
-#' @param allow_improving_teleport If \code{TRUE}, a selected proposal that
-#'   exceeds \code{max_relabel_step_frac} is still accepted in full when its
-#'   complete-data metric is at least the current labelling (an improving
-#'   Hamming teleport). Default \code{FALSE} keeps the historical cap.
+#'   labels under the current \eqn{\theta}. When
+#'   \code{map_teleport_once = TRUE}, MAP is offered only on the first
+#'   unlocked iteration.
+#' @param allow_improving_teleport If \code{TRUE}, accept an improving
+#'   selected proposal in full even when it exceeds the Hamming cap.
+#' @param map_teleport_once If \code{TRUE}, offer sequential MAP once after
+#'   the monotone baseline lock and accept that jump in full if it is
+#'   selected and improving. Later iterations are discrepancy-only.
+#' @param label_init How to seed post-treatment labels before the first
+#'   inner iteration. \code{"current"} keeps location / incoming labels.
+#'   \code{"sequential_bernoulli"} draws each assignable event
+#'   \eqn{Z_i \sim \mathrm{Bern}(\lambda_1/(\lambda_0+\lambda_1))} under
+#'   the starting \eqn{\theta} (typically that tessellation's C MLE).
+#'   \code{"sequential_map"} uses the hard sequential MAP walk. The
+#'   monotone baseline lock, if enabled, is on these initialized labels.
 #' @param single_flip_from_iter If finite, use exhaustive one-event flip
 #'   proposals from this inner iteration onward. \code{Inf} (default)
 #'   keeps \code{proposal_method} for the whole run.
@@ -1073,6 +1191,7 @@ em_style_labelling <- function(pp_data,
                                include_starting_data = TRUE,
                                include_starting_first_n = 50,
                                max_relabel_step_frac = 1.0,
+                               max_map_relabel_step_frac = NA_real_,
                                force_param_update_flip_frac = 1.0,
                                optim_method = "max",
                                selection_temperature = 0.15,
@@ -1089,6 +1208,8 @@ em_style_labelling <- function(pp_data,
                                monotone_estep_slack = 0,
                                include_sequential_map_proposal = FALSE,
                                allow_improving_teleport = FALSE,
+                               map_teleport_once = FALSE,
+                               label_init = "current",
                                proposal_method = "simulation",
                                single_flip_from_iter = Inf,
                                fixed_params = NULL,
@@ -1122,6 +1243,12 @@ em_style_labelling <- function(pp_data,
     max_relabel_step_frac <- 1.0
   }
   max_relabel_step_frac <- min(max_relabel_step_frac, 1.0)
+  max_map_relabel_step_frac <- suppressWarnings(as.numeric(max_map_relabel_step_frac))
+  if (!is.finite(max_map_relabel_step_frac) || is.na(max_map_relabel_step_frac) ||
+      max_map_relabel_step_frac <= 0) {
+    max_map_relabel_step_frac <- max_relabel_step_frac
+  }
+  max_map_relabel_step_frac <- min(max_map_relabel_step_frac, 1.0)
   force_param_update_flip_frac <- suppressWarnings(as.numeric(force_param_update_flip_frac))
   if (!is.finite(force_param_update_flip_frac) || is.na(force_param_update_flip_frac) || force_param_update_flip_frac <= 0) {
     force_param_update_flip_frac <- 1.0
@@ -1147,6 +1274,10 @@ em_style_labelling <- function(pp_data,
   }
   include_sequential_map_proposal <- isTRUE(include_sequential_map_proposal)
   allow_improving_teleport <- isTRUE(allow_improving_teleport)
+  map_teleport_once <- isTRUE(map_teleport_once)
+  label_init <- .sem_normalize_label_init(label_init)
+  n_label_init_flips <- 0L
+  map_attempted <- FALSE
   best_complete_ll <- -Inf
   n_downhill_rejected <- 0L
   n_teleports <- 0L
@@ -1483,6 +1614,7 @@ em_style_labelling <- function(pp_data,
     max(1L, as.integer(iter) * max(1L, max_proposals_per_iter))
   )
   max_flips_per_step <- max(1L, as.integer(ceiling(max_relabel_step_frac * max(1L, n_post_total))))
+  max_map_flips_per_step <- max(1L, as.integer(ceiling(max_map_relabel_step_frac * max(1L, n_post_total))))
   force_param_update_flip_n <- max(1L, as.integer(ceiling(force_param_update_flip_frac * max(1L, n_post_total))))
   accepted_flips_cum <- 0L
   next_forced_param_update_at <- force_param_update_flip_n
@@ -1579,6 +1711,38 @@ em_style_labelling <- function(pp_data,
       }
       if (is.character(proc_col)) as.integer(proc_col == "treated") else as.integer(proc_col)
     }
+    if (!identical(label_init, "current")) {
+      loc_before <- post_data$inferred_process
+      biv_par_init <- .sem_current_biv_par(
+        biv_etas_params, control_par, treated_par, fixed_params
+      )
+      post_data <- .sem_sequential_relabel_post(
+        mode = label_init,
+        post_data = post_data,
+        biv_par = biv_par_init,
+        biv_pid_base = biv_pid_base,
+        biv_post_slot = biv_post_slot,
+        biv_geom_full = biv_geom_full,
+        treatment_time = treatment_time,
+        biv_tt = biv_tt, biv_x = biv_x, biv_y = biv_y, biv_mag = biv_mag,
+        biv_W0 = biv_W0, biv_W1 = biv_W1, biv_aS0 = biv_aS0, biv_aS1 = biv_aS1,
+        biv_m0 = biv_m0, t_trunc = t_trunc
+      )
+      n_label_init_flips <- as.integer(sum(loc_before != post_data$inferred_process))
+      starting_data <- rbind(pre_data, post_data)
+      starting_data <- starting_data[order(starting_data$t), , drop = FALSE]
+      cat(sprintf(
+        "  [SEM label_init] mode=%s flips_from_location=%d treated_post=%d/%d\n",
+        label_init, n_label_init_flips,
+        sum(post_data$inferred_process == "treated"), nrow(post_data)
+      ))
+    }
+  } else if (!identical(label_init, "current")) {
+    warning(
+      "label_init='", label_init,
+      "' is only implemented for bivariate ETAS; keeping current labels."
+    )
+    label_init <- "current"
   }
   hawkes_conditional_loglik <- function(params_vec, post_realiz, zero_background_region, pre_hist) {
     if (nrow(post_realiz) < 1L) return(-Inf)
@@ -1683,6 +1847,7 @@ em_style_labelling <- function(pp_data,
   for (i in 1:iter) {
     t_iter <- proc.time()[3]
     t_samp <- proc.time()[3]
+    map_proposal_idx <- NA_integer_
     if (verbose && sem_timing_verbose) {
       cat(sprintf("  [Iter %d/%d] start: n_post=%d change_factor=%.4f\n",
                   i, iter, nrow(post_data), current_change_factor))
@@ -1778,40 +1943,38 @@ em_style_labelling <- function(pp_data,
         labelling_proposals <- lapply(post_proposals, as.data.frame)
       }
     }
-    if (include_sequential_map_proposal && is_biv_etas) {
-      biv_par_map <- if (!is.null(biv_etas_params)) {
-        unlist(biv_etas_params)
-      } else {
-        init_bivariate_from_independent(
-          control_par[[length(control_par)]],
-          treated_par[[length(treated_par)]]
-        )
-      }
-      if (!is.null(fixed_params)) {
-        for (nm in intersect(names(fixed_params), .etas_bivariate_par_names)) {
-          biv_par_map[[nm]] <- fixed_params[[nm]]
-        }
-      }
-      map_init <- biv_pid_base
-      map_init[biv_post_slot] <- as.integer(post_data$inferred_process == "treated")
-      map_assign <- as.integer(biv_geom_full$t >= treatment_time)
-      map_pid <- sequential_map_etas_bivariate(
-        params = biv_par_map,
-        t = biv_tt, x = biv_x, y = biv_y, mag = biv_mag,
-        assignable = map_assign,
-        process_id_init = map_init,
-        W0 = biv_W0, W1 = biv_W1,
-        areaS_0 = biv_aS0, areaS_1 = biv_aS1,
-        m0 = biv_m0, t_trunc = t_trunc
+    lock_starting_preview <- require_monotone_complete_ll &&
+      !is.finite(best_complete_ll)
+    include_map_this_iter <- is_biv_etas &&
+      .sem_should_include_map_proposal(
+        include_sequential_map_proposal = include_sequential_map_proposal,
+        map_teleport_once = map_teleport_once,
+        map_attempted = map_attempted,
+        lock_starting_for_baseline = lock_starting_preview
       )
-      map_post <- post_data
-      map_post$inferred_process <- ifelse(
-        as.integer(map_pid)[biv_post_slot] == 1L, "treated", "control"
+    if (include_map_this_iter) {
+      map_post <- .sem_sequential_relabel_post(
+        mode = "sequential_map",
+        post_data = post_data,
+        biv_par = .sem_current_biv_par(
+          biv_etas_params, control_par, treated_par, fixed_params
+        ),
+        biv_pid_base = biv_pid_base,
+        biv_post_slot = biv_post_slot,
+        biv_geom_full = biv_geom_full,
+        treatment_time = treatment_time,
+        biv_tt = biv_tt, biv_x = biv_x, biv_y = biv_y, biv_mag = biv_mag,
+        biv_W0 = biv_W0, biv_W1 = biv_W1, biv_aS0 = biv_aS0, biv_aS1 = biv_aS1,
+        biv_m0 = biv_m0, t_trunc = t_trunc
       )
       if (length(labelling_proposals) == 0) {
         labelling_proposals <- list()
       }
-      labelling_proposals[[length(labelling_proposals) + 1L]] <- map_post
+      map_proposal_idx <- length(labelling_proposals) + 1L
+      labelling_proposals[[map_proposal_idx]] <- map_post
+      if (isTRUE(map_teleport_once)) {
+        map_attempted <- TRUE
+      }
     }
     force_include_starting <- isTRUE(include_starting_data) && (i <= include_starting_first_n)
     include_starting_this_iter <- (isTRUE(include_starting_data) && !isTRUE(trigger_explore)) || force_include_starting
@@ -2218,12 +2381,19 @@ em_style_labelling <- function(pp_data,
     } else {
       -Inf
     }
+    selected_is_map <- length(best_metric_idx) == 1L &&
+      is.finite(map_proposal_idx) &&
+      best_metric_idx == map_proposal_idx
+    step_flip_cap <- if (isTRUE(selected_is_map)) max_map_flips_per_step else max_flips_per_step
+    proposed_n_flip <- sum(post_data$inferred_process != proposed_best$inferred_process, na.rm = TRUE)
+    allow_teleport_this <- isTRUE(allow_improving_teleport) ||
+      (isTRUE(map_teleport_once) && isTRUE(selected_is_map) && n_teleports == 0L)
     cap_res <- .sem_maybe_cap_labelling(
       current = post_data,
       proposed = proposed_best,
-      max_flips_per_step = max_flips_per_step,
+      max_flips_per_step = step_flip_cap,
       require_monotone_complete_ll = require_monotone_complete_ll,
-      allow_improving_teleport = allow_improving_teleport,
+      allow_improving_teleport = allow_teleport_this,
       current_metric = current_metric,
       proposed_metric = proposed_best_metric,
       monotone_ll_tol = monotone_ll_tol,
@@ -2232,12 +2402,19 @@ em_style_labelling <- function(pp_data,
     accepted_labelling <- cap_res$labelling
     if (isTRUE(cap_res$teleported)) n_teleports <- n_teleports + 1L
     max_diff <- cap_res$n_flip
+    map_chunk_keep_labels <- isTRUE(selected_is_map) &&
+      is.finite(proposed_n_flip) &&
+      proposed_n_flip > step_flip_cap &&
+      max_diff > 0L
+    map_chunk_labelling <- if (isTRUE(map_chunk_keep_labels)) accepted_labelling else NULL
     average <- mean(flips_per_proposal)
     accepted_flips_cum_next <- accepted_flips_cum + max_diff
     force_param_update_due <- accepted_flips_cum_next >= next_forced_param_update_at
+    large_step_param_update <- max_diff >= step_flip_cap && max_diff > 0L
     do_param_update <- FALSE
     if (!is.null(param_update_cadence)) {
-      do_param_update <- ((i %% param_update_cadence) == 0L) || i == iter || force_param_update_due
+      do_param_update <- ((i %% param_update_cadence) == 0L) || i == iter ||
+        force_param_update_due || large_step_param_update
     }
     if (lock_starting_for_baseline) {
       do_param_update <- TRUE
@@ -2747,9 +2924,13 @@ em_style_labelling <- function(pp_data,
         }
         current_metric_cache <- NA_real_
         if (isTRUE(mstep_reverted)) {
-          accepted_labelling <- snapshot_post
-          max_diff <- 0L
-          accepted_flips_cum_next <- accepted_flips_cum
+          if (isTRUE(map_chunk_keep_labels) && !is.null(map_chunk_labelling)) {
+            accepted_labelling <- map_chunk_labelling
+          } else {
+            accepted_labelling <- snapshot_post
+            max_diff <- 0L
+            accepted_flips_cum_next <- accepted_flips_cum
+          }
         }
         accepted_flips_cum <- accepted_flips_cum_next
         while (accepted_flips_cum >= next_forced_param_update_at) {
@@ -2837,6 +3018,8 @@ em_style_labelling <- function(pp_data,
     complete_ll_trace = complete_ll_trace,
     n_downhill_rejected = n_downhill_rejected,
     n_teleports = n_teleports,
+    label_init = label_init,
+    n_label_init_flips = n_label_init_flips,
     class_results = class_results[seq_len(class_results_n)], fits = fits,
     etas_bivariate_params = if (is_biv_etas) biv_etas_params else NULL,
     etas_bivariate_convergence = if (is_biv_etas && length(fits) > 0L) {
@@ -2884,12 +3067,21 @@ plot_flips <- function(res) {
     average_flips = res$average_flips,
     max_metric_flips = res$max_metric_flips
   )
-  ggplot(df, aes(x = iteration)) +
-    geom_line(aes(y = average_flips, color = "Average flips")) +
-    geom_line(aes(y = max_metric_flips, color = "Max metric flips")) +
+  df_long <- data.frame(
+    iteration = c(df$iteration, df$iteration),
+    flips = c(df$average_flips, df$max_metric_flips),
+    metric = factor(
+      c(rep("Average flips", nrow(df)), rep("Max metric flips", nrow(df))),
+      levels = c("Average flips", "Max metric flips")
+    )
+  )
+  ggplot(df_long, aes(x = iteration, y = flips, color = metric)) +
+    geom_line() +
     geom_hline(yintercept = 1, linetype = "dashed") +
+    facet_wrap(~ metric, ncol = 1, scales = "free_y") +
     labs(title = "Flips per iteration", x = "Iteration", y = "Number of flips") +
     theme_minimal() +
+    theme(legend.position = "none") +
     scale_color_manual(name = "Metric", values = c("Average flips" = "blue", "Max metric flips" = "red"))
 }
 

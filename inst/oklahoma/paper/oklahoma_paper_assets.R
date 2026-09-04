@@ -648,6 +648,9 @@ extract_selected_confusion_trace <- function(sem_obj, model_label) {
 
 if (!is.null(sem_fit_F) && !is.null(sem_fit_F$adaptive)) {
   trace_df <- extract_selected_confusion_trace(sem_fit_F, "F: SEM Biv+KDE (all-free)")
+  if (!is.null(trace_df) && nrow(trace_df) > 1L) {
+    trace_df <- trace_df[trace_df$iteration > 1, , drop = FALSE]
+  }
   if (!is.null(trace_df) && nrow(trace_df) > 0) {
     trace_long <- pivot_longer(
       trace_df,
@@ -685,6 +688,7 @@ if (!is.null(sem_fit_F) && !is.null(sem_fit_F$adaptive)) {
     tr_m <- as.numeric(tr_m)
     ok <- is.finite(tr_m)
     dfm <- data.frame(Iteration = seq_along(tr_m)[ok], LogLik = tr_m[ok])
+    if (nrow(dfm) > 1L) dfm <- dfm[dfm$Iteration > 1, , drop = FALSE]
     if (nrow(dfm) > 0) {
       dfm <- dfm %>% arrange(.data$Iteration) %>% mutate(RunningBest = cummax(.data$LogLik))
       last_lbl <- sprintf("final = %.2f", dfm$LogLik[nrow(dfm)])
@@ -714,6 +718,7 @@ if (!is.null(sem_fit_F) && !is.null(sem_fit_F$adaptive)) {
         Average = as.numeric(adF$average_flips[seq_len(n)]),
         Accepted = as.numeric(adF$max_metric_flips[seq_len(n)])
       )
+      if (nrow(dff) > 1L) dff <- dff[dff$Iteration > 1, , drop = FALSE]
       dffl <- pivot_longer(dff, cols = c(Average, Accepted), names_to = "series", values_to = "flips")
       p_fl <- ggplot(dffl, aes(x = .data$Iteration, y = .data$flips, colour = .data$series)) +
         geom_line(linewidth = 0.9) +

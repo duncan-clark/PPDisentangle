@@ -156,6 +156,27 @@ independent univariate laws. The requested replicate count is the number
 attempted. Failed or explosive refits (`eta >= 1` or `rho >= 1`) are excluded,
 and the retained count is recorded before bootstrap recentering.
 
+### Temporal truncation
+
+Default Oklahoma runs use a finite Omori horizon (`OK_SEM_T_TRUNC_DAYS`,
+typically `250` on paper jobs). To request an **untruncated** Omori law later
+(do not launch until asked):
+
+```bash
+# Local
+OK_SEM_T_TRUNC_DAYS=none Rscript oklahoma_analysis.R
+
+# NeSI
+bash inst/oklahoma/run_nesi.sh --sem-t-trunc-days none ...
+```
+
+Accepted none-tokens: `none`, `off`, `null`, `na`, `inf`, `untruncated`,
+`-1`, `0`. An empty string is still an error. Untruncated Omori requires
+`p > 1`; the runner raises `OK_ETAS_P_LOWER_BOUND` to `1.001` if needed.
+That is a different model from a finite-`t_trunc` fit with `p < 1`. Do not
+compare log-likelihoods across truncation settings. A sensitivity grid may
+mix horizons, e.g. `OK_T_TRUNC_SENS_DAYS=250,500,none`.
+
 See [`../nesi/README.md`](../nesi/README.md).
 
 ## Output

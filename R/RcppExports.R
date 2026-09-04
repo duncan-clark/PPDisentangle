@@ -79,16 +79,17 @@ etas_bivariate_loglik_cpp <- function(t, x, y, mag, process_id, W_val_0, W_val_1
     .Call(`_PPDisentangle_etas_bivariate_loglik_cpp`, t, x, y, mag, process_id, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_max, t_trunc, bg_exposure_0, bg_exposure_1)
 }
 
-#' Sequential MAP process labels for bivariate ETAS
+#' Sequential MAP or Bernoulli process labels for bivariate ETAS
 #'
 #' Walks events in time order. Rows with \code{assignable==0} keep
-#' \code{process_id_init}. Assignable rows get
-#' \code{argmax_k \lambda_k(t_i | H_{t_i})} using already-assigned parents,
-#' matching the intensity in \code{etas_bivariate_loglik_cpp}.
+#' \code{process_id_init}. Assignable rows use already-assigned parents.
+#' If \code{sample_bernoulli} is false, assign
+#' \code{argmax_k \lambda_k(t_i | H_{t_i})}. If true, draw
+#' \code{Z_i ~ Bern(\lambda_1 / (\lambda_0 + \lambda_1))}.
 #'
 #' @keywords internal
-etas_bivariate_sequential_map_cpp <- function(t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc = -1.0) {
-    .Call(`_PPDisentangle_etas_bivariate_sequential_map_cpp`, t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc)
+etas_bivariate_sequential_map_cpp <- function(t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc = -1.0, sample_bernoulli = FALSE) {
+    .Call(`_PPDisentangle_etas_bivariate_sequential_map_cpp`, t, x, y, mag, assignable, process_id_init, W_val_0, W_val_1, mu_0, mu_1, A_00, alpha_m_00, A_11, alpha_m_11, A_01, alpha_m_01, A_10, alpha_m_10, cc, p, D, gamma_par, q, m0, areaS_0, areaS_1, t_trunc, sample_bernoulli)
 }
 
 #' Simulate bivariate ETAS offspring via BFS branching
