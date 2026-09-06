@@ -47,7 +47,7 @@ Canonical jobs in the archive:
 |-----------|------------|
 | Main simulation | `sim_study/paper/main_5228509/` (`*_summary_FOR_PAPER.rds` + raw `tmp*.rds`) |
 | Robustness appendix | `sim_study/paper/robustness_merged_tcal/` (67 scenarios) |
-| Oklahoma application | `oklahoma/for_paper.rds` |
+| Oklahoma application | `oklahoma/for_paper.rds` + `oklahoma/paper/generated/` |
 
 Manuscript robustness appendix text: Overleaf / `docs/paper/revision.tex` (local
 snapshot is gitignored).

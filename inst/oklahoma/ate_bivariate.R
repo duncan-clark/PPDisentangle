@@ -5,6 +5,17 @@
 #   "all_or_nothing" — control-everywhere vs treated-everywhere
 #                      (same AoN estimand as the original marginal code, but bivariate)
 
+# CRN seeds must be a finite integer before set.seed(). NULL/NA from a
+# missing default (job 8804859 fitvar ATEs) must not reach set.seed.
+coerce_ate_crn_seed <- function(crn_base_seed, default = 100000L) {
+  seed <- suppressWarnings(as.integer(crn_base_seed)[1L])
+  if (!is.finite(seed) || is.na(seed)) {
+    as.integer(default)
+  } else {
+    seed
+  }
+}
+
 ate_estim_bivariate <- function(
     biv_params,
     windowT,
@@ -38,6 +49,7 @@ ate_estim_bivariate <- function(
 ) {
   contrast <- match.arg(contrast)
   if (is.null(biv_params)) stop("biv_params is NULL")
+  crn_base_seed <- coerce_ate_crn_seed(crn_base_seed, default = 100000L)
   pv <- unlist(biv_params)
   needed <- c(
     "mu_0", "mu_1", "A_00", "A_11", "A_01", "A_10",

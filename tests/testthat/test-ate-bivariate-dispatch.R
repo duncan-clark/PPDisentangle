@@ -70,3 +70,56 @@ test_that("bivariate ATE uses a supplied reusable cluster", {
   expect_equal(calls$fresh, 1L)
   expect_identical(reused, fresh)
 })
+
+test_that("coerce_ate_crn_seed replaces NULL/NA before set.seed", {
+  ate_env <- new.env(parent = globalenv())
+  sys.source(
+    testthat::test_path("..", "..", "inst", "oklahoma", "ate_bivariate.R"),
+    envir = ate_env
+  )
+  expect_identical(ate_env$coerce_ate_crn_seed(NULL), 100000L)
+  expect_identical(ate_env$coerce_ate_crn_seed(NA_integer_), 100000L)
+  expect_identical(ate_env$coerce_ate_crn_seed(NA_real_, default = 7L), 7L)
+  expect_identical(ate_env$coerce_ate_crn_seed(123L), 123L)
+})
+
+test_that("bivariate ATE accepts a missing CRN seed", {
+  ate_env <- new.env(parent = globalenv())
+  sys.source(
+    testthat::test_path("..", "..", "inst", "oklahoma", "ate_bivariate.R"),
+    envir = ate_env
+  )
+  ate_env$run_parallel <- function(X, FUN, cores, label = "job") lapply(X, FUN)
+  ate_env$sim_etas_bivariate <- function(...) data.frame(t = 1)
+  full <- spatstat.geom::owin(xrange = c(0, 2), yrange = c(0, 1))
+  state_spaces <- list(
+    control = spatstat.geom::owin(xrange = c(0, 1), yrange = c(0, 1)),
+    treated = spatstat.geom::owin(xrange = c(1, 2), yrange = c(0, 1))
+  )
+  params <- c(
+    mu_0 = 1, mu_1 = 1,
+    A_00 = 0.15, alpha_m_00 = 0.3,
+    A_11 = 0.15, alpha_m_11 = 0.3,
+    A_01 = 0.01, alpha_m_01 = 0.3,
+    A_10 = 0.01, alpha_m_10 = 0.3,
+    c = 0.2, p = 2.1, D = 1, gamma = 0, q = 1.6
+  )
+  expect_error(
+    ate_env$ate_estim_bivariate(
+      biv_params = params,
+      windowT = c(0, 2),
+      windowS = full,
+      state_spaces_obs = state_spaces,
+      n_sims = 2L,
+      n_cores = 1L,
+      m0 = 2.5,
+      beta_gr = 2.3,
+      crn_base_seed = NULL,
+      use_crn = TRUE,
+      crn_pair = TRUE,
+      quiet = TRUE,
+      contrast = "all_or_nothing"
+    ),
+    NA
+  )
+})

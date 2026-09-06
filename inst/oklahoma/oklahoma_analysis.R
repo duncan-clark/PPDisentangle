@@ -380,6 +380,13 @@ FIT_VARIABILITY_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_ONLY", "fa
   c("1", "true", "yes", "y")
 FIT_VARIABILITY_D_ONLY <- tolower(trimws(Sys.getenv("OK_FIT_VARIABILITY_D_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
+# Recompute ATEs from stored fit-variability SEM params; do not refit.
+FITVAR_ATE_ONLY <- tolower(trimws(Sys.getenv("OK_FITVAR_ATE_ONLY", "false"))) %in%
+  c("1", "true", "yes", "y")
+if (isTRUE(FITVAR_ATE_ONLY)) {
+  FIT_VARIABILITY_ONLY <- TRUE
+  RUN_FIT_VARIABILITY <- TRUE
+}
 BOOTSTRAP_PATCH_FILE <- trimws(Sys.getenv("OK_BOOTSTRAP_PATCH_FILE", ""))
 BOOTSTRAP_ONLY <- tolower(trimws(Sys.getenv("OK_BOOTSTRAP_ONLY", "false"))) %in%
   c("1", "true", "yes", "y")
@@ -645,6 +652,67 @@ if (isTRUE(FIT_VARIABILITY_ONLY)) {
   chk <- tryCatch(readRDS(patch_check), error = function(e) NULL)
   if (is.null(chk)) {
     stop("OK_FIT_VARIABILITY_ONLY: could not readRDS patch file: ", patch_check)
+  }
+  if (isTRUE(FITVAR_ATE_ONLY)) {
+    stored_reps <- chk$fit_variability$replicates
+    if (is.null(stored_reps) || length(stored_reps) < 1L) {
+      stop("OK_FITVAR_ATE_ONLY requires stored fit_variability$replicates in the patch file.")
+    }
+    n_ok_params <- sum(vapply(stored_reps, function(z) {
+      isTRUE(z$F$ok) && !is.null(z$F$params)
+    }, logical(1)))
+    if (n_ok_params < 1L) {
+      stop("OK_FITVAR_ATE_ONLY: patch has no successful D (F) params to evaluate.")
+    }
+    FIT_VARIABILITY_REPS <- length(stored_reps)
+    # Match the stored job's ATE / geometry law unless the caller overrode it.
+    if (is.na(env_ate_n_sims) || env_ate_n_sims < 1L) {
+      stored_sims <- suppressWarnings(as.integer(chk$fit_variability$config$ate_n_sims))
+      if (!is.finite(stored_sims) || is.na(stored_sims) || stored_sims < 1L) {
+        stored_sims <- suppressWarnings(as.integer(chk$config$ATE_N_SIMS))
+      }
+      if (is.finite(stored_sims) && !is.na(stored_sims) && stored_sims > 0L) {
+        ATE_N_SIMS <- stored_sims
+      }
+    }
+    patch_part <- as.character(chk$config$PRIMARY_PARTITION)[1]
+    if (!is.na(patch_part) && nzchar(patch_part) &&
+        !identical(as.character(PRIMARY_PARTITION)[1], patch_part)) {
+      PRIMARY_PARTITION <- oklahoma_normalize_primary_partition(patch_part)
+      cat(sprintf("  FITVAR_ATE_ONLY: PRIMARY_PARTITION=%s from patch\n", PRIMARY_PARTITION))
+    }
+    patch_bw <- as.character(chk$config$KDE_BW_METHOD)[1]
+    if (!is.na(patch_bw) && nzchar(patch_bw) &&
+        !identical(as.character(KDE_BW_METHOD)[1], patch_bw)) {
+      KDE_BW_METHOD <- patch_bw
+      cat(sprintf("  FITVAR_ATE_ONLY: KDE_BW_METHOD=%s from patch\n", KDE_BW_METHOD))
+    }
+    patch_trunc <- tryCatch(
+      PPDisentangle:::.etas_parse_t_trunc_days(
+        chk$config$SEM_T_TRUNC_DAYS, empty_is_none = TRUE
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(patch_trunc) && !identical(SEM_T_TRUNC_DAYS, patch_trunc)) {
+      SEM_T_TRUNC_DAYS <- patch_trunc
+      SEM_NO_TRUNCATION <- !PPDisentangle:::.etas_trunc_active(SEM_T_TRUNC_DAYS)
+      SEM_T_TRUNC_SOURCE <- "patch"
+      ETAS_P_LOWER_BOUND <- p_bound_for_trunc(SEM_T_TRUNC_DAYS)
+      cat(sprintf("  FITVAR_ATE_ONLY: SEM_T_TRUNC_DAYS=%s from patch\n",
+                  fmt_t_trunc(SEM_T_TRUNC_DAYS)))
+    }
+    if (!is.null(chk$config$FIT_VARIABILITY_D_ONLY)) {
+      FIT_VARIABILITY_D_ONLY <- isTRUE(chk$config$FIT_VARIABILITY_D_ONLY)
+    } else if (!is.null(chk$fit_variability$config$d_only)) {
+      FIT_VARIABILITY_D_ONLY <- isTRUE(chk$fit_variability$config$d_only)
+    }
+    if (!is.null(chk$config$CD_ONLY)) {
+      CD_ONLY <- isTRUE(chk$config$CD_ONLY)
+    }
+    cat(sprintf(
+      "  FITVAR_ATE_ONLY: will recompute ATE for %d stored SEM replicate(s) (ok D params=%d); sims=%d\n",
+      length(stored_reps), n_ok_params, ATE_N_SIMS
+    ))
   }
 }
 exclusive_only_modes <- sum(c(
@@ -987,8 +1055,10 @@ cat(sprintf("Fit variability stage: run=%s | reps=%d | cores=%d | d_only=%s\n",
             RUN_FIT_VARIABILITY, FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES,
             FIT_VARIABILITY_D_ONLY))
 if (isTRUE(FIT_VARIABILITY_ONLY)) {
-  cat(sprintf("Fit variability ONLY mode: will skip main county fits; patch into %s\n",
-              FIT_VARIABILITY_PATCH_FILE))
+  cat(sprintf(
+    "Fit variability ONLY mode: will skip main county fits; ate_only=%s; patch into %s\n",
+    isTRUE(FITVAR_ATE_ONLY), FIT_VARIABILITY_PATCH_FILE
+  ))
 }
 if (isTRUE(BOOTSTRAP_ONLY)) {
   cat(sprintf(
@@ -2819,12 +2889,13 @@ eval_ate_both <- function(biv_params, marg, observed_data, label,
                           filtration_history = NULL,
                           n_cores = 1L,
                           quiet = TRUE,
-                          crn_base_seed = NULL,
+                          crn_base_seed = ate_crn_base_seed,
                           covariate_lookup = KDE_BG_LOOKUP,
                           parallel_cluster = NULL,
                           n_tiles_used = partition$n,
                           treated_idx_used = treated_idx,
                           phase = "ate") {
+  crn_base_seed <- coerce_ate_crn_seed(crn_base_seed, default = ate_crn_base_seed)
   ate_with_both_contrasts(function(contrast) {
     if (isTRUE(OK_ATE_BIVARIATE) && !is.null(biv_params)) {
       ate_estim_bivariate(
@@ -4523,8 +4594,8 @@ fit_variability <- NULL
 fit_variability_elapsed <- NA_real_
 if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
   t_fitvar <- proc.time()[["elapsed"]]
-  cat(sprintf("\n--- Step 6a: Fit variability (C/D all_free repeats; reps=%d, cores=%d) ---\n",
-              FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES))
+  cat(sprintf("\n--- Step 6a: Fit variability (C/D all_free repeats; reps=%d, cores=%d, ate_only=%s) ---\n",
+              FIT_VARIABILITY_REPS, FIT_VARIABILITY_CORES, isTRUE(FITVAR_ATE_ONLY)))
   # Same 128-connection cap as bootstrap (job 8804584: 64 ATE sockets + 64
   # fitvar workers => socketAccept "all connections are in use"). Fitvar ATE
   # runs sequentially inside each outer worker, so the reusable pool is unused.
@@ -4564,11 +4635,38 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     out
   }
 
+  fitvar_crn_seed <- function(rep_id) {
+    coerce_ate_crn_seed(
+      as.integer(ate_crn_base_seed) + 10000L * as.integer(rep_id),
+      default = ate_crn_base_seed
+    )
+  }
+  eval_fitvar_ate <- function(params, observed_data, label, rep_id) {
+    if (is.null(params)) return(NULL)
+    tryCatch(
+      eval_ate_both(
+        biv_params = params,
+        marg = extract_marginals(params),
+        observed_data = observed_data,
+        label = label,
+        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
+        n_cores = 1L,
+        quiet = TRUE,
+        crn_base_seed = fitvar_crn_seed(rep_id),
+        phase = "fit_variability"
+      ),
+      error = function(e) {
+        cat(sprintf("    [fitvar] %s ATE error: %s\n", label, e$message))
+        NULL
+      }
+    )
+  }
+
   fitvar_d_init <- biv_init_F
   fitvar_d_ctrl <- A_ctrl
   fitvar_d_treat <- A_treat
   fitvar_d_from_c <- FALSE
-  if (isTRUE(SEM_START_FROM_C)) {
+  if (isTRUE(SEM_START_FROM_C) && !isTRUE(FITVAR_ATE_ONLY)) {
     c_par_var <- NULL
     if (exists("E_params", inherits = TRUE) && !is.null(E_params)) {
       c_par_var <- E_params
@@ -4604,10 +4702,17 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       warning("SEM_START_FROM_C is on but no C MLE was available for fit-variability D; using biv_init_F.")
     }
   }
-  cat(sprintf(
-    "  Fit-variability D: label_init=%s start_from_c=%s d_only=%s sem_inner=%d\n",
-    SEM_LABEL_INIT, fitvar_d_from_c, isTRUE(FIT_VARIABILITY_D_ONLY), SEM_INNER_ITER
-  ))
+  if (isTRUE(FITVAR_ATE_ONLY)) {
+    cat(sprintf(
+      "  Fit-variability ATE-only: d_only=%s ate_n_sims=%d (no SEM refit)\n",
+      isTRUE(FIT_VARIABILITY_D_ONLY), ATE_N_SIMS
+    ))
+  } else {
+    cat(sprintf(
+      "  Fit-variability D: label_init=%s start_from_c=%s d_only=%s sem_inner=%d\n",
+      SEM_LABEL_INIT, fitvar_d_from_c, isTRUE(FIT_VARIABILITY_D_ONLY), SEM_INNER_ITER
+    ))
+  }
 
   run_fitvar_rep <- function(rep_id) {
     t0_rep <- proc.time()[["elapsed"]]
@@ -4636,19 +4741,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         error = function(e) NULL
       )
       E_params_var <- if (valid_biv_fit(fitE_var)) fitE_var$par else NULL
-      E_marg_var <- extract_marginals(E_params_var)
-      ate_E_var <- if (is.null(E_params_var) && is.null(E_marg_var)) NULL else tryCatch(
-        eval_ate_both(
-          biv_params = E_params_var,
-          marg = E_marg_var,
-          observed_data = pp_post_bg,
-          label = sprintf("FitVar E #%d", rep_id),
-          filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-          n_cores = 1L,
-          quiet = TRUE,
-          phase = "fit_variability"
-        ),
-        error = function(e) NULL
+      ate_E_var <- eval_fitvar_ate(
+        E_params_var, pp_post_bg, sprintf("FitVar E #%d", rep_id), rep_id
       )
     } else {
       fitE_var <- NULL
@@ -4695,19 +4789,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     } else {
       NA_integer_
     }
-    F_marg_var <- extract_marginals(F_params_var)
-    ate_F_var <- if (is.null(F_params_var) && is.null(F_marg_var)) NULL else tryCatch(
-      eval_ate_both(
-        biv_params = F_params_var,
-        marg = F_marg_var,
-        observed_data = pp_post_sem_var,
-        label = sprintf("FitVar F #%d", rep_id),
-        filtration_history = if (isTRUE(OK_ATE_CONDITIONAL_ON_PRE)) pp_pre else NULL,
-        n_cores = 1L,
-        quiet = TRUE,
-        phase = "fit_variability"
-      ),
-      error = function(e) NULL
+    ate_F_var <- eval_fitvar_ate(
+      F_params_var, pp_post_sem_var, sprintf("FitVar F #%d", rep_id), rep_id
     )
 
     elapsed_rep <- proc.time()[["elapsed"]] - t0_rep
@@ -4740,15 +4823,75 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
     out
   }
 
-  fitvar_jobs <- as.list(seq_len(FIT_VARIABILITY_REPS))
-  fitvar_out <- if (FIT_VARIABILITY_CORES > 1L && length(fitvar_jobs) > 1L) {
-    run_parallel(
-      fitvar_jobs, run_fitvar_rep,
-      cores = min(FIT_VARIABILITY_CORES, length(fitvar_jobs)),
-      label = "fit-variability"
-    )
+  run_fitvar_ate_only_rep <- function(z) {
+    t0_rep <- proc.time()[["elapsed"]]
+    rep_id <- suppressWarnings(as.integer(z$rep)[1L])
+    if (!is.finite(rep_id) || is.na(rep_id)) rep_id <- 1L
+    cat(sprintf("    [fitvar-ate:%d] start pid=%d mem=%s\n",
+                rep_id, Sys.getpid(), mem_snapshot()))
+    out <- z
+    if (!isTRUE(FIT_VARIABILITY_D_ONLY) && !is.null(z$E) && isTRUE(z$E$ok)) {
+      ate_E_var <- eval_fitvar_ate(
+        z$E$params, pp_post_bg, sprintf("FitVar E #%d", rep_id), rep_id
+      )
+      out$E <- z$E
+      out$E$ate <- ate_E_var
+      out$E$ate_stats <- fitvar_ate_stats(ate_E_var)
+    }
+    if (!is.null(z$F) && isTRUE(z$F$ok)) {
+      ate_F_var <- eval_fitvar_ate(
+        z$F$params, pp_post_bg, sprintf("FitVar F #%d", rep_id), rep_id
+      )
+      out$F <- z$F
+      out$F$ate <- ate_F_var
+      out$F$ate_stats <- fitvar_ate_stats(ate_F_var)
+    }
+    out$ate_elapsed_sec <- proc.time()[["elapsed"]] - t0_rep
+    ate_mean <- if (!is.null(out$F$ate_stats$mc_total_saved_mean)) {
+      out$F$ate_stats$mc_total_saved_mean
+    } else {
+      NA_real_
+    }
+    cat(sprintf(
+      "    [fitvar-ate:%d] done in %.1fs F_ok=%s ate=%.1f mem=%s\n",
+      rep_id, out$ate_elapsed_sec,
+      if (!is.null(out$F)) isTRUE(out$F$ok) else NA,
+      ate_mean, mem_snapshot()
+    ))
+    out
+  }
+
+  if (isTRUE(FITVAR_ATE_ONLY)) {
+    stored_fitvar <- tryCatch({
+      readRDS(normalizePath(FIT_VARIABILITY_PATCH_FILE, winslash = "/", mustWork = TRUE))$fit_variability
+    }, error = function(e) NULL)
+    stored_reps <- stored_fitvar$replicates
+    if (is.null(stored_reps) || length(stored_reps) < 1L) {
+      stop("FITVAR_ATE_ONLY: no stored fit_variability$replicates in the patch file.")
+    }
+    if (!is.null(stored_fitvar$config$d_started_from_c)) {
+      fitvar_d_from_c <- isTRUE(stored_fitvar$config$d_started_from_c)
+    }
+    fitvar_out <- if (FIT_VARIABILITY_CORES > 1L && length(stored_reps) > 1L) {
+      run_parallel(
+        stored_reps, run_fitvar_ate_only_rep,
+        cores = min(FIT_VARIABILITY_CORES, length(stored_reps)),
+        label = "fitvar-ate-only"
+      )
+    } else {
+      lapply(stored_reps, run_fitvar_ate_only_rep)
+    }
   } else {
-    lapply(fitvar_jobs, run_fitvar_rep)
+    fitvar_jobs <- as.list(seq_len(FIT_VARIABILITY_REPS))
+    fitvar_out <- if (FIT_VARIABILITY_CORES > 1L && length(fitvar_jobs) > 1L) {
+      run_parallel(
+        fitvar_jobs, run_fitvar_rep,
+        cores = min(FIT_VARIABILITY_CORES, length(fitvar_jobs)),
+        label = "fit-variability"
+      )
+    } else {
+      lapply(fitvar_jobs, run_fitvar_rep)
+    }
   }
 
   fitvar_rows <- list()
@@ -4814,7 +4957,8 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
       seed = OK_GLOBAL_SEED,
       d_only = isTRUE(FIT_VARIABILITY_D_ONLY),
       d_started_from_c = isTRUE(fitvar_d_from_c),
-      label_init = SEM_LABEL_INIT
+      label_init = SEM_LABEL_INIT,
+      ate_only = isTRUE(FITVAR_ATE_ONLY)
     ),
     replicate_summary = fitvar_df,
     replicates = fitvar_out
@@ -4854,6 +4998,7 @@ if (RUN_FIT_VARIABILITY && FIT_VARIABILITY_REPS > 0L) {
         patched$config$FIT_VARIABILITY_CORES <- FIT_VARIABILITY_CORES
         patched$config$FIT_VARIABILITY_ONLY <- isTRUE(FIT_VARIABILITY_ONLY)
         patched$config$FIT_VARIABILITY_D_ONLY <- isTRUE(FIT_VARIABILITY_D_ONLY)
+        patched$config$FITVAR_ATE_ONLY <- isTRUE(FITVAR_ATE_ONLY)
         saveRDS(patched, patch_file)
         patch_ok <- TRUE
         cat(sprintf("Patched fit variability into existing results: %s\n", patch_file))

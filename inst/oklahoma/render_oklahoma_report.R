@@ -21,6 +21,14 @@ REPO_DIR <- if (basename(SCRIPT_DIR) == "oklahoma" &&
 } else {
   normalizePath(getwd(), winslash = "/", mustWork = FALSE)
 }
+# R --file= can mangle spaces (Google Drive "My Drive" → "My~+~Drive").
+repo_dir_env <- trimws(Sys.getenv("OK_REPO_DIR", ""))
+if (nzchar(repo_dir_env) && file.exists(file.path(repo_dir_env, "DESCRIPTION"))) {
+  REPO_DIR <- normalizePath(repo_dir_env, winslash = "/", mustWork = FALSE)
+  SCRIPT_DIR <- file.path(REPO_DIR, "inst", "oklahoma")
+} else if (!file.exists(file.path(REPO_DIR, "DESCRIPTION"))) {
+  stop("Could not locate PPDisentangle DESCRIPTION. Set OK_REPO_DIR to the package root.")
+}
 
 if (!requireNamespace("pkgload", quietly = TRUE)) {
   stop("pkgload is required. Install with install.packages('pkgload').")

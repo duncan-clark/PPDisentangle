@@ -10,7 +10,7 @@ live **outside** the git repo (Zenodo deposit).
 | Main simulation | `sim_study/paper/main_5228509/` |
 | Illustrative Hawkes realisation | `.../simulated_hawkes_hawkes_process.pdf` (`fig:pp_realiz`) |
 | Robustness appendix | `sim_study/paper/robustness_merged_tcal/` |
-| Oklahoma | `oklahoma/for_paper.rds` |
+| Oklahoma | `oklahoma/for_paper.rds` + `oklahoma/paper/generated/` |
 
 The robustness archive is the production **67-scenario** suite:
 time-calibrated K-separation / SNR (`7767397`), K×spatial-range surface

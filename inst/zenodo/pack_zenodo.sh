@@ -121,12 +121,17 @@ if [[ -d "$OUTPUT_ROOT/sim_study/generated" ]]; then
     "$OUTPUT_ROOT/sim_study/generated/" "$DEST/sim_study/generated/"
 fi
 
-# --- oklahoma (canonical RDS + paper assets; skip bulky exploratory HTML) ---
+# --- oklahoma: paper RDS + generated assets only (skip slurm, backups, HTML) ---
 if [[ -d "$OUTPUT_ROOT/oklahoma" ]]; then
+  if [[ ! -f "$OUTPUT_ROOT/oklahoma/for_paper.rds" ]]; then
+    echo "ERROR: missing $OUTPUT_ROOT/oklahoma/for_paper.rds" >&2
+    exit 1
+  fi
   rsync -a \
-    --exclude='.DS_Store' \
-    --exclude='oklahoma_report.html' \
-    --exclude='plots/' \
+    --include='for_paper.rds' \
+    --include='paper/' \
+    --include='paper/***' \
+    --exclude='*' \
     "$OUTPUT_ROOT/oklahoma/" "$DEST/oklahoma/"
 fi
 

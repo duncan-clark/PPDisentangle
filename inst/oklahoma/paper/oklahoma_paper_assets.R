@@ -95,8 +95,17 @@ dir.create(tex_dir, recursive = TRUE, showWarnings = FALSE)
 if (!file.exists(input_rds)) stop("Input RDS not found: ", input_rds)
 
 res <- readRDS(input_rds)
+# C/D-only paper RDS stores the all-free bivariate fits as C/D; E/F are empty.
+if ((is.null(res$fits_named$E) || is.null(res$fits_named$E$ate)) &&
+    !is.null(res$fits_named$C) && !is.null(res$fits_named$C$ate)) {
+  res$fits_named$E <- res$fits_named$C
+}
+if ((is.null(res$fits_named$F) || is.null(res$fits_named$F$ate)) &&
+    !is.null(res$fits_named$D) && !is.null(res$fits_named$D$ate)) {
+  res$fits_named$F <- res$fits_named$D
+}
 if (is.null(res$fits_named$E) || is.null(res$fits_named$F)) {
-  stop("RDS must contain fits_named$E and fits_named$F.")
+  stop("RDS must contain fits_named$E and fits_named$F (or C/D aliases).")
 }
 
 boot_obj <- res$bootstrap_ate
