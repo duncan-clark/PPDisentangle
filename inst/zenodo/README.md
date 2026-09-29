@@ -55,8 +55,12 @@ See [the Oklahoma guide](../oklahoma/README.md) for the full archived recipe.
 
 Simulation robustness uses the **all-or-nothing** contrast and the archived
 fitting/generation conventions. The known control parameters assist SEM
-initialization and label updates as well as contrast evaluation. The count
-benchmark in label proposals is a stationary mean-rate approximation.
+initialization and label updates as well as contrast evaluation. The main
+table uses a stationary mean-rate benchmark. Standard robustness support
+summaries rescale the archived truth contrast by the fitted-versus-true
+stationary rate difference; they are not new finite-window conditional
+counterfactual simulations. The structured effect-modification and geometry
+runs instead supply their saved forward-simulation summaries.
 Component immigrant rates in the simulations are total budgets on each
 component's assigned support; changing support changes immigrant density.
 Nominal count calibration does not guarantee identical realized sample sizes.
