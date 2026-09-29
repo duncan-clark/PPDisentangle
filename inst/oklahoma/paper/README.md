@@ -1,11 +1,13 @@
 # Oklahoma paper assets builder
 
 Prose for the manuscript lives on **Overleaf**. A context snapshot is in
-`docs/paper/paper.tex`. This folder holds the **R driver** only; regenerated
+`docs/paper/revised.tex`. This folder holds the **R driver** only; regenerated
 publication outputs go under `../PPDisentangle-output/oklahoma/paper/generated/`.
 
 Canonical input: `PPDisentangle-output/oklahoma/for_paper.rds` — bivariate
-all-or-nothing bootstrap for fits E/F (alias: `for_paper_biv_aon.rds`).
+C/D fits (with E/F aliases), job 8804859 plus the ATE backfill.
+The default paper contrast is **observed AOI versus none**, not the legacy
+top-level all-or-nothing field. See [the application guide](../README.md).
 
 | Path | Role |
 |------|------|
@@ -24,6 +26,7 @@ Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
 Options:
 
 ```text
+--contrast    observed (default) or all_or_nothing
 --input       Path to results `.rds` (default: first existing of
               ../PPDisentangle-output/oklahoma/for_paper.rds,
               ../PPDisentangle-output/oklahoma/for_paper_biv_aon.rds,
