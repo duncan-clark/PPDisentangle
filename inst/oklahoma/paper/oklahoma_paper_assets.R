@@ -2,8 +2,9 @@
 #
 # Usage (from repo root):
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R
-#   (defaults to bivariate all-or-nothing for_paper.rds under PPDisentangle-output/)
+#   (defaults to observed-vs-none from for_paper.rds under PPDisentangle-output/)
 #   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R --input /path/to/other.rds
+#   Rscript inst/oklahoma/paper/oklahoma_paper_assets.R --contrast observed
 #
 # Or in R: setwd("<repo>"); source("inst/oklahoma/paper/oklahoma_paper_assets.R")
 #
@@ -18,7 +19,8 @@
 #     tab_ok_bootstrap_summary — only if bootstrap present
 #   Override PDF location: --plots-dir <path>
 #
-# Publication estimand: bivariate law × all-or-nothing contrast (fits E/F).
+# Paper figures default to bivariate observed-vs-none (fits E/F or C/D).
+# Use --contrast all_or_nothing for the alternative contrast.
 # Optional packages: jsonlite (cumulative plot), tigris (county maps; same as oklahoma_report.qmd).
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -46,6 +48,11 @@ get_arg_val <- function(args, flag, default = NULL) {
 args <- commandArgs(trailingOnly = TRUE)
 repo_root <- find_repo_root()
 source(file.path(repo_root, "R", "paths.R"), local = FALSE)
+source(file.path(repo_root, "inst", "oklahoma", "paper", "paper_result_helpers.R"), local = TRUE)
+paper_contrast <- tolower(trimws(get_arg_val(args, "--contrast", "observed")))
+if (!paper_contrast %in% c("observed", "all_or_nothing")) {
+  stop("--contrast must be observed or all_or_nothing; got: ", paper_contrast)
+}
 input_arg <- get_arg_val(args, "--input", NULL)
 if (!is.null(input_arg) && nzchar(input_arg)) {
   input_rds <- normalizePath(input_arg, winslash = "/", mustWork = TRUE)
@@ -58,7 +65,7 @@ if (!is.null(input_arg) && nzchar(input_arg)) {
   input_hit <- input_candidates[file.exists(input_candidates)][1L]
   if (is.na(input_hit)) {
     stop(
-      "No results RDS found. Place for_paper.rds (bivariate all-or-nothing) in ",
+      "No results RDS found. Place the current for_paper.rds in ",
       pp_output_path("oklahoma", repo_root = repo_root), " or inst/oklahoma/paper/, ",
       "or pass --input /path/to/results.rds"
     )
@@ -109,6 +116,16 @@ if (is.null(res$fits_named$E) || is.null(res$fits_named$F)) {
 }
 
 boot_obj <- res$bootstrap_ate
+if (!is.null(boot_obj)) {
+  if ((is.null(boot_obj$fit_E) || is.null(boot_obj$fit_E$replicate_summary)) &&
+      !is.null(boot_obj$fit_C) && !is.null(boot_obj$fit_C$replicate_summary)) {
+    boot_obj$fit_E <- boot_obj$fit_C
+  }
+  if ((is.null(boot_obj$fit_F) || is.null(boot_obj$fit_F$replicate_summary)) &&
+      !is.null(boot_obj$fit_D) && !is.null(boot_obj$fit_D$replicate_summary)) {
+    boot_obj$fit_F <- boot_obj$fit_D
+  }
+}
 have_boot <- !is.null(boot_obj) &&
   !is.null(boot_obj$fit_E) && !is.null(boot_obj$fit_F) &&
   !is.null(boot_obj$fit_E$replicate_summary) && !is.null(boot_obj$fit_F$replicate_summary)
@@ -145,10 +162,15 @@ fmt_cfg_val <- function(x, default = "---") {
 }
 
 # ---- Expected-count rows (same quantities as HTML report / former Rmd appendix) ----
+pick_ate_contrast <- function(ate_obj, contrast = paper_contrast) {
+  select_paper_ate(ate_obj, contrast)
+}
+
 extract_totals <- function(ate_obj) {
   out <- list(c_total = numeric(0), t_total = numeric(0), saved_total = numeric(0))
-  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(out)
-  sim_df <- as.data.frame(ate_obj$all_nothing_sim)
+  ate_use <- pick_ate_contrast(ate_obj)
+  if (is.null(ate_use) || is.null(ate_use$all_nothing_sim)) return(out)
+  sim_df <- as.data.frame(ate_use$all_nothing_sim)
   if ("c_total" %in% names(sim_df)) out$c_total <- suppressWarnings(as.numeric(sim_df$c_total))
   if ("t_total" %in% names(sim_df)) out$t_total <- suppressWarnings(as.numeric(sim_df$t_total))
   if ("total_saved" %in% names(sim_df)) out$saved_total <- suppressWarnings(as.numeric(sim_df$total_saved))
@@ -169,16 +191,67 @@ summ_one <- function(fit_obj) {
 vals_E <- summ_one(fit_E)
 vals_F <- summ_one(fit_F)
 
+# Machine-readable counts retain full precision; round only in LaTeX.
+count_row <- function(ate, partition, method, n_tiles, n_treated) {
+  tt <- extract_totals(ate)
+  stopifnot(length(tt$c_total) > 0L, length(tt$t_total) > 0L,
+            length(tt$saved_total) > 0L)
+  data.frame(partition = partition, method = method, contrast = paper_contrast,
+             n_tiles = n_tiles, n_treated = n_treated,
+             control = mean(tt$c_total), intervention = mean(tt$t_total),
+             saved = mean(tt$saved_total))
+}
+count_rows <- list(
+  count_row(fit_E$ate, "county", "Naive", res$config$n_tiles, res$config$n_treated),
+  count_row(fit_F$ate, "county", "SEM", res$config$n_tiles, res$config$n_treated)
+)
+for (key in names(res$ate_partitions)) {
+  part <- res$partition_results[[key]]
+  for (method in c("Naive", "SEM")) {
+    ate <- res$ate_partitions[[key]][[if (method == "Naive") "ate_E" else "ate_F"]]
+    count_rows[[length(count_rows) + 1L]] <- count_row(
+      ate, key, method, part$n_tiles, part$n_treated
+    )
+  }
+}
+count_summary <- do.call(rbind, count_rows)
+utils::write.csv(count_summary, file.path(tex_dir, "expected_counts.csv"), row.names = FALSE)
+partition_lines <- c(
+  "% Auto-generated by oklahoma_paper_assets.R; counts rounded only for display.",
+  "\\begin{table}", "\\centering",
+  sprintf("\\caption{\\label{tab:ok_partition_ate}Expected %g-day counts and %s contrast by spatial partition. Cell counts are total / treated.}",
+          ate_days, if (paper_contrast == "observed") "observed-vs-none" else "all-or-nothing"),
+  "\\begin{tabular}{llrrrr}", "\\toprule",
+  "Partition & Method & Cells & Control & Intervention & Saved\\\\", "\\midrule"
+)
+for (i in seq_len(nrow(count_summary))) {
+  row <- count_summary[i, ]
+  partition_lines <- c(partition_lines, sprintf(
+    "%s & %s & %d / %d & %.0f & %.0f & %.0f\\\\",
+    tex_escape_cfg(row$partition), row$method, row$n_tiles, row$n_treated,
+    row$control, row$intervention, row$saved
+  ))
+}
+writeLines(c(partition_lines, "\\bottomrule", "\\end{tabular}", "\\end{table}"),
+           file.path(tex_dir, "tab_ok_partition_ate.tex"))
+
 write_tex_ok_counts <- function(path) {
   fmt <- function(x) if (is.finite(x)) as.character(as.integer(x)) else "---"
   lines <- c(
     "% Auto-generated by oklahoma_paper_assets.R — do not edit by hand",
     "\\begin{table}",
-    "\\caption{\\label{tab:ok_counts}Observed and model-implied bivariate all-or-nothing expected counts (naive vs SEM).}",
+    sprintf(
+      "\\caption{\\label{tab:ok_counts}Expected counts for the bivariate %s contrast (naive vs SEM).}",
+      if (identical(paper_contrast, "observed")) "observed-vs-none" else "all-or-nothing"
+    ),
     "\\centering",
     "\\begin{tabular}[t]{lrrr}",
     "\\toprule",
-    "Method & $E[N_C]$ & $E[N_A]$ & $\\Delta=E[N_C]-E[N_A]$\\\\",
+    if (identical(paper_contrast, "observed")) {
+      "Method & $E[N_{\\mathbf 0}]$ & $E[N_{z_{\\mathrm{obs}}}]$ & $\\Delta=E[N_{\\mathbf 0}]-E[N_{z_{\\mathrm{obs}}}]$\\\\"
+    } else {
+      "Method & $E[N_C]$ & $E[N_A]$ & $\\Delta=E[N_C]-E[N_A]$\\\\"
+    },
     "\\midrule",
     sprintf("Naive & %s & %s & %s\\\\", fmt(vals_E[1]), fmt(vals_E[2]), fmt(vals_E[3])),
     sprintf("SEM & %s & %s & %s\\\\", fmt(vals_F[1]), fmt(vals_F[2]), fmt(vals_F[3])),
@@ -206,17 +279,20 @@ theme_paper_shrunk <- theme_minimal(base_size = 13 * 1.8) +
     strip.text = element_text(face = "bold")
   )
 
-# ---- Bootstrap (bias-corrected replicates; bivariate all-or-nothing E/F) ----
+# ---- Bootstrap (bias-corrected replicates; paper contrast) ----
 if (have_boot) {
 boot_E <- as.data.frame(boot_obj$fit_E$replicate_summary)
 boot_F <- as.data.frame(boot_obj$fit_F$replicate_summary)
+boot_E$ate_total_mean <- as.numeric(boot_E[[select_paper_bootstrap_column(
+  names(boot_E), paper_contrast, res$config$ATE_CONTRAST
+)]])
+boot_F$ate_total_mean <- as.numeric(boot_F[[select_paper_bootstrap_column(
+  names(boot_F), paper_contrast, res$config$ATE_CONTRAST
+)]])
 boot_E$model <- "Naive Bivariate ETAS with KDE"
 boot_F$model <- "SEM Bivariate ETAS with KDE"
 boot_df <- bind_rows(boot_E, boot_F)
 
-if (!"ate_total_mean" %in% names(boot_df)) {
-  stop("Expected bootstrap column ate_total_mean is missing.")
-}
 if ("is_stable" %in% names(boot_df)) {
   boot_df <- boot_df %>% filter(!is.na(.data$is_stable) & .data$is_stable)
 }
@@ -226,8 +302,9 @@ boot_df <- boot_df %>% filter(is.finite(.data$ate_total_mean))
 # finite ATE from the stable remainder before recentering.
 
 get_total_effect_sim <- function(ate_obj) {
-  if (is.null(ate_obj) || is.null(ate_obj$all_nothing_sim)) return(numeric(0))
-  sim_df <- as.data.frame(ate_obj$all_nothing_sim)
+  ate_use <- pick_ate_contrast(ate_obj)
+  if (is.null(ate_use) || is.null(ate_use$all_nothing_sim)) return(numeric(0))
+  sim_df <- as.data.frame(ate_use$all_nothing_sim)
   if ("total_saved" %in% names(sim_df)) return(suppressWarnings(as.numeric(sim_df$total_saved)))
   if ("total_effect" %in% names(sim_df)) return(suppressWarnings(as.numeric(sim_df$total_effect)))
   numeric(0)
@@ -278,11 +355,30 @@ boot_df <- boot_df %>%
   ) %>%
   ungroup()
 
-sim_E <- as.data.frame(fit_E$ate$all_nothing_sim)
-sim_F <- as.data.frame(fit_F$ate$all_nothing_sim)
-sim_E$model <- "Naive Bivariate ETAS with KDE"
-sim_F$model <- "SEM Bivariate ETAS with KDE"
-sim_df <- bind_rows(sim_E, sim_F) %>% filter(is.finite(.data$total_saved))
+sim_ate_E <- pick_ate_contrast(if (!is.null(fit_E)) fit_E$ate else NULL)
+sim_ate_F <- pick_ate_contrast(if (!is.null(fit_F)) fit_F$ate else NULL)
+sim_E <- if (!is.null(sim_ate_E) && !is.null(sim_ate_E$all_nothing_sim)) {
+  as.data.frame(sim_ate_E$all_nothing_sim)
+} else {
+  data.frame()
+}
+sim_F <- if (!is.null(sim_ate_F) && !is.null(sim_ate_F$all_nothing_sim)) {
+  as.data.frame(sim_ate_F$all_nothing_sim)
+} else {
+  data.frame()
+}
+if (nrow(sim_E) > 0L) sim_E$model <- "Naive Bivariate ETAS with KDE"
+if (nrow(sim_F) > 0L) sim_F$model <- "SEM Bivariate ETAS with KDE"
+sim_df <- bind_rows(sim_E, sim_F)
+if ("total_saved" %in% names(sim_df)) {
+  sim_df <- sim_df %>% filter(is.finite(.data$total_saved))
+}
+delta_lab <- if (identical(paper_contrast, "observed")) "obs" else "AoN"
+boot_xlab <- if (identical(paper_contrast, "observed")) {
+  paste0("bootstrap replicate observed-vs-none total saved / ", ate_days, " day")
+} else {
+  paste0("bootstrap replicate all-or-nothing total saved / ", ate_days, " day")
+}
 
 theme_pub <- theme_minimal(base_size = 13) +
   theme(
@@ -300,7 +396,7 @@ p_boot_hist <- ggplot(boot_df, aes(x = .data$ate_total_mean, fill = .data$model)
     "SEM Bivariate ETAS with KDE" = "#3182bd"
   )) +
   labs(
-    x = "bootstrap replicate total saved / 100 day",
+    x = boot_xlab,
     y = "Count",
     fill = "Model"
   ) +
@@ -315,7 +411,7 @@ p_boot_ecdf <- ggplot(boot_df, aes(x = .data$ate_total_mean, colour = .data$mode
     "SEM Bivariate ETAS with KDE" = "#3182bd"
   )) +
   labs(
-    x = "bootstrap replicate total saved / 100 day",
+    x = boot_xlab,
     y = "Cumulative proportion",
     colour = "Model"
   ) +
@@ -331,7 +427,7 @@ p_boot_running <- ggplot(boot_df, aes(x = .data$rep_idx, y = .data$running_mean,
   )) +
   labs(
     x = "Bootstrap replicate index",
-    y = bquote("Running mean of " ~ hat(Delta)[AoN]),
+    y = bquote("Running mean of " ~ hat(Delta)[.(delta_lab)]),
     colour = "Model"
   ) +
   theme_pub +
@@ -345,7 +441,7 @@ p_sim_hist <- ggplot(sim_df, aes(x = .data$total_saved, fill = .data$model)) +
     "SEM Bivariate ETAS with KDE" = "#3182bd"
   )) +
   labs(
-    x = bquote(hat(Delta)[AoN] ~ "(Monte Carlo total saved /" ~ .(ate_days) ~ " days)"),
+    x = bquote(hat(Delta)[.(delta_lab)] ~ "(Monte Carlo total saved /" ~ .(ate_days) ~ " days)"),
     y = "Count",
     fill = "Model"
   ) +
@@ -450,9 +546,15 @@ if (!("t" %in% names(pp_pre))) pp_pre$t <- numeric(nrow(pp_pre))
 if (!("t" %in% names(pp_post))) pp_post$t <- numeric(nrow(pp_post))
 
 geojson <- file.path(data_dir, "occ_aoi_layer_2.geojson")
-if (requireNamespace("sf", quietly = TRUE) && requireNamespace("tigris", quietly = TRUE) && file.exists(geojson)) {
-  options(tigris_use_cache = TRUE)
-  counties_sf <- tigris::counties(state = "OK", cb = TRUE, year = 2022)
+county_geojson <- file.path(data_dir, "oklahoma_counties_2022.geojson")
+if (requireNamespace("sf", quietly = TRUE) && file.exists(geojson) &&
+    (file.exists(county_geojson) || requireNamespace("tigris", quietly = TRUE))) {
+  if (file.exists(county_geojson)) {
+    counties_sf <- sf::st_read(county_geojson, quiet = TRUE)
+  } else {
+    options(tigris_use_cache = TRUE)
+    counties_sf <- tigris::counties(state = "OK", cb = TRUE, year = 2022)
+  }
   counties_sf <- sf::st_transform(counties_sf, 5070)
   counties_sf <- sf::st_make_valid(counties_sf)
   aoi_sf <- sf::st_read(geojson, quiet = TRUE)
@@ -1088,6 +1190,7 @@ if (isTRUE(have_boot)) {
   )
 }
 gen_tex <- c(
+  repo_rel(file.path(tex_dir, "tab_ok_partition_ate.tex")),
   repo_rel(file.path(tex_dir, "tab_ok_counts.tex")),
   repo_rel(file.path(tex_dir, "tab_ok_sem_config.tex")),
   repo_rel(file.path(tex_dir, "tab_ok_confusion_F.tex")),
@@ -1099,6 +1202,7 @@ if (isTRUE(have_boot)) {
 
 meta_out <- list(
   input_rds = input_rds,
+  contrast = paper_contrast,
   ate_days = ate_days,
   plots_dir = plots_dir,
   tex_dir = tex_dir,

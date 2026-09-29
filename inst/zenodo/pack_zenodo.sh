@@ -86,12 +86,10 @@ if [[ ! -f "$ROB_DIR/robustness_merged_tcal_manifest.csv" ]]; then
   exit 1
 fi
 
-# --- main paper run: FOR_PAPER + raws + frozen pub copies; skip duplicate summary + logs ---
+# --- main paper run: FOR_PAPER + raws + frozen illustration ---
 rsync -a \
   --include='time_sweep_5228509_summary_FOR_PAPER.rds' \
   --include='time_sweep_5228509_tmp*.rds' \
-  --include='time_sweep_5228509_all_nothing_grouped_data*' \
-  --include='time_sweep_5228509_core_true_control_pub*' \
   --include='simulated_hawkes_hawkes_process.pdf' \
   --exclude='*' \
   "$MAIN_DIR/" "$DEST/sim_study/paper/main_5228509/"
@@ -104,36 +102,14 @@ rsync -a \
   --exclude='*' \
   "$ROB_DIR/" "$DEST/sim_study/paper/robustness_merged_tcal/"
 
-# --- generated paper figures ---
-if [[ -d "$OUTPUT_ROOT/sim_study/generated" ]]; then
-  rsync -a \
-    --exclude='figures_sem5000_*/' \
-    --exclude='*.aux' \
-    --exclude='*.log' \
-    --exclude='*.out' \
-    --exclude='*.fls' \
-    --exclude='*.fdb_latexmk' \
-    --exclude='robustness.pdf' \
-    --exclude='tex/' \
-    --exclude='structured/' \
-    --exclude='PPDisentangle-output/' \
-    --exclude='.DS_Store' \
-    "$OUTPUT_ROOT/sim_study/generated/" "$DEST/sim_study/generated/"
-fi
-
-# --- oklahoma: paper RDS + generated assets only (skip slurm, backups, HTML) ---
-if [[ -d "$OUTPUT_ROOT/oklahoma" ]]; then
-  if [[ ! -f "$OUTPUT_ROOT/oklahoma/for_paper.rds" ]]; then
-    echo "ERROR: missing $OUTPUT_ROOT/oklahoma/for_paper.rds" >&2
-    exit 1
-  fi
-  rsync -a \
-    --include='for_paper.rds' \
-    --include='paper/' \
-    --include='paper/***' \
-    --exclude='*' \
-    "$OUTPUT_ROOT/oklahoma/" "$DEST/oklahoma/"
-fi
+# Stage only saved results, then regenerate derived assets from those files.
+cp "$OUTPUT_ROOT/oklahoma/for_paper.rds" "$DEST/oklahoma/for_paper.rds"
+(
+  cd "$PKG_ROOT"
+  export PPDISENTANGLE_OUTPUT_ROOT="$DEST"
+  "${RSCRIPT:-Rscript}" inst/zenodo/reproduce_paper_figures.R
+  "${RSCRIPT:-Rscript}" inst/zenodo/validate_paper_outputs.R "$DEST"
+)
 
 cat > "$DEST/README.md" <<'EOF'
 # PPDisentangle paper outputs (Zenodo)
@@ -183,7 +159,18 @@ PPDisentangle-output/
 ```bash
 export PPDISENTANGLE_OUTPUT_ROOT=/path/to/PPDisentangle-output
 Rscript inst/zenodo/reproduce_paper_figures.R
+Rscript inst/zenodo/validate_paper_outputs.R "$PPDISENTANGLE_OUTPUT_ROOT"
 ```
+
+Use software v0.2.0. Oklahoma results are job 8804859 plus the ATE backfill,
+with a 250-day triggering cutoff and 512 attempted bootstrap replicates.
+The paper contrast is observed AOI versus no treatment over 100 days.
+The legacy top-level ATE field is all-or-nothing; reproduction explicitly
+selects `by_contrast$observed` and the observed bootstrap column.
+`release_manifest.json` identifies source provenance and `MD5SUMS` covers
+every archived file other than the checksum list itself.
+The illustrative Hawkes realisation is a frozen PDF; other paper figures
+and tables are regenerated from the saved results. No model fits are rerun.
 EOF
 
 EXPECT_ROB_RDS=67
@@ -197,6 +184,8 @@ if [[ "$n_rob_rds" -ne "$EXPECT_ROB_RDS" ]]; then
 fi
 
 mkdir -p "$(dirname "$OUT_TGZ")"
-tar -C "$STAGE" -czf "$OUT_TGZ" PPDisentangle-output
+# Include provenance and checksums before compression.
+(cd "$PKG_ROOT" && "${RSCRIPT:-Rscript}" inst/zenodo/write_release_manifest.R "$DEST")
+COPYFILE_DISABLE=1 tar --exclude='.DS_Store' --exclude='._*' -C "$STAGE" -czf "$OUT_TGZ" PPDisentangle-output
 echo "Wrote $OUT_TGZ"
 ls -lh "$OUT_TGZ"

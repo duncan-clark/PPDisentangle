@@ -1,6 +1,6 @@
 Package: PPDisentangle
 Title: Causal Inference for Spatiotemporal Point Processes via Stochastic EM
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: c(
     person("Duncan", "Clark", email = "duncan-clark@outlook.com", role = c("aut", "cre")),
     person("Conor", "Kresin", role = "aut"),
@@ -37,6 +37,9 @@ LinkingTo:
     Rcpp
 Suggests:
     testthat (>= 3.0.0),
+    tidyr,
+    jsonlite,
+    patchwork,
     tigris,
     R.utils,
     pbapply,

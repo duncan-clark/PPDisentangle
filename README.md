@@ -15,6 +15,18 @@ R package: **causal inference for spatiotemporal point processes** using a stoch
 | `docs/paper/` | Overleaf manuscript snapshot for context (not compiled from this repo). |
 | `../PPDisentangle-output/` | **Local only** — all analysis RDS, logs, and paper assets; see [`inst/OUTPUT.md`](inst/OUTPUT.md). |
 
+## Paper release
+
+Use **v0.2.0** with the updated companion results archive. See the
+[reproduction guide](inst/zenodo/README.md) for installation, frozen inputs,
+validation and intervention conventions. The Oklahoma paper contrast is
+observed AOI versus no treatment; simulation robustness uses all-or-nothing.
+The July 29 v0.1.0 release predates the current Oklahoma analysis.
+
+- [Software version history](https://doi.org/10.5281/zenodo.21221021)
+- [Results v2](https://doi.org/10.5281/zenodo.23040032)
+- [Release changes](NEWS.md)
+
 ## Oklahoma application
 
 See [`inst/oklahoma/README.md`](inst/oklahoma/README.md).

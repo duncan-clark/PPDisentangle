@@ -82,7 +82,8 @@ run_rscript <- function(rel_script, extra_args = character()) {
   old_wd <- getwd()
   on.exit(setwd(old_wd), add = TRUE)
   setwd(repo_root)
-  status <- system2("Rscript", args = c(rel_script, extra_args))
+  status <- system2(file.path(R.home("bin"), "Rscript"),
+                    args = shQuote(c(rel_script, extra_args)))
   if (!identical(as.integer(status), 0L)) {
     stop(
       "Command failed with status ", status, ": Rscript ",
@@ -108,7 +109,7 @@ if (!skip_main) {
     )
   )
 
-  # Frozen illustrative realisation used by revision.tex fig:pp_realiz.
+  # Frozen illustrative realisation used by revised.tex fig:pp_realiz.
   # Not regenerated from the time-sweep; copy from the paper archive into generated/.
   hawkes_src <- file.path(sim_dir, "paper", "main_5228509", "simulated_hawkes_hawkes_process.pdf")
   hawkes_dst <- file.path(sim_dir, "generated", "figures", "simulated_hawkes_hawkes_process.pdf")
@@ -150,7 +151,7 @@ if (!skip_oklahoma) {
   }
   run_rscript(
     "inst/oklahoma/paper/oklahoma_paper_assets.R",
-    c("--input", ok_rds)
+    c("--input", ok_rds, "--contrast", "observed")
   )
 }
 

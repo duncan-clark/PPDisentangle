@@ -654,7 +654,6 @@ if (is.null(replot_basename)) {
 
 resolve_manifest_rds_path <- function(row, out_dir) {
   rds_path <- row$rds_path[[1]]
-  if (file.exists(rds_path)) return(rds_path)
   if ("run_basename" %in% names(row) && nzchar(row$run_basename[[1]])) {
     local_path <- file.path(out_dir, paste0(row$run_basename[[1]], ".rds"))
     if (file.exists(local_path)) return(local_path)
@@ -668,6 +667,7 @@ resolve_manifest_rds_path <- function(row, out_dir) {
     )
     if (length(alt) > 0L) return(alt[[1L]])
   }
+  if (file.exists(rds_path)) return(rds_path)
   rds_path
 }
 

@@ -49,7 +49,7 @@ Canonical jobs in the archive:
 | Robustness appendix | `sim_study/paper/robustness_merged_tcal/` (67 scenarios) |
 | Oklahoma application | `oklahoma/for_paper.rds` + `oklahoma/paper/generated/` |
 
-Manuscript robustness appendix text: Overleaf / `docs/paper/revision.tex` (local
+Manuscript robustness appendix text: Overleaf / `docs/paper/revised.tex` (local
 snapshot is gitignored).
 
 ```bash
@@ -65,7 +65,7 @@ Rscript inst/zenodo/reproduce_paper_figures.R
 Session pin: `inst/zenodo/sessionInfo.txt` (refresh with
 `Rscript inst/zenodo/capture_session.R`).
 
-A context snapshot of the manuscript lives in `docs/paper/paper.tex` (Overleaf
+A context snapshot of the manuscript lives in `docs/paper/revised.tex` (Overleaf
 is canonical; the repo copy is not compiled here).
 
 ## NeSI cluster workflow
